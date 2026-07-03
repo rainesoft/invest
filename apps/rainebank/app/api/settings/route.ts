@@ -52,7 +52,9 @@ export async function POST(request: Request) {
       alpaca_secret: body.alpaca_secret || null,
       is_live_execution_enabled: Boolean(body.is_live_execution_enabled),
       auto_trade_enabled: Boolean(body.auto_trade_enabled),
-      auto_trade_tiers: Array.isArray(body.auto_trade_tiers) ? body.auto_trade_tiers : []
+      auto_trade_tiers: Array.isArray(body.auto_trade_tiers) ? body.auto_trade_tiers : [],
+      telegram_bot_token: body.telegram_bot_token || null,
+      telegram_chat_id: body.telegram_chat_id || null,
     };
 
     const { data, error } = await supabase

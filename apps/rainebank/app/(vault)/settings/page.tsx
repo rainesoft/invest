@@ -61,7 +61,9 @@ export default function SettingsPage() {
     alpaca_secret: '',
     is_live_execution_enabled: false,
     auto_trade_enabled: false,
-    auto_trade_tiers: [] as string[]
+    auto_trade_tiers: [] as string[],
+    telegram_bot_token: '',
+    telegram_chat_id: ''
   });
 
   useEffect(() => {
@@ -82,7 +84,9 @@ export default function SettingsPage() {
             alpaca_secret: data.settings.alpaca_secret || '',
             is_live_execution_enabled: data.settings.is_live_execution_enabled || false,
             auto_trade_enabled: data.settings.auto_trade_enabled || false,
-            auto_trade_tiers: data.settings.auto_trade_tiers || []
+            auto_trade_tiers: data.settings.auto_trade_tiers || [],
+            telegram_bot_token: data.settings.telegram_bot_token || '',
+            telegram_chat_id: data.settings.telegram_chat_id || ''
           });
         }
         setLoading(false);
@@ -320,6 +324,30 @@ export default function SettingsPage() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+
+          {/* Alerts & Notifications */}
+          <div style={{ background: 'var(--input-bg)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Activity size={20} color="var(--text-secondary)" />
+              Alerts & Notifications
+            </h2>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+              <div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                  Telegram Bot Token
+                  <HintTooltip text="Create a bot via BotFather on Telegram and paste the HTTP API Token here to receive instant trade alerts." />
+                </label>
+                <input type="password" name="telegram_bot_token" value={settings.telegram_bot_token} onChange={handleChange} placeholder="e.g. 123456789:ABCdefGHIjkl..." style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
+              </div>
+              <div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                  Telegram Chat ID
+                  <HintTooltip text="Your personal Telegram Chat ID. The bot will send automated real-time trade signals directly to this chat." />
+                </label>
+                <input type="text" name="telegram_chat_id" value={settings.telegram_chat_id} onChange={handleChange} placeholder="e.g. 987654321" style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
+              </div>
             </div>
           </div>
 

@@ -1,7 +1,8 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
-const TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN");
-const TELEGRAM_CHAT_ID = Deno.env.get("TELEGRAM_CHAT_ID");
+const FALLBACK_TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN");
+const FALLBACK_TELEGRAM_CHAT_ID = Deno.env.get("TELEGRAM_CHAT_ID");
 
 interface DatabaseWebhookPayload {
   type: "INSERT" | "UPDATE" | "DELETE";
@@ -26,9 +27,22 @@ serve(async (req) => {
       return new Response("Ignored REJECTED signal", { status: 200 });
     }
 
-    // Check if we have the necessary environment variables
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
+    let TELEGRAM_BOT_TOKEN = FALLBACK_TELEGRAM_BOT_TOKEN;
+    let TELEGRAM_CHAT_ID = FALLBACK_TELEGRAM_CHAT_ID;
+
+    if (supabaseUrl && supabaseKey) {
+      const supabase = createClient(supabaseUrl, supabaseKey);
+      const { data: settings } = await supabase.from('user_risk_settings').select('telegram_bot_token, telegram_chat_id').limit(1).single();
+      if (settings?.telegram_bot_token) TELEGRAM_BOT_TOKEN = settings.telegram_bot_token;
+      if (settings?.telegram_chat_id) TELEGRAM_CHAT_ID = settings.telegram_chat_id;
+    }
+
+    // Check if we have the necessary credentials
     if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-      console.error("Missing Telegram configuration environment variables.");
+      console.error("Missing Telegram credentials in both database and environment.");
       return new Response("Server Configuration Error", { status: 500 });
     }
 
