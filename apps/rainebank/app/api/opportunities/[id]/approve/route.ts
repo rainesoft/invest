@@ -57,7 +57,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     atrUSD,
     dayRiskUSD,
     weekRiskUSD,
-    perTradePct
+    perTradePct,
+    0.02,
+    0.05,
+    Number(settings?.max_volume_per_trade ?? 50)
   );
 
   const qty: number = body.qty ?? allowedQty;

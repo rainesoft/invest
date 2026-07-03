@@ -16,6 +16,7 @@ export default function SettingsPage() {
     risk_per_trade_pct: 0.01,
     max_portfolio_heat_pct: 0.10,
     max_spread_points: 50,
+    max_volume_per_trade: 50,
     active_broker: 'ALPACA',
     meta_api_token: '',
     meta_api_account_id: '',
@@ -36,6 +37,7 @@ export default function SettingsPage() {
             risk_per_trade_pct: data.settings.risk_per_trade_pct || 0.01,
             max_portfolio_heat_pct: data.settings.max_portfolio_heat_pct || 0.10,
             max_spread_points: data.settings.max_spread_points || 50,
+            max_volume_per_trade: data.settings.max_volume_per_trade || 50,
             active_broker: data.settings.active_broker || 'ALPACA',
             meta_api_token: data.settings.meta_api_token || '',
             meta_api_account_id: data.settings.meta_api_account_id || '',
@@ -204,6 +206,20 @@ export default function SettingsPage() {
                   </span>
                 </label>
               </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <label style={{ fontSize: '14px', fontWeight: 500 }}>Max Volume Per Trade</label>
+                <input 
+                  type="number" 
+                  name="max_volume_per_trade"
+                  value={settings.max_volume_per_trade} 
+                  onChange={handleChange}
+                  min="0.01"
+                  step="0.01"
+                  style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', padding: '12px', borderRadius: '8px' }}
+                />
+              </div>
+
             </div>
           </div>
 

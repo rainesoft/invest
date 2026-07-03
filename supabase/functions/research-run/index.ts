@@ -612,7 +612,7 @@ serve(async (req) => {
                   const atrUSD = Math.abs(entry_price - stop_loss);
 
                   // 3. Size Position
-                  const allowedQty = sizeWithRiskCaps(equityUSD, atrUSD, dayRiskUSD, weekRiskUSD, perTradePct);
+                  const allowedQty = sizeWithRiskCaps(equityUSD, atrUSD, dayRiskUSD, weekRiskUSD, perTradePct, 0.02, 0.05, Number(settings.max_volume_per_trade ?? 50));
 
                   if (allowedQty > 0) {
                     console.log(`[Auto-Trade] Executing ${allowedQty} units for ${symbol}`);

@@ -13,6 +13,7 @@ export function sizeWithRiskCaps(
   perTradePct = 0.01,
   dayPct = 0.02,
   weekPct = 0.05,
+  maxVolume?: number,
 ) {
   // base position by volatility
   const baseQty = sizeByVol(equityUSD, atrUSD, perTradePct);
@@ -22,7 +23,8 @@ export function sizeWithRiskCaps(
   const remainingWeek = Math.max(equityUSD * weekPct - weekRiskUSD, 0);
   const dayQty = Math.floor(remainingDay / atrUSD);
   const weekQty = Math.floor(remainingWeek / atrUSD);
-  return Math.max(Math.min(baseQty, dayQty, weekQty), 0);
+  const qty = Math.max(Math.min(baseQty, dayQty, weekQty), 0);
+  return maxVolume ? Math.min(qty, maxVolume) : qty;
 }
 
 /** ---------- Risk tracking & aggregation ---------- */
