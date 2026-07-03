@@ -5,6 +5,8 @@ import { placeAndTrackOrder } from '@execution/index';
 import { sizeWithRiskCaps } from '@risk/index';
 import { insertAuditLog } from '@core/audit';
 
+export const maxDuration = 60;
+
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const idKey = req.headers.get('Idempotency-Key');
   const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL!;

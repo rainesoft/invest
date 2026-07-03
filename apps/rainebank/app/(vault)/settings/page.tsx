@@ -239,7 +239,7 @@ export default function SettingsPage() {
                   <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: 'var(--text-secondary)' }}>Select which AI confidence tiers are allowed to bypass manual review.</p>
                   
                   <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                    {['S-Tier', 'A-Tier', 'B-Tier'].map(tier => (
+                    {['S-Tier', 'A-Tier', 'B-Tier', 'C-Tier'].map(tier => (
                       <button
                         key={tier}
                         onClick={() => handleTierToggle(tier)}
