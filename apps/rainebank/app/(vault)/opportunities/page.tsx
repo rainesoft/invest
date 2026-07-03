@@ -15,6 +15,7 @@ type Opportunity = {
   stop_plan_json: any;
   take_profit_json: any;
   ai_summary: string | null;
+  status: string;
 };
 
 function parseAnalysisText(text: string) {
