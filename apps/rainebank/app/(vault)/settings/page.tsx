@@ -144,6 +144,10 @@ export default function SettingsPage() {
               <label style={{ display: 'block', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>Max Spread Tolerance (Points)</label>
               <input type="number" step="1" name="max_spread_points" value={settings.max_spread_points} onChange={handleChange} style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
             </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>Max Volume Per Trade (Lots)</label>
+              <input type="number" min="0.01" step="0.01" name="max_volume_per_trade" value={settings.max_volume_per_trade} onChange={handleChange} style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
+            </div>
           </div>
         </div>
 
@@ -205,19 +209,6 @@ export default function SettingsPage() {
                     <span style={{ position: 'absolute', content: '""', height: '18px', width: '18px', left: '3px', bottom: '3px', backgroundColor: 'white', transition: '.4s', borderRadius: '50%', transform: settings.is_live_execution_enabled ? 'translateX(24px)' : 'translateX(0)' }}></span>
                   </span>
                 </label>
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <label style={{ fontSize: '14px', fontWeight: 500 }}>Max Volume Per Trade</label>
-                <input 
-                  type="number" 
-                  name="max_volume_per_trade"
-                  value={settings.max_volume_per_trade} 
-                  onChange={handleChange}
-                  min="0.01"
-                  step="0.01"
-                  style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', padding: '12px', borderRadius: '8px' }}
-                />
               </div>
 
             </div>
