@@ -2,7 +2,7 @@ import LogoutButton from '@components/LogoutButton';
 import Link from 'next/link';
 import Logo from '@components/Logo';
 import { ThemeProvider } from '@components/ThemeProvider';
-import { Settings } from 'lucide-react';
+import { Settings, HelpCircle } from 'lucide-react';
 
 export default function VaultLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -27,6 +27,10 @@ export default function VaultLayout({ children }: { children: React.ReactNode })
                 <Link href="/dashboard" style={{ color: 'inherit', textDecoration: 'none' }}>Vault</Link>
                 <Link href="/trades" style={{ color: 'inherit', textDecoration: 'none' }}>Ledger</Link>
                 <Link href="/docs" style={{ color: 'inherit', textDecoration: 'none' }}>API Docs</Link>
+                <Link href="/help" style={{ color: 'inherit', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <HelpCircle size={16} />
+                  Help
+                </Link>
                 <Link href="/settings" style={{ color: 'inherit', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <Settings size={16} />
                   Settings
