@@ -100,7 +100,7 @@ You MUST respond strictly with a raw JSON object matching the exact schema below
     "directional_bias": "Explain why the recommended direction is the path of least resistance based on EMAs and key levels.",
     "execution_trigger": "Specify the exact lower-timeframe price action required at the entry price to trigger the trade.",
     "invalidation_point": "Explain exactly why the stop loss is placed where it is structurally.",
-    "take_profit_target": "Specify at least one concrete Take Profit price level and the projected Risk:Reward ratio (minimum 1:1.5).",
+    "take_profit_target": "Explain the structural target for the trade (e.g. recent swing high, major resistance). Do NOT calculate the price or R:R ratio, the system will append this automatically.",
     "fundamental_alignment": "State how the technical setup aligns with or fights current macro drivers."
   }
 }
@@ -127,6 +127,7 @@ You MUST respond strictly with a raw JSON object matching the exact schema below
 8. BOLLINGER BAND EXHAUSTION: You are provided with 'bb_upper' and 'bb_lower'. NEVER suggest a LONG entry if the current price is at or above 'bb_upper' (overbought). NEVER suggest a SHORT entry if the price is at or below 'bb_lower' (oversold). Wait for mean reversion.
 9. RSI DYNAMICS IN TRENDS: In a strong uptrend (Price > 50 EMA and > 200 EMA), the daily RSI rarely drops all the way to 30. A pullback to the 40-45 range is typically sufficient to reset momentum. Do NOT demand a drop to 30 if the asset is in heavy bullish momentum.
 10. DIRECTIONAL MATH & SUPPORT VALIDATION: You MUST perform basic directional math. If Current Price < Support, the support has been BROKEN and is now Resistance. If Current Price > Resistance, it is now Support. Do not suggest a "pullback to support" if price has already broken below it. If structural support has failed, a pullback entry is invalid unless price fully reclaims the level.
+11. MOMENTUM CONTINUATION ENTRY LOGIC: Never recommend 'immediate market entry' directly underneath a major swing high or resistance. You must either recommend a pullback to a moving average/support, or a pending breakout (Buy Stop/Sell Stop) just beyond the structure. Avoid buying the local top.
 Current Market Context:
 ${JSON.stringify(snapshot, null, 2)}`;
 
@@ -474,7 +475,10 @@ serve(async (req) => {
 
             // LAYER C: Deterministic Risk/Reward Math (Force exactly 1:2 R:R)
             const risk = Math.abs(entry_price - stop_loss);
-            const take_profit = dbSide === 'LONG' ? entry_price + (risk * 2) : entry_price - (risk * 2);
+            const take_profit = Number((dbSide === 'LONG' ? entry_price + (risk * 2) : entry_price - (risk * 2)).toFixed(5));
+
+            // Append deterministic math to AI rationale
+            institutional_rationale += ` Execution Math: Take Profit perfectly aligned at ${take_profit} for a guaranteed 1:2.0 Risk:Reward ratio.`;
 
             // AI is now a pure signal generator. We don't calculate user-specific volume or riskAmount here.
             
