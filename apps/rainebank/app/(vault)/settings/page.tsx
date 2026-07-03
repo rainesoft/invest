@@ -5,6 +5,43 @@ import { useTheme } from '@components/ThemeProvider';
 import { Moon, Sun, ShieldAlert, KeyRound, Save, Activity, Info } from 'lucide-react';
 import toast from 'react-hot-toast';
 
+const HintTooltip = ({ text }: { text: string }) => {
+  const [show, setShow] = useState(false);
+  return (
+    <div 
+      style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'help' }}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      <Info size={14} color="var(--text-secondary)" />
+      {show && (
+        <div style={{
+          position: 'absolute',
+          bottom: '100%',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          marginBottom: '8px',
+          padding: '8px 12px',
+          background: '#1f2937',
+          color: '#f9fafb',
+          fontSize: '12px',
+          borderRadius: '6px',
+          width: 'max-content',
+          maxWidth: '250px',
+          pointerEvents: 'none',
+          zIndex: 50,
+          textAlign: 'left',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+          border: '1px solid rgba(255,255,255,0.1)',
+          lineHeight: '1.4'
+        }}>
+          {text}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function SettingsPage() {
   const { theme, toggleTheme } = useTheme();
   
@@ -131,45 +168,35 @@ export default function SettingsPage() {
             <div>
               <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
                 Portfolio Capital (USD)
-                <span title="This is your total bankroll. It tells the AI exactly how much money you're playing with so it knows how to scale your trades properly." style={{ cursor: 'help' }}>
-                  <Info size={14} />
-                </span>
+                <HintTooltip text="This is your total bankroll. It tells the AI exactly how much money you're playing with so it knows how to scale your trades properly." />
               </label>
               <input type="number" name="portfolio_capital" value={settings.portfolio_capital} onChange={handleChange} style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
             </div>
             <div>
               <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
                 Risk Per Trade (%) - {Number(settings.risk_per_trade_pct) * 100}%
-                <span title="The maximum slice of your bankroll you are willing to lose on a single bad trade. If this is 1% and you have $10,000, the AI ensures you only lose exactly $100 if a stop-loss is hit." style={{ cursor: 'help' }}>
-                  <Info size={14} />
-                </span>
+                <HintTooltip text="The maximum slice of your bankroll you are willing to lose on a single bad trade. If this is 1% and you have $10,000, the AI ensures you only lose exactly $100 if a stop-loss is hit." />
               </label>
               <input type="number" step="0.001" name="risk_per_trade_pct" value={settings.risk_per_trade_pct} onChange={handleChange} style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
             </div>
             <div>
               <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
                 Global Portfolio Heat Cap (%) - {Number(settings.max_portfolio_heat_pct) * 100}%
-                <span title="Your 'total exposure limit'. If set to 10%, across all open trades combined you will never risk more than 10% of your account at the same time. If hit, the system prevents opening new trades until some close." style={{ cursor: 'help' }}>
-                  <Info size={14} />
-                </span>
+                <HintTooltip text="Your 'total exposure limit'. If set to 10%, across all open trades combined you will never risk more than 10% of your account at the same time. If hit, the system prevents opening new trades until some close." />
               </label>
               <input type="number" step="0.01" name="max_portfolio_heat_pct" value={settings.max_portfolio_heat_pct} onChange={handleChange} style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
             </div>
             <div>
               <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
                 Max Spread Tolerance (Points)
-                <span title="A safety filter to prevent paying exorbitant broker fees. If a crazy news event inflates the broker's spread beyond this point tolerance, the AI refuses to execute the trade so you don't get ripped off." style={{ cursor: 'help' }}>
-                  <Info size={14} />
-                </span>
+                <HintTooltip text="A safety filter to prevent paying exorbitant broker fees. If a crazy news event inflates the broker's spread beyond this point tolerance, the AI refuses to execute the trade so you don't get ripped off." />
               </label>
               <input type="number" step="1" name="max_spread_points" value={settings.max_spread_points} onChange={handleChange} style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
             </div>
             <div>
               <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
                 Max Volume Per Trade (Lots)
-                <span title="A hard speed-limit on the physical size of a trade. Even if your Risk Per Trade says you can afford to buy 175 lots, if this is set to 50, the AI will shrink the order down to 50 lots so the broker doesn't reject it." style={{ cursor: 'help' }}>
-                  <Info size={14} />
-                </span>
+                <HintTooltip text="A hard speed-limit on the physical size of a trade. Even if your Risk Per Trade says you can afford to buy 175 lots, if this is set to 50, the AI will shrink the order down to 50 lots so the broker doesn't reject it." />
               </label>
               <input type="number" min="0.01" step="0.01" name="max_volume_per_trade" value={settings.max_volume_per_trade} onChange={handleChange} style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
             </div>
