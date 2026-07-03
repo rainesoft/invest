@@ -282,7 +282,7 @@ export async function fetchPaperBars(
         v: c.tickVolume || c.volume || 0,
       }));
     } else {
-      const tfMap: Record<string, string> = { '1h': '1Hour', '1d': '1Day', '15m': '15Min' };
+      const tfMap: Record<string, string> = { '1h': '1Hour', '1d': '1Day', '15m': '15Min', '1m': '1Min' };
       const alpacaTf = tfMap[timeframe.toLowerCase()] || '1Day';
       const key = settings.alpaca_key || getEnv('BROKER_KEY') || '';
       const secret = settings.alpaca_secret || getEnv('BROKER_SECRET') || '';

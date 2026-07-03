@@ -7,19 +7,7 @@ import {
   shouldTightenTrail,
   trailStop,
 } from "../../../packages/risk/index.ts";
-
-async function fetchLatestPrice(symbol: string) {
-  const base = "https://data.alpaca.markets/v2";
-  const res = await fetch(`${base}/stocks/${symbol}/trades/latest`, {
-    headers: {
-      "APCA-API-KEY-ID": Deno.env.get("BROKER_KEY") ?? "",
-      "APCA-API-SECRET-KEY": Deno.env.get("BROKER_SECRET") ?? "",
-    },
-  });
-  if (!res.ok) return null;
-  const json = await res.json();
-  return json.trade?.p ?? null;
-}
+import { fetchPaperBars } from "../../../packages/execution/index.ts";
 
 /**
  * Simple per-minute monitor for open trades.
@@ -74,7 +62,10 @@ serve(async (_req) => {
   const dayMs = 24 * 60 * 60 * 1000;
 
   for (const t of trades ?? []) {
-    const price = await fetchLatestPrice(t.symbol);
+    // Dynamically fetch live pricing from MetaAPI or Alpaca using user's DB credentials
+    const bars = await fetchPaperBars(t.symbol, '1m', 1, supabase);
+    const price = bars.length > 0 ? bars[0].c : null;
+    
     if (price == null || t.qty == null) continue;
     let skipTrail = false;
 
