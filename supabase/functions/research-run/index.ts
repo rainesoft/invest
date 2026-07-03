@@ -110,7 +110,8 @@ You MUST respond strictly with a raw JSON object matching the exact schema below
 2. THE 'EMPTY AIR' CHECK: Before suggesting a direction, evaluate the distance to the next major liquidity zone. If the current price is floating in 'empty air' midway between support and resistance, you MUST normally reject the setup. EXCEPTION: If the asset is in a powerful trend (e.g. adx_14 > 25), you are permitted to take Momentum Continuation trades at market price even in empty air.
 3. STOP LOSS & VOLATILITY (ATR): The snapshot provides \`safe_long_stop_loss\`, \`safe_short_stop_loss\`, and \`atr_14\`. 
    - Your \`suggested_stop_loss\` MUST exactly match the price point at which your setup is technically invalidated.
-   - VOLATILITY CHECK: For highly volatile assets (e.g., Gold, Silver, Crypto), if the structural swing low/high stop loss exceeds a 3% distance from the entry, you MUST override it and calculate a tighter Volatility Stop at \`Entry - (1.5 * atr_14)\` (for Longs) or \`Entry + (1.5 * atr_14)\` (for Shorts). This maintains risk compliance.
+   - VOLATILITY CHECK: For highly volatile assets (e.g., Gold, Silver, Crypto), if the structural swing low/high stop loss exceeds a 3% distance from the entry, you MUST override it and calculate a tighter Volatility Stop at \`Entry - (1.5 * atr_14)\` (for Longs) or \`Entry + (1.5 * atr_14)\` (for Shorts).
+   - MAX STOP LOSS LIMIT: Your calculated stop loss MUST NEVER exceed a 4.5% distance from the suggested entry price. If the ATR or structural level forces a stop loss wider than 4.5% away, the setup is mathematically untradeable. REJECT it by setting recommended_direction to NONE.
    - If the structural stop required is greater than 4x the ATR, the setup is mathematically untradeable. REJECT it by setting recommended_direction to NONE.
 4. FUNDAMENTAL REALITY CHECK: You MUST heavily weigh the provided \`fundamental_context\`. If significant macro news opposes the technical setup, REJECT the setup immediately. 
    - [CRITICAL MACRO DIRECTIVE]: If the technical setup is strong (B-Tier or A-Tier) and aligns perfectly with a High-Impact fundamental catalyst in the \`fundamental_context\`, you MUST upgrade your confidence to S-Tier (90+).
@@ -455,18 +456,21 @@ serve(async (req) => {
                 reason: rejectReason,
                 layer: "Cognitive AI"
               });
-              await supabase.from("trade_opportunities").insert({
-                symbol,
-                side: dbSide,
-                timeframe: timeframe.toLowerCase(),
-                status: "REJECTED",
-                ai_summary: rejectReason,
-                ai_risks: "Rejected by AI Risk Officer",
-                model_id: modelId,
-                model_version: modelVersion,
-                risk_summary: `RSI ${snapshot.rsi_14}`,
-                confidence: confidence_score
-              });
+
+              if (is_valid) {
+                await supabase.from("trade_opportunities").insert({
+                  symbol,
+                  side: dbSide,
+                  timeframe: timeframe.toLowerCase(),
+                  status: "REJECTED",
+                  ai_summary: rejectReason,
+                  ai_risks: "Rejected by AI Risk Officer",
+                  model_id: modelId,
+                  model_version: modelVersion,
+                  risk_summary: `RSI ${snapshot.rsi_14}`,
+                  confidence: confidence_score
+                });
+              }
               continue;
             }
 
