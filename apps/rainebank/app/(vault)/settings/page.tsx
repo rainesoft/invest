@@ -344,9 +344,20 @@ export default function SettingsPage() {
               <div>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
                   Telegram Chat ID
-                  <HintTooltip text="Your personal Telegram Chat ID. The bot will send automated real-time trade signals directly to this chat." />
+                  <HintTooltip text="Your personal Telegram Chat ID (Positive numbers only). The bot will send automated real-time trade signals directly to this chat. Group chats and channels are strictly prohibited." />
                 </label>
-                <input type="text" name="telegram_chat_id" value={settings.telegram_chat_id} onChange={handleChange} placeholder="e.g. 987654321" style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
+                <input 
+                  type="text" 
+                  name="telegram_chat_id" 
+                  value={settings.telegram_chat_id} 
+                  onChange={(e) => {
+                    // Anti-piracy: Strip negative signs, @ symbols, and letters
+                    const val = e.target.value.replace(/[^0-9]/g, '');
+                    setSettings({ ...settings, telegram_chat_id: val });
+                  }} 
+                  placeholder="e.g. 987654321" 
+                  style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} 
+                />
               </div>
             </div>
           </div>

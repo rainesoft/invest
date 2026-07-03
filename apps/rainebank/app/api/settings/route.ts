@@ -38,6 +38,17 @@ export async function POST(request: Request) {
     const body = await request.json();
     
     // Validate bounds
+    let telegram_chat_id = body.telegram_chat_id || null;
+    
+    // Anti-Piracy Check: Prevent users from hooking up to Group Chats/Channels
+    if (telegram_chat_id) {
+      if (telegram_chat_id.includes('-') || telegram_chat_id.includes('@') || !/^\d+$/.test(telegram_chat_id)) {
+        return NextResponse.json({ 
+          error: 'Invalid Telegram Chat ID. Group chats and channels are strictly prohibited. You must use a personal Direct Message Chat ID (positive numbers only).' 
+        }, { status: 400 });
+      }
+    }
+
     const updates = {
       user_id: user.id,
       portfolio_capital: Math.max(0, Number(body.portfolio_capital || 0)),
@@ -45,7 +56,7 @@ export async function POST(request: Request) {
       max_portfolio_heat_pct: Math.min(1.0, Math.max(0.01, Number(body.max_portfolio_heat_pct || 0.10))),
       max_spread_points: Math.min(1000, Math.max(0, Number(body.max_spread_points || 50))),
       max_volume_per_trade: Math.max(0.01, Number(body.max_volume_per_trade || 50)),
-      active_broker: body.active_broker || 'ALPACA',
+      active_broker: body.active_broker || 'METAAPI',
       meta_api_token: body.meta_api_token || null,
       meta_api_account_id: body.meta_api_account_id || null,
       alpaca_key: body.alpaca_key || null,
@@ -54,7 +65,7 @@ export async function POST(request: Request) {
       auto_trade_enabled: Boolean(body.auto_trade_enabled),
       auto_trade_tiers: Array.isArray(body.auto_trade_tiers) ? body.auto_trade_tiers : [],
       telegram_bot_token: body.telegram_bot_token || null,
-      telegram_chat_id: body.telegram_chat_id || null,
+      telegram_chat_id,
     };
 
     const { data, error } = await supabase
