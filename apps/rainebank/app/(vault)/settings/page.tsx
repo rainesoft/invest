@@ -61,6 +61,7 @@ export default function SettingsPage() {
     alpaca_secret: '',
     is_live_execution_enabled: false,
     auto_trade_enabled: false,
+    sync_trailing_stops: false,
     auto_trade_tiers: [] as string[],
     telegram_bot_token: '',
     telegram_chat_id: ''
@@ -84,6 +85,7 @@ export default function SettingsPage() {
             alpaca_secret: data.settings.alpaca_secret || '',
             is_live_execution_enabled: data.settings.is_live_execution_enabled || false,
             auto_trade_enabled: data.settings.auto_trade_enabled || false,
+            sync_trailing_stops: data.settings.sync_trailing_stops || false,
             auto_trade_tiers: data.settings.auto_trade_tiers || [],
             telegram_bot_token: data.settings.telegram_bot_token || '',
             telegram_chat_id: data.settings.telegram_chat_id || ''
@@ -292,6 +294,19 @@ export default function SettingsPage() {
                   <input type="checkbox" name="auto_trade_enabled" checked={settings.auto_trade_enabled} onChange={handleChange} style={{ opacity: 0, width: 0, height: 0 }} />
                   <span style={{ position: 'absolute', cursor: 'pointer', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: settings.auto_trade_enabled ? '#10b981' : '#4b5563', transition: '.4s', borderRadius: '24px' }}>
                     <span style={{ position: 'absolute', content: '""', height: '18px', width: '18px', left: '3px', bottom: '3px', backgroundColor: 'white', transition: '.4s', borderRadius: '50%', transform: settings.auto_trade_enabled ? 'translateX(24px)' : 'translateX(0)' }}></span>
+                  </span>
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <div>
+                  <h3 style={{ margin: '0 0 4px 0', fontSize: '15px' }}>Sync Trailing Stops to Live Broker</h3>
+                  <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)' }}>Physically modify live MT4/MT5 limit orders to lock in profit as price moves.</p>
+                </div>
+                <label style={{ position: 'relative', display: 'inline-block', width: '48px', height: '24px' }}>
+                  <input type="checkbox" name="sync_trailing_stops" checked={settings.sync_trailing_stops} onChange={handleChange} style={{ opacity: 0, width: 0, height: 0 }} />
+                  <span style={{ position: 'absolute', cursor: 'pointer', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: settings.sync_trailing_stops ? '#10b981' : '#4b5563', transition: '.4s', borderRadius: '24px' }}>
+                    <span style={{ position: 'absolute', content: '""', height: '18px', width: '18px', left: '3px', bottom: '3px', backgroundColor: 'white', transition: '.4s', borderRadius: '50%', transform: settings.sync_trailing_stops ? 'translateX(24px)' : 'translateX(0)' }}></span>
                   </span>
                 </label>
               </div>

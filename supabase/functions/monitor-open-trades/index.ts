@@ -135,9 +135,10 @@ serve(async (_req) => {
       if (r && initial != null) {
         const next = lastLevel + 0.5;
         const newStop = trailStop(entry, initial, next, t.side);
-        
-        // Push trailing stop modification to the live broker
-        await updateBrokerStopLoss(t.symbol, newStop, activeSettings, brokerPos.positionId);
+        // Push trailing stop modification to the live broker if permitted
+        if (activeSettings.sync_trailing_stops) {
+          await updateBrokerStopLoss(t.symbol, newStop, activeSettings, brokerPos.positionId);
+        }
 
         await supabase
           .from("trades")
@@ -236,9 +237,10 @@ serve(async (_req) => {
       const next = nextTrailLevel(rMultiple, lastLevel);
       if (next != null && initial != null) {
         const newStop = trailStop(entry, initial, next, t.side);
-        
-        // Push trailing stop modification to the live broker
-        await updateBrokerStopLoss(t.symbol, newStop, activeSettings, brokerPos.positionId);
+        // Push trailing stop modification to the live broker if permitted
+        if (activeSettings.sync_trailing_stops) {
+          await updateBrokerStopLoss(t.symbol, newStop, activeSettings, brokerPos.positionId);
+        }
 
         await supabase
           .from("trades")
