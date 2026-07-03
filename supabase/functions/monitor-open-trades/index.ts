@@ -7,7 +7,7 @@ import {
   shouldTightenTrail,
   trailStop,
 } from "../../../packages/risk/index.ts";
-import { fetchPaperBars } from "../../../packages/execution/index.ts";
+import { fetchPaperBars, syncBrokerPosition, updateBrokerStopLoss } from "../../../packages/execution/index.ts";
 
 /**
  * Simple per-minute monitor for open trades.
@@ -61,7 +61,36 @@ serve(async (_req) => {
   const now = Date.now();
   const dayMs = 24 * 60 * 60 * 1000;
 
+  // Grab the active user settings for broker API credentials
+  const { data: settings } = await supabase.from('user_risk_settings').select('*').limit(1).single();
+  const activeSettings = settings || { active_broker: 'ALPACA' };
+
   for (const t of trades ?? []) {
+    // 1. Two-Way Sync: Check if the broker actually still has this position open
+    const brokerPos = await syncBrokerPosition(t.symbol, activeSettings);
+    
+    // If the broker says it's closed (either manually or by broker TP/SL), sync the closure to our DB immediately
+    if (!brokerPos.isOpen) {
+      await supabase
+        .from("trades")
+        .update({
+          status: "CLOSED",
+          close_reason: "BROKER_SYNC",
+          closed_at: new Date().toISOString(),
+        })
+        .eq("id", t.id);
+      
+      closed++;
+      await insertAuditLog(supabase, {
+        actor_type: "SYSTEM",
+        action: "CLOSE_TRADE",
+        entity_type: "trade",
+        entity_id: t.id,
+        payload_json: { reason: "BROKER_SYNC", pnl: brokerPos.pl },
+      });
+      continue;
+    }
+
     // Dynamically fetch live pricing from MetaAPI or Alpaca using user's DB credentials
     const bars = await fetchPaperBars(t.symbol, '1m', 1, supabase);
     const price = bars.length > 0 ? bars[0].c : null;
@@ -106,6 +135,10 @@ serve(async (_req) => {
       if (r && initial != null) {
         const next = lastLevel + 0.5;
         const newStop = trailStop(entry, initial, next, t.side);
+        
+        // Push trailing stop modification to the live broker
+        await updateBrokerStopLoss(t.symbol, newStop, activeSettings, brokerPos.positionId);
+
         await supabase
           .from("trades")
           .update({
@@ -203,6 +236,10 @@ serve(async (_req) => {
       const next = nextTrailLevel(rMultiple, lastLevel);
       if (next != null && initial != null) {
         const newStop = trailStop(entry, initial, next, t.side);
+        
+        // Push trailing stop modification to the live broker
+        await updateBrokerStopLoss(t.symbol, newStop, activeSettings, brokerPos.positionId);
+
         await supabase
           .from("trades")
           .update({

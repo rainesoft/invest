@@ -305,3 +305,68 @@ export async function fetchPaperBars(
     return [];
   }
 }
+
+export async function syncBrokerPosition(
+  symbol: string,
+  settings: any
+): Promise<{ isOpen: boolean; pl: number; positionId?: string }> {
+  try {
+    if (settings.active_broker === 'METAAPI') {
+      const res = await metaApiFetch(`/positions`, { method: 'GET' }, settings.meta_api_token, settings.meta_api_account_id);
+      const position = (res || []).find((p: any) => p.symbol === symbol);
+      if (position) {
+        return { isOpen: true, pl: position.unrealizedProfit || 0, positionId: position.id };
+      }
+      return { isOpen: false, pl: 0 };
+    } else {
+      const key = settings.alpaca_key || getEnv('BROKER_KEY') || '';
+      const secret = settings.alpaca_secret || getEnv('BROKER_SECRET') || '';
+      try {
+        const res = await alpacaFetch(`/positions/${symbol}`, { method: 'GET' }, key, secret);
+        if (res && res.symbol === symbol) {
+          return { isOpen: true, pl: Number(res.unrealized_pl || 0) };
+        }
+      } catch (err: any) {
+        if (err.message.includes('404')) {
+          return { isOpen: false, pl: 0 }; // 404 means no open position
+        }
+        throw err;
+      }
+      return { isOpen: false, pl: 0 };
+    }
+  } catch (err) {
+    console.warn(`Failed to sync broker position for ${symbol}:`, err);
+    return { isOpen: true, pl: 0 }; // Assume open on error to prevent accidental closure
+  }
+}
+
+export async function updateBrokerStopLoss(
+  symbol: string,
+  newStop: number,
+  settings: any,
+  positionId?: string
+): Promise<boolean> {
+  try {
+    if (settings.active_broker === 'METAAPI' && positionId) {
+      await metaApiFetch('/trade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actionType: 'POSITION_MODIFY',
+          positionId: positionId,
+          stopLoss: newStop,
+          stopLossUnits: 'ABSOLUTE_PRICE'
+        }),
+      }, settings.meta_api_token, settings.meta_api_account_id);
+      return true;
+    } else {
+      // For Alpaca, bracket orders must be replaced via the orders API. 
+      // For simplicity in this engine, we rely on the database simulated stop if bracket manipulation fails.
+      console.log(`[ALPACA] Trailing stop updated mathematically in DB to ${newStop} for ${symbol}. (Requires bracket replacement for physical sync)`);
+      return false; 
+    }
+  } catch (err) {
+    console.warn(`Failed to update broker stop loss for ${symbol}:`, err);
+    return false;
+  }
+}
