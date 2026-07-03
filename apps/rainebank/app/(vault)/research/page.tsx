@@ -308,7 +308,6 @@ export default function ResearchPage() {
             }
           `}</style>
         </div>
-        </div>
       )}
 
       {results && results.length === 0 && (!rejections || rejections.length === 0) && (
