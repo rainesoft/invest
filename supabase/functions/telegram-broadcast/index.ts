@@ -30,20 +30,41 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-    let TELEGRAM_BOT_TOKEN = FALLBACK_TELEGRAM_BOT_TOKEN;
-    let TELEGRAM_CHAT_ID = FALLBACK_TELEGRAM_CHAT_ID;
+    let subscribedUsers: { token: string, chatId: string }[] = [];
 
     if (supabaseUrl && supabaseKey) {
       const supabase = createClient(supabaseUrl, supabaseKey);
-      const { data: settings } = await supabase.from('user_risk_settings').select('telegram_bot_token, telegram_chat_id').limit(1).single();
-      if (settings?.telegram_bot_token) TELEGRAM_BOT_TOKEN = settings.telegram_bot_token;
-      if (settings?.telegram_chat_id) TELEGRAM_CHAT_ID = settings.telegram_chat_id;
+      
+      // Fetch all users who have configured Telegram credentials
+      const { data: settings, error } = await supabase
+        .from('user_risk_settings')
+        .select('telegram_bot_token, telegram_chat_id')
+        .not('telegram_bot_token', 'is', null)
+        .not('telegram_chat_id', 'is', null);
+
+      if (!error && settings) {
+        settings.forEach(user => {
+          if (user.telegram_bot_token?.trim() && user.telegram_chat_id?.trim()) {
+            subscribedUsers.push({
+              token: user.telegram_bot_token.trim(),
+              chatId: user.telegram_chat_id.trim()
+            });
+          }
+        });
+      }
     }
 
-    // Check if we have the necessary credentials
-    if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-      console.error("Missing Telegram credentials in both database and environment.");
-      return new Response("Server Configuration Error", { status: 500 });
+    // Fallback for single-tenant backward compatibility if database has no active users
+    if (subscribedUsers.length === 0 && FALLBACK_TELEGRAM_BOT_TOKEN && FALLBACK_TELEGRAM_CHAT_ID) {
+      subscribedUsers.push({
+        token: FALLBACK_TELEGRAM_BOT_TOKEN,
+        chatId: FALLBACK_TELEGRAM_CHAT_ID
+      });
+    }
+
+    if (subscribedUsers.length === 0) {
+      console.log("No users with active Telegram credentials found. Aborting broadcast.");
+      return new Response("No active telegram subscriptions", { status: 200 });
     }
 
     // Escape special characters for MarkdownV2 syntax in Telegram
@@ -55,7 +76,7 @@ serve(async (req) => {
 
     const symbol = escapeMd(signal.symbol);
     const side = escapeMd(signal.side);
-    const entryPrice = signal.entry_plan_json?.entry_price ? escapeMd(String(signal.entry_plan_json.entry_price)) : "Market Execution";
+    const entryPrice = signal.entry_plan_json?.price ? escapeMd(String(signal.entry_plan_json.price)) : "Market Execution";
     const status = escapeMd(signal.status);
     const aiSummary = escapeMd(signal.ai_summary || "Automated mathematical setup evaluated by Alpha Engine.");
     const riskSummary = escapeMd(signal.risk_summary || "Standard Model Risk Constraints Applied.");
@@ -77,28 +98,41 @@ _${aiSummary}_
 [View Ledger](https://yourdomain.com/dashboard)
     `.trim();
 
-    // Dispatch to Telegram
-    const telegramUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-    const response = await fetch(telegramUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
-        text: message,
-        parse_mode: "MarkdownV2",
-        disable_web_page_preview: true,
-      }),
+    // Fan-out broadcasting to all subscribed users concurrently
+    const broadcastPromises = subscribedUsers.map(async (user) => {
+      const telegramUrl = `https://api.telegram.org/bot${user.token}/sendMessage`;
+      const response = await fetch(telegramUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          chat_id: user.chatId,
+          text: message,
+          parse_mode: "MarkdownV2",
+          disable_web_page_preview: true,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.text();
+        throw new Error(`ChatID ${user.chatId} failed: ${errorData}`);
+      }
+      return user.chatId;
     });
 
-    if (!response.ok) {
-      const errorData = await response.text();
-      console.error("Telegram API Error:", errorData);
-      return new Response(`Telegram Dispatch Failed: ${errorData}`, { status: 500 });
-    }
+    const results = await Promise.allSettled(broadcastPromises);
+    
+    const successes = results.filter(r => r.status === "fulfilled").length;
+    const failures = results.filter(r => r.status === "rejected").length;
 
-    return new Response(JSON.stringify({ success: true }), {
+    console.log(`Broadcast complete. Success: ${successes}, Failures: ${failures}`);
+
+    results.filter(r => r.status === "rejected").forEach((r: any) => {
+      console.error("Telegram Fan-out Error:", r.reason);
+    });
+
+    return new Response(JSON.stringify({ success: true, successes, failures }), {
       headers: { "Content-Type": "application/json" },
       status: 200,
     });
