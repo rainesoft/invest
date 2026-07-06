@@ -44,8 +44,8 @@ export default function LandingNavbar({ isLoggedIn = false }: { isLoggedIn?: boo
                 ) : (
                   <>
                     <Link href="#features" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>Features</Link>
-                    <Link href="/academy" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>Academy</Link>
                     <Link href="#pricing" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>Pricing</Link>
+                    <Link href="/academy" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>Academy</Link>
                   </>
                 )}
               </div>
