@@ -555,6 +555,16 @@ serve(async (req) => {
 
             console.log(`[Layer C: Execution Desk] APPROVED ${symbol}: Generating pending opportunity...`);
             sendEvent({ type: 'progress', message: `[Execution] Creating opportunity for ${symbol}...` });
+            
+            let order_type = dbSide === 'LONG' ? 'BUY MARKET' : 'SELL MARKET';
+            if (Math.abs(entry_price - snapshot.current_price) / snapshot.current_price > 0.0005) {
+                if (dbSide === 'LONG') {
+                    order_type = entry_price < snapshot.current_price ? 'BUY LIMIT' : 'BUY STOP';
+                } else {
+                    order_type = entry_price > snapshot.current_price ? 'SELL LIMIT' : 'SELL STOP';
+                }
+            }
+
             const { data, error } = await supabase
               .from("trade_opportunities")
               .insert({
@@ -562,6 +572,7 @@ serve(async (req) => {
                 side: dbSide,
                 timeframe: timeframe.toLowerCase(),
                 status: "PENDING_APPROVAL",
+                order_type,
                 entry_plan_json: {
                   price: entry_price,
                 },
@@ -581,14 +592,7 @@ serve(async (req) => {
               console.log(`[Success] Opportunity generated for ${symbol}: ID ${data.id}`);
               sendEvent({ type: 'progress', message: `[Success] Opportunity generated for ${symbol}` });
               
-              let order_type = dbSide === 'LONG' ? 'BUY MARKET' : 'SELL MARKET';
-              if (Math.abs(entry_price - snapshot.current_price) / snapshot.current_price > 0.0005) {
-                  if (dbSide === 'LONG') {
-                      order_type = entry_price < snapshot.current_price ? 'BUY LIMIT' : 'BUY STOP';
-                  } else {
-                      order_type = entry_price > snapshot.current_price ? 'SELL LIMIT' : 'SELL STOP';
-                  }
-              }
+              // order_type is now pre-calculated and saved to the database!
 
               // ==========================================
               // AUTO-TRADING EXECUTION
@@ -642,12 +646,20 @@ serve(async (req) => {
 
                       // 6. Execute Order via MetaApi or Alpaca
                       try {
+                        let execType: 'market' | 'limit' | 'stop' = 'market';
+                        if (order_type.includes('LIMIT')) execType = 'limit';
+                        else if (order_type.includes('STOP')) execType = 'stop';
+
                         await placePaperOrder({
                           symbol,
                           side: dbSide === 'LONG' ? 'buy' : 'sell',
                           qty: allowedQty,
-                          type: 'market',
-                        }, supabase);
+                          type: execType,
+                          limitPrice: execType === 'limit' ? entry_price : undefined,
+                          stopPrice: execType === 'stop' ? entry_price : undefined,
+                          stopLoss: stop_loss,
+                          takeProfit: take_profit
+                        }, supabase, settings);
 
                         // 7. Mark as APPROVED
                         await supabase.from('trade_opportunities').update({ status: 'APPROVED' }).eq('id', data.id);
