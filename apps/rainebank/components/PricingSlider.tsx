@@ -8,11 +8,11 @@ interface PricingSliderProps {
 }
 
 const tiers = [
-  { minCapital: 500, label: "$500", feeGHS: 250, projMin: 25, projMax: 50 },
-  { minCapital: 1000, label: "$1,000", feeGHS: 450, projMin: 50, projMax: 100 },
-  { minCapital: 2500, label: "$2,500", feeGHS: 900, projMin: 125, projMax: 250 },
-  { minCapital: 5000, label: "$5,000", feeGHS: 1800, projMin: 250, projMax: 500 },
-  { minCapital: 10000, label: "$10,000+", feeGHS: 3500, projMin: 500, projMax: 1000 },
+  { minCapital: 500, label: "$500", feeUSD: 49, projMin: 25, projMax: 50 },
+  { minCapital: 1000, label: "$1,000", feeUSD: 99, projMin: 50, projMax: 100 },
+  { minCapital: 2500, label: "$2,500", feeUSD: 199, projMin: 125, projMax: 250 },
+  { minCapital: 5000, label: "$5,000", feeUSD: 399, projMin: 250, projMax: 500 },
+  { minCapital: 10000, label: "$10,000+", feeUSD: 799, projMin: 500, projMax: 1000 },
 ];
 
 export default function PricingSlider({ isLoggedIn }: PricingSliderProps) {
@@ -71,7 +71,7 @@ export default function PricingSlider({ isLoggedIn }: PricingSliderProps) {
 
       <div style={{ fontSize: '14px', color: '#9ca3af', marginBottom: '4px' }}>Software Fee</div>
       <div style={{ fontSize: '48px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-2px' }}>
-        GH₵ {currentTier.feeGHS}
+        ${currentTier.feeUSD}
         <span style={{ fontSize: '18px', color: '#9ca3af', fontWeight: 500, letterSpacing: '0' }}>/mo</span>
       </div>
 
