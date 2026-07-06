@@ -8,14 +8,12 @@ import { CreditCard, Loader2 } from 'lucide-react';
 interface CheckoutButtonProps {
   email: string;
   userId: string;
-  planCode: string;
   amountUSD: number; // The base software fee in USD
 }
 
 export default function CheckoutButton({
   email,
   userId,
-  planCode,
   amountUSD,
 }: CheckoutButtonProps) {
   const router = useRouter();
@@ -50,7 +48,6 @@ export default function CheckoutButton({
     amount: dynamicAmountPesewas, 
     currency: 'GHS',
     publicKey: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY || '',
-    plan: planCode,
     channels: ['card', 'bank', 'ussd', 'qr', 'mobile_money', 'bank_transfer'],
     metadata: {
       custom_fields: [
@@ -59,6 +56,11 @@ export default function CheckoutButton({
           variable_name: 'user_id',
           value: userId,
         },
+        {
+          display_name: 'Billing Amount USD',
+          variable_name: 'billing_amount_usd',
+          value: amountUSD,
+        }
       ],
     },
   };

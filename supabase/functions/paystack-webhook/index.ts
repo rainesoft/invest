@@ -61,14 +61,21 @@ serve(async (req) => {
     if (event.event === 'charge.success' || event.event === 'subscription.create') {
       const email = event.data.customer.email;
       const customerCode = event.data.customer.customer_code;
-      // In charge.success, subscription code might be null if it's a one-off, 
-      // but for plan subscriptions it usually exists, or use subscription.create
-      const subscriptionCode = event.data.subscription_code || event.data.plan?.subscription_code;
+      
+      // Extract custom tokenized billing fields
+      const authCode = event.data.authorization?.authorization_code || null;
+      let billingAmountUSD = null;
+      
+      if (event.data.metadata && event.data.metadata.custom_fields) {
+        const amountField = event.data.metadata.custom_fields.find((f: any) => f.variable_name === 'billing_amount_usd');
+        if (amountField) {
+          billingAmountUSD = parseInt(amountField.value, 10);
+        }
+      }
 
       console.log(`Processing successful payment for: ${email}`);
 
       // 1. Look up the user by email in auth.users
-      // Note: Admin API is required to search auth.users by email
       const { data: users, error: userError } = await supabase.auth.admin.listUsers();
       
       if (userError || !users.users) {
@@ -82,13 +89,19 @@ serve(async (req) => {
         return new Response('User not found but webhook processed', { status: 200 });
       }
 
-      // 2. Update their subscription record
+      // Calculate next billing date (30 days from now)
+      const nextBillingDate = new Date();
+      nextBillingDate.setDate(nextBillingDate.getDate() + 30);
+
+      // 2. Update their subscription record with tokenized billing data
       const { error: updateError } = await supabase
         .from('user_subscriptions')
         .update({
           plan_tier: 'pro',
           paystack_customer_code: customerCode,
-          paystack_subscription_code: subscriptionCode,
+          paystack_auth_code: authCode,
+          billing_amount_usd: billingAmountUSD,
+          next_billing_date: nextBillingDate.toISOString(),
           status: 'active',
           updated_at: new Date().toISOString()
         })

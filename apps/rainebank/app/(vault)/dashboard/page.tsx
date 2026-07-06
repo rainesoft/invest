@@ -231,7 +231,6 @@ export default function VaultDashboard() {
             <CheckoutButton
               email={user.email}
               userId={user.id}
-              planCode={process.env.NEXT_PUBLIC_PAYSTACK_ALPHA_PLAN_CODE || ""} 
               amountUSD={19}
             />
           </div>
