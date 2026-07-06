@@ -23,7 +23,7 @@ export default function LandingNavbar({ isLoggedIn = false }: { isLoggedIn?: boo
           .mobile-nav { display: none !important; }
         }
       `}</style>
-      
+
       <div style={{ padding: '24px', display: 'flex', justifyContent: 'center', position: 'relative', zIndex: 50 }}>
         <nav style={{
           display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '1200px',
@@ -36,7 +36,7 @@ export default function LandingNavbar({ isLoggedIn = false }: { isLoggedIn?: boo
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '48px' }}>
               <Link href="/" style={{ textDecoration: 'none' }}><Logo /></Link>
-              
+
               {/* Desktop Links */}
               <div className="desktop-nav" style={{ gap: '24px', alignItems: 'center', color: 'var(--text-secondary)', fontSize: '14px', fontWeight: 500 }}>
                 {isComparePage ? (
@@ -44,8 +44,6 @@ export default function LandingNavbar({ isLoggedIn = false }: { isLoggedIn?: boo
                 ) : (
                   <>
                     <Link href="#features" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>Features</Link>
-                    <Link href="#performance" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>Performance</Link>
-                    <Link href="#prop-firms" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>Prop Firms</Link>
                     <Link href="/academy" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>Academy</Link>
                     <Link href="#pricing" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>Pricing</Link>
                   </>
@@ -78,13 +76,11 @@ export default function LandingNavbar({ isLoggedIn = false }: { isLoggedIn?: boo
               ) : (
                 <>
                   <Link onClick={() => setIsOpen(false)} href="#features" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 600 }}>Features</Link>
-                  <Link onClick={() => setIsOpen(false)} href="#performance" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 600 }}>Performance</Link>
-                  <Link onClick={() => setIsOpen(false)} href="#prop-firms" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 600 }}>Prop Firms</Link>
-                  <Link onClick={() => setIsOpen(false)} href="/academy" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 600 }}>Academy</Link>
                   <Link onClick={() => setIsOpen(false)} href="#pricing" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 600 }}>Pricing</Link>
+                  <Link onClick={() => setIsOpen(false)} href="/academy" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 600 }}>Academy</Link>
                 </>
               )}
-              
+
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-color)' }}>
                 {!isLoggedIn && <Link onClick={() => setIsOpen(false)} href="/login" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: 16, fontWeight: 600, textAlign: 'center', padding: '12px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>Log in</Link>}
                 <Link onClick={() => setIsOpen(false)} href={isLoggedIn ? "/dashboard" : "/login"} style={{ background: 'var(--text-primary)', color: 'var(--bg-color)', padding: '12px', borderRadius: '100px', textDecoration: 'none', fontSize: 16, fontWeight: 600, textAlign: 'center' }}>
