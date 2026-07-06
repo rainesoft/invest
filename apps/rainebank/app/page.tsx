@@ -176,7 +176,7 @@ export default async function LandingPage() {
               display: 'flex', flexDirection: 'column'
             }}>
               <div style={{ fontSize: '20px', fontWeight: 700, color: '#fff', marginBottom: '16px' }}>Spectator Mode</div>
-              <div style={{ fontSize: '48px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-2px' }}>$0<span style={{ fontSize: '18px', color: '#9ca3af', fontWeight: 500, letterSpacing: '0' }}>/mo</span></div>
+              <div style={{ fontSize: '48px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-2px' }}>GH₵ 0<span style={{ fontSize: '18px', color: '#9ca3af', fontWeight: 500, letterSpacing: '0' }}>/mo</span></div>
               <p style={{ color: '#9ca3af', fontSize: '15px', marginBottom: '32px' }}>Perfect if you just want to watch the AI work.</p>
 
               <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 40px 0', display: 'flex', flexDirection: 'column', gap: '16px', color: '#e5e7eb', flex: 1 }}>
@@ -214,7 +214,7 @@ export default async function LandingPage() {
                 POPULAR
               </div>
               <div style={{ fontSize: '20px', fontWeight: 700, color: '#38bdf8', marginBottom: '16px' }}>Autopilot Trader</div>
-              <div style={{ fontSize: '48px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-2px' }}>$99<span style={{ fontSize: '18px', color: '#9ca3af', fontWeight: 500, letterSpacing: '0' }}>/mo</span></div>
+              <div style={{ fontSize: '48px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-2px' }}>GH₵ 450<span style={{ fontSize: '18px', color: '#9ca3af', fontWeight: 500, letterSpacing: '0' }}>/mo</span></div>
               <p style={{ color: '#9ca3af', fontSize: '15px', marginBottom: '32px' }}>The AI hooks directly into your brokerage account.</p>
 
               <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 40px 0', display: 'flex', flexDirection: 'column', gap: '16px', color: '#e5e7eb', flex: 1 }}>
