@@ -49,6 +49,23 @@ serve(async (req) => {
 
     for (const sub of subscriptions) {
       try {
+        if (sub.cancel_at_period_end) {
+          console.log(`Processing end-of-period cancellation for user ${sub.user_id}`);
+          
+          await supabase
+            .from('user_subscriptions')
+            .update({ status: 'canceled', plan_tier: 'free' })
+            .eq('id', sub.id);
+            
+          await supabase
+            .from('user_risk_settings')
+            .update({ is_live_execution_enabled: false })
+            .eq('user_id', sub.user_id);
+            
+          successCount++;
+          continue;
+        }
+
         // Fetch user email
         const { data: userResp, error: userError } = await supabase.auth.admin.getUserById(sub.user_id);
         if (userError || !userResp.user?.email) throw new Error("Could not fetch user email");

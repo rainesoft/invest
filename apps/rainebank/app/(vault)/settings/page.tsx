@@ -47,6 +47,7 @@ export default function SettingsPage() {
   
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [subscription, setSubscription] = useState<any>(null);
   
   const [settings, setSettings] = useState({
     portfolio_capital: 10000,
@@ -94,6 +95,13 @@ export default function SettingsPage() {
         setLoading(false);
       })
       .catch(() => setLoading(false));
+
+    fetch('/api/billing')
+      .then(res => res.json())
+      .then(data => {
+        if (data.subscription) setSubscription(data.subscription);
+      })
+      .catch(console.error);
   }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -113,6 +121,25 @@ export default function SettingsPage() {
         : [...current, tier];
       return { ...prev, auto_trade_tiers: updated };
     });
+  };
+
+  const toggleCancellation = async () => {
+    if (!subscription) return;
+    const newCancelState = !subscription.cancel_at_period_end;
+    
+    setSubscription({ ...subscription, cancel_at_period_end: newCancelState });
+    toast.success(newCancelState ? 'Subscription will cancel at period end' : 'Subscription resumed');
+
+    try {
+      await fetch('/api/billing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cancel: newCancelState })
+      });
+    } catch (e) {
+      toast.error('Failed to update subscription');
+      setSubscription({ ...subscription, cancel_at_period_end: !newCancelState });
+    }
   };
 
   const handleSave = async () => {
@@ -160,6 +187,46 @@ export default function SettingsPage() {
           {saving ? 'Saving...' : 'Save Settings'}
         </button>
       </div>
+
+      {subscription && (
+        <div style={{ background: 'var(--input-bg)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', marginBottom: '32px' }}>
+          <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '18px', margin: '0 0 16px 0' }}>
+            <Activity size={20} color="var(--accent)" />
+            Billing & Subscription
+          </h2>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+            <div>
+              <p style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: 600 }}>{subscription.plan_tier === 'pro' ? `Autopilot Pro ($${subscription.billing_amount_usd}/mo)` : 'Free Tier'}</p>
+              <p style={{ margin: 0, fontSize: '14px', color: 'var(--text-secondary)' }}>
+                {subscription.status === 'active' ? (
+                  subscription.cancel_at_period_end 
+                    ? `Cancels on ${new Date(subscription.next_billing_date).toLocaleDateString()}`
+                    : `Next billing date: ${new Date(subscription.next_billing_date).toLocaleDateString()}`
+                ) : (
+                  `Status: ${subscription.status}`
+                )}
+              </p>
+            </div>
+            {subscription.status === 'active' && (
+              <button 
+                onClick={toggleCancellation}
+                style={{
+                  padding: '10px 20px',
+                  borderRadius: '8px',
+                  background: subscription.cancel_at_period_end ? 'var(--accent)' : 'transparent',
+                  color: subscription.cancel_at_period_end ? '#fff' : '#ef4444',
+                  border: `1px solid ${subscription.cancel_at_period_end ? 'var(--accent)' : '#ef4444'}`,
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  transition: 'all 0.2s'
+                }}
+              >
+                {subscription.cancel_at_period_end ? 'Resume Subscription' : 'Cancel Subscription'}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '32px' }}>
         
