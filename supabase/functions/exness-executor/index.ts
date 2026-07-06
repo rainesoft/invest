@@ -121,7 +121,25 @@ serve(async (req) => {
                if (accRes.ok) {
                   const accData = await accRes.json();
                   const equity = accData.equity || 0;
-                  if (equity > maxEquity) {
+                  
+                  // Drawdown Breaker Logic
+                  const maxDdPct = Number(user.max_drawdown_pct ?? 0.05);
+                  const hwm = Number(user.high_water_mark_equity ?? 0);
+                  
+                  if (equity > hwm) {
+                     await supabase.from("user_risk_settings")
+                       .update({ high_water_mark_equity: equity })
+                       .eq("user_id", user.user_id);
+                  } else if (hwm > 0) {
+                     const currentDrawdown = (hwm - equity) / hwm;
+                     if (currentDrawdown >= maxDdPct) {
+                       tierExceeded = true;
+                       tierRejectReason = `Drawdown Breaker Tripped! Account equity has dropped by ${(currentDrawdown * 100).toFixed(2)}% from peak. Trading halted to protect capital.`;
+                     }
+                  }
+
+                  // Tier Limit Check (only if drawdown breaker wasn't tripped)
+                  if (!tierExceeded && equity > maxEquity) {
                      tierExceeded = true;
                      tierRejectReason = `Account equity ($${equity.toFixed(2)}) exceeds subscription tier limit ($${maxEquity}). Please upgrade your Autopilot plan.`;
                   }

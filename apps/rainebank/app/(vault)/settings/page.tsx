@@ -53,6 +53,8 @@ export default function SettingsPage() {
     portfolio_capital: 10000,
     risk_per_trade_pct: 0.01,
     max_portfolio_heat_pct: 0.10,
+    max_drawdown_pct: 0.05,
+    high_water_mark_equity: 0,
     max_spread_points: 50,
     max_volume_per_trade: 50,
     active_broker: 'ALPACA',
@@ -77,6 +79,8 @@ export default function SettingsPage() {
             portfolio_capital: data.settings.portfolio_capital || 10000,
             risk_per_trade_pct: data.settings.risk_per_trade_pct || 0.01,
             max_portfolio_heat_pct: data.settings.max_portfolio_heat_pct || 0.10,
+            max_drawdown_pct: data.settings.max_drawdown_pct || 0.05,
+            high_water_mark_equity: data.settings.high_water_mark_equity || 0,
             max_spread_points: data.settings.max_spread_points || 50,
             max_volume_per_trade: data.settings.max_volume_per_trade || 50,
             active_broker: data.settings.active_broker || 'ALPACA',
@@ -258,6 +262,25 @@ export default function SettingsPage() {
                 <HintTooltip text="Your 'total exposure limit'. If set to 10%, across all open trades combined you will never risk more than 10% of your account at the same time. If hit, the system prevents opening new trades until some close." />
               </label>
               <input type="number" step="0.01" name="max_portfolio_heat_pct" value={settings.max_portfolio_heat_pct} onChange={handleChange} style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
+            </div>
+            <div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                Max Drawdown Protection (%) - {Number(settings.max_drawdown_pct) * 100}%
+                <HintTooltip text="The absolute maximum drop your account can take from its highest peak. If the AI loses this much, the Drawdown Breaker physically disconnects the broker to protect your capital. Perfect for passing strict Prop Firm rules." />
+              </label>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                <input type="number" step="0.01" name="max_drawdown_pct" value={settings.max_drawdown_pct} onChange={handleChange} style={{ flex: 1, padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
+                <button 
+                  onClick={() => {
+                    if (window.confirm("Resetting the Drawdown Breaker will erase your High-Water Mark and immediately resume trading. Are you sure?")) {
+                      setSettings(prev => ({ ...prev, high_water_mark_equity: 0 }));
+                      toast.success("Breaker Reset! Remember to click Save Settings.");
+                    }
+                  }}
+                  style={{ padding: '12px 16px', background: 'var(--panel-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '14px', fontWeight: 600 }}>
+                  Reset Breaker
+                </button>
+              </div>
             </div>
             <div>
               <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
