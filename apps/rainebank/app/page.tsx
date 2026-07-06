@@ -124,10 +124,10 @@ export default async function LandingPage() {
 
         </section>
 
-        {/* Simple Explanation Bento Box */}
-        <section id="how-it-works" style={{ maxWidth: '1200px', width: '100%', marginBottom: '120px' }}>
+        {/* Features / How it Works Box */}
+        <section id="features" style={{ maxWidth: '1200px', width: '100%', marginBottom: '120px' }}>
           <div style={{ textAlign: 'center', marginBottom: '64px' }}>
-            <h2 style={{ fontSize: '40px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-1px' }}>How it actually works</h2>
+            <h2 style={{ fontSize: '40px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-1px' }}>Institutional Features</h2>
             <p style={{ color: '#9ca3af', fontSize: '18px', maxWidth: '600px', margin: '0 auto' }}>
               Trading doesn't have to be confusing. Here is exactly what our AI does for you behind the scenes.
             </p>
