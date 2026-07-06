@@ -231,8 +231,8 @@ export default function VaultDashboard() {
             <CheckoutButton
               email={user.email}
               userId={user.id}
-              planCode="PLN_test_alphaplan" // Replace with actual plan code
-              amount={9900} // e.g. $99.00 -> 9900 cents/kobo
+              planCode={process.env.NEXT_PUBLIC_PAYSTACK_ALPHA_PLAN_CODE || ""} 
+              amount={45000} // 450 GHS -> 45000 pesewas
             />
           </div>
         </div>

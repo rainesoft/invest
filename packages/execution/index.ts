@@ -143,12 +143,17 @@ export interface TrackedOrderRequest extends OrderRequest {
   tradeId: string;
   supabase: any;
   n?: number;
+  userId?: string;
 }
 
 export async function placeAndTrackOrder(req: TrackedOrderRequest) {
   const clientOrderId = req.clientOrderId || makeClientOrderId(req.tradeId, req.n);
   
-  const { data: settings } = await req.supabase.from('user_risk_settings').select('*').limit(1).single();
+  let query = req.supabase.from('user_risk_settings').select('*').limit(1);
+  if (req.userId) {
+    query = query.eq('user_id', req.userId);
+  }
+  const { data: settings } = await query.single();
   const activeSettings = settings || { active_broker: 'ALPACA' };
 
   const { res: orderRes, broker } = await placePaperOrder({ ...req, clientOrderId }, req.supabase, activeSettings);
@@ -197,6 +202,7 @@ export async function placeAndTrackOrder(req: TrackedOrderRequest) {
   if (broker === 'METAAPI' && isFilled && price) {
     await req.supabase.from('executions').insert({
       order_id: orderRow.id,
+      user_id: req.userId,
       price: Number(price),
       qty: req.qty,
       raw_fill: orderRes,
@@ -215,6 +221,7 @@ export async function placeAndTrackOrder(req: TrackedOrderRequest) {
         const diff = newFilled - filledQty;
         await req.supabase.from('executions').insert({
           order_id: orderRow.id,
+          user_id: req.userId,
           price: Number(upd.filled_avg_price),
           qty: diff,
           raw_fill: upd,

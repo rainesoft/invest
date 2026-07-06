@@ -24,9 +24,11 @@ export default function CheckoutButton({
   const config = {
     reference: new Date().getTime().toString(),
     email,
-    amount,
+    amount, // Paystack might need this to exactly match the plan, or be removed.
+    currency: 'GHS',
     publicKey: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY || '',
     plan: planCode,
+    channels: ['card', 'bank', 'ussd', 'qr', 'mobile_money', 'bank_transfer'],
     metadata: {
       custom_fields: [
         {
@@ -36,6 +38,17 @@ export default function CheckoutButton({
         },
       ],
     },
+  };
+
+  const handleCheckout = () => {
+    setLoading(true);
+    console.log("PAYSTACK CONFIG DEBUG:", config);
+    if (!config.publicKey) {
+      alert("Missing Paystack Public Key! Did you restart the server?");
+      setLoading(false);
+      return;
+    }
+    initializePayment({ onSuccess, onClose } as any);
   };
 
   const initializePayment = usePaystackPayment(config);
@@ -52,11 +65,6 @@ export default function CheckoutButton({
 
   const onClose = () => {
     setLoading(false);
-  };
-
-  const handleCheckout = () => {
-    setLoading(true);
-    initializePayment({ onSuccess, onClose } as any);
   };
 
   return (

@@ -60,6 +60,20 @@ export async function middleware(request: NextRequest) {
   const { data, error } = await supabase.auth.getUser();
   console.log('[Middleware] Auth Check:', { user: data?.user?.id, error: error?.message });
 
+  // If there's an invalid JWT (like a deleted user), forcefully clear the cookie
+  if (error && error.message.includes('User from sub claim in JWT does not exist')) {
+    console.log('[Middleware] Found invalid JWT, clearing these cookies:', request.cookies.getAll().map(c => c.name));
+    request.cookies.getAll().forEach(cookie => {
+      if (cookie.name.startsWith('sb-')) {
+        // Nuke all supabase cookies
+        request.cookies.delete(cookie.name);
+        supabaseResponse.cookies.set(cookie.name, '', { maxAge: 0, path: '/' });
+      }
+    });
+    // Also try signing out to clear any client state
+    await supabase.auth.signOut();
+  }
+
   const isProtectedRoute = request.nextUrl.pathname.startsWith('/dashboard');
   console.log('[Middleware] Path:', request.nextUrl.pathname, 'Protected:', isProtectedRoute);
 
