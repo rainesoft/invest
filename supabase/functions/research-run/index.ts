@@ -206,7 +206,7 @@ serve(async (req) => {
   const modelVersion = searchParams.get("model_version") ?? undefined;
   const newsContext = searchParams.get("news") ?? undefined;
   const symbolsParam =
-    searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "XAUUSD,XAGUSD,BTCUSD,UKOIL,US30,NAS100,EURUSD,USDJPY";
+    searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "XAUUSD,XAGUSD,BTCUSD,UKOIL";
   const symbols = symbolsParam.split(",").map((s) => s.trim()).filter(Boolean);
 
   const url = Deno.env.get("SUPABASE_URL");
@@ -591,7 +591,7 @@ serve(async (req) => {
                 entry_plan_json: {
                   price: entry_price,
                 },
-                stop_plan_json: { stop: stop_loss },
+                stop_plan_json: { stop: stop_loss, initial: stop_loss, atr: snapshot.atr_14 },
                 take_profit_json: { tp: take_profit },
                 risk_summary: `RSI ${snapshot.rsi_14}`,
                 confidence: confidence_score,

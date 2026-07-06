@@ -96,7 +96,6 @@ serve(async (_req) => {
     const price = bars.length > 0 ? bars[0].c : null;
     
     if (price == null || t.qty == null) continue;
-    let skipTrail = false;
 
     const opened = t.opened_at ? new Date(t.opened_at).getTime() : now;
 
@@ -132,26 +131,6 @@ serve(async (_req) => {
       .maybeSingle();
 
     if (req?.expires_at && new Date(req.expires_at).getTime() <= now) {
-      if (r && initial != null) {
-        const next = lastLevel + 0.5;
-        const newStop = trailStop(entry, initial, next, t.side);
-        // Push trailing stop modification to the live broker if permitted
-        if (activeSettings.sync_trailing_stops) {
-          await updateBrokerStopLoss(t.symbol, newStop, activeSettings, brokerPos.positionId);
-        }
-
-        await supabase
-          .from("trades")
-          .update({
-            stop_params_json: {
-              ...(t.stop_params_json ?? {}),
-              stop: newStop,
-              initial,
-              trail_level: next,
-            },
-          })
-          .eq("id", t.id);
-      }
       await supabase
         .from("profit_take_requests")
         .update({
@@ -202,7 +181,6 @@ serve(async (_req) => {
             expires_at: new Date(now + 60_000).toISOString(),
           });
       }
-      skipTrail = true;
     }
 
     // Max loss: breach of -1R from initial stop
@@ -232,27 +210,71 @@ serve(async (_req) => {
       continue;
     }
 
-    // Trailing stop management
-    if (!skipTrail && r && shouldTightenTrail(rMultiple, lastLevel)) {
-      const next = nextTrailLevel(rMultiple, lastLevel);
-      if (next != null && initial != null) {
-        const newStop = trailStop(entry, initial, next, t.side);
-        // Push trailing stop modification to the live broker if permitted
-        if (activeSettings.sync_trailing_stops) {
-          await updateBrokerStopLoss(t.symbol, newStop, activeSettings, brokerPos.positionId);
+    // Continuous ATR-Based Trailing Stop Management
+    const atr = t.stop_params_json?.atr ?? opp?.stop_plan_json?.atr ?? null;
+    const baselineDistance = atr != null ? atr : r; // Fallback to structural distance if ATR unknown
+
+    if (baselineDistance != null && baselineDistance > 0) {
+      const distanceMoved = (price - entry) * sideMult;
+      const atrMultiple = distanceMoved / baselineDistance;
+
+      let next = null;
+      if (atrMultiple >= 1.0) {
+        // Floor to nearest 0.5 (1.0, 1.5, 2.0, 2.5...)
+        const currentLevel = Math.floor(atrMultiple * 2) / 2;
+        if (currentLevel > lastLevel && currentLevel >= 1.0) {
+          next = currentLevel;
+        }
+      }
+
+      if (next != null) {
+        // At 1.0x ATR, profitLocked = 0 (Break Even)
+        // At 1.5x ATR, profitLocked = 0.5x ATR
+        const profitLocked = (next - 1.0) * baselineDistance;
+        const newStop = t.side === "LONG" ? entry + profitLocked : entry - profitLocked;
+
+        // Ensure we only tighten the stop, never widen it
+        const currentStop = stop ?? initial;
+        let isTighter = false;
+        if (currentStop != null) {
+           isTighter = t.side === "LONG" ? newStop > currentStop : newStop < currentStop;
+        } else {
+           isTighter = true;
         }
 
-        await supabase
-          .from("trades")
-          .update({
-            stop_params_json: {
-              ...(t.stop_params_json ?? {}),
-              stop: newStop,
-              initial,
-              trail_level: next,
+        if (isTighter) {
+          console.log(`[Trailing Stop] ${t.symbol}: Price reached ${next}x ATR. Moving stop to ${newStop}`);
+          if (activeSettings.sync_trailing_stops) {
+            await updateBrokerStopLoss(t.symbol, newStop, activeSettings, brokerPos.positionId);
+          }
+
+          await supabase
+            .from("trades")
+            .update({
+              stop_params_json: {
+                ...(t.stop_params_json ?? {}),
+                stop: newStop,
+                initial,
+                trail_level: next,
+                atr: atr, // persist ATR so we don't lose it
+              },
+            })
+            .eq("id", t.id);
+            
+          await insertAuditLog(supabase, {
+            actor_type: "SYSTEM",
+            action: "TRAIL_STOP",
+            entity_type: "trade",
+            entity_id: t.id,
+            payload_json: { 
+              symbol: t.symbol, 
+              old_stop: currentStop, 
+              new_stop: newStop, 
+              atr_multiple: next,
+              atr_value: atr
             },
-          })
-          .eq("id", t.id);
+          });
+        }
       }
     }
 
