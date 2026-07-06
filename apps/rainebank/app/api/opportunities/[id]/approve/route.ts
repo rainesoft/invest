@@ -39,91 +39,97 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const stopPrice = Number(opp.stop_plan_json?.stop ?? 0);
   const atrUSD = Math.abs(entryPrice - stopPrice);
 
-  const { data: settings } = await client.from('user_risk_settings').select('*').limit(1).single();
-  const baseEquity = Number(settings?.portfolio_capital ?? process.env.STARTING_EQUITY_USD ?? '100000');
-  const perTradePct = Number(settings?.risk_per_trade_pct ?? 0.01);
-  const [{ data: dayPnl }, { data: weekPnl }, { data: portfolioPnl }] =
-    await Promise.all([
-      client.rpc('day_pnl'),
-      client.rpc('week_pnl'),
-      client.rpc('portfolio_pnl'),
-    ]);
-  const dayRiskUSD = Math.abs(Number(dayPnl) || 0);
-  const weekRiskUSD = Math.abs(Number(weekPnl) || 0);
-  const equityUSD = baseEquity + (Number(portfolioPnl) || 0);
+  const { data: usersToAutoTrade, error: usersErr } = await client
+    .from('user_risk_settings')
+    .select('*')
+    .eq('auto_trade_enabled', true);
 
-  const allowedQty = sizeWithRiskCaps(
-    equityUSD,
-    atrUSD,
-    dayRiskUSD,
-    weekRiskUSD,
-    perTradePct,
-    0.02,
-    0.05,
-    Number(settings?.max_volume_per_trade ?? 50)
-  );
-
-  const qty: number = body.qty ?? allowedQty;
-  if (qty <= 0) {
-    return NextResponse.json({ ok: false, error: 'invalid qty' }, { status: 400 });
-  }
-  if (qty > allowedQty) {
-    return NextResponse.json(
-      { ok: false, error: 'qty exceeds risk cap', cap: allowedQty },
-      { status: 400 },
-    );
+  if (usersErr || !usersToAutoTrade || usersToAutoTrade.length === 0) {
+    // If no one is opted in, we can't execute anything
+    await client.from('trade_opportunities').update({ status: 'REJECTED', ai_risks: 'No users opted in' }).eq('id', params.id);
+    return NextResponse.json({ ok: false, error: 'No users opted into auto-trading.' }, { status: 400 });
   }
 
-  const { data: trade, error: tradeErr } = await client
-    .from('trades')
-    .insert({
-      opportunity_id: params.id,
-      symbol: opp.symbol,
-      side: opp.side,
-      qty,
-    })
-    .select('id')
-    .single();
-  if (tradeErr) {
-    return NextResponse.json({ ok: false, error: tradeErr.message }, { status: 500 });
-  }
+  let executedCount = 0;
+  const errors: string[] = [];
 
+  for (const settings of usersToAutoTrade) {
+    try {
+      const baseEquity = Number(settings.portfolio_capital ?? process.env.STARTING_EQUITY_USD ?? '100000');
+      const perTradePct = Number(settings.risk_per_trade_pct ?? 0.01);
+      const [{ data: dayPnl }, { data: weekPnl }, { data: portfolioPnl }] =
+        await Promise.all([
+          client.rpc('day_pnl', { p_user_id: settings.user_id }),
+          client.rpc('week_pnl', { p_user_id: settings.user_id }),
+          client.rpc('portfolio_pnl', { p_user_id: settings.user_id }),
+        ]);
+      const dayRiskUSD = Math.abs(Number(dayPnl) || 0);
+      const weekRiskUSD = Math.abs(Number(weekPnl) || 0);
+      const equityUSD = baseEquity + (Number(portfolioPnl) || 0);
 
-  await insertAuditLog(client, {
-    actor_type: 'SYSTEM',
-    action: 'APPROVE_OPPORTUNITY',
-    entity_type: 'opportunity',
-    entity_id: params.id,
-    payload_json: {
-      qty,
-      allowedQty,
-      equityUSD,
-      atrUSD,
-      dayRiskUSD,
-      weekRiskUSD,
-    },
-  });
+      const allowedQty = sizeWithRiskCaps(
+        equityUSD,
+        atrUSD,
+        dayRiskUSD,
+        weekRiskUSD,
+        perTradePct,
+        0.02,
+        0.05,
+        Number(settings.max_volume_per_trade ?? 50)
+      );
 
-  try {
-    const exec = await placeAndTrackOrder({
-      tradeId: trade.id,
-      symbol: opp.symbol,
-      side: opp.side === 'LONG' ? 'buy' : 'sell',
-      qty,
-      type: 'market',
-      takeProfit: opp.take_profit_json?.tp ? Number(opp.take_profit_json.tp) : undefined,
-      stopLoss: stopPrice > 0 ? stopPrice : undefined,
-      supabase: client,
-    });
+      // We ignore manual qty override in multi-tenant mode
+      const qty = allowedQty;
 
-    if (exec.status === 'FAILED') {
-      await client.from('trades').update({ status: 'FAILED' }).eq('id', trade.id);
-      return NextResponse.json({ ok: false, error: exec.errorMsg || 'Broker execution failed.' }, { status: 400 });
+      if (qty > 0) {
+        const { data: trade, error: tradeErr } = await client
+          .from('trades')
+          .insert({
+            opportunity_id: params.id,
+            symbol: opp.symbol,
+            side: opp.side,
+            qty,
+            user_id: settings.user_id
+          })
+          .select('id')
+          .single();
+
+        if (tradeErr) throw new Error(tradeErr.message);
+
+        await insertAuditLog(client, {
+          actor_type: 'SYSTEM',
+          actor_id: settings.user_id,
+          action: 'APPROVE_OPPORTUNITY',
+          entity_type: 'opportunity',
+          entity_id: params.id,
+          payload_json: { qty, allowedQty, equityUSD, atrUSD, dayRiskUSD, weekRiskUSD },
+        });
+
+        const exec = await placeAndTrackOrder({
+          tradeId: trade.id,
+          symbol: opp.symbol,
+          side: opp.side === 'LONG' ? 'buy' : 'sell',
+          qty,
+          type: 'market',
+          takeProfit: opp.take_profit_json?.tp ? Number(opp.take_profit_json.tp) : undefined,
+          stopLoss: stopPrice > 0 ? stopPrice : undefined,
+          supabase: client,
+        });
+
+        if (exec.status === 'FAILED') {
+          await client.from('trades').update({ status: 'FAILED' }).eq('id', trade.id);
+          throw new Error(exec.errorMsg || 'Broker execution failed.');
+        }
+
+        executedCount++;
+        
+        if (idKey) {
+          try { await client.from('idempotency_keys').insert({ key: `${idKey}_${settings.user_id}`, entity_type: 'trade', entity_id: trade.id }); } catch (_) {}
+        }
+      }
+    } catch (err: any) {
+      errors.push(`User ${settings.user_id}: ${err.message}`);
     }
-  } catch (err: any) {
-    // Rollback the trade insertion so it doesn't appear in the vault as a ghost trade
-    await client.from('trades').delete().eq('id', trade.id);
-    return NextResponse.json({ ok: false, error: err.message }, { status: 500 });
   }
 
   await client
@@ -131,13 +137,5 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .update({ status: 'APPROVED' })
     .eq('id', params.id);
 
-  if (idKey) {
-    try {
-      await client
-        .from('idempotency_keys')
-        .insert({ key: idKey, entity_type: 'trade', entity_id: trade.id });
-    } catch (_) {}
-  }
-
-  return NextResponse.json({ ok: true, tradeId: trade.id });
+  return NextResponse.json({ ok: true, executedCount, errors: errors.length > 0 ? errors : undefined });
 }

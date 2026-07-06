@@ -12,29 +12,40 @@ interface DatabaseWebhookPayload {
   old_record: any | null;
 }
 
+// Escape special characters for MarkdownV2 syntax in Telegram
+const escapeMd = (text: string | null | undefined) => {
+  if (!text) return "";
+  return text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, "\\$1");
+};
+
 serve(async (req) => {
   try {
     const payload: DatabaseWebhookPayload = await req.json();
 
-    // We only care about INSERTS into trade_opportunities
-    if (payload.type !== "INSERT" || payload.table !== "trade_opportunities") {
+    // We care about INSERTS into trade_opportunities OR user_trades
+    if (payload.type !== "INSERT" || (payload.table !== "trade_opportunities" && payload.table !== "user_trades")) {
       return new Response("Ignored non-insert or wrong table", { status: 200 });
     }
 
-    const signal = payload.record;
-
-    if (signal.status === "REJECTED") {
-      return new Response("Ignored REJECTED signal", { status: 200 });
-    }
-
+    const record = payload.record;
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    
+    if (!supabaseUrl || !supabaseKey) {
+      return new Response("Missing Supabase credentials", { status: 500 });
+    }
+    const supabase = createClient(supabaseUrl, supabaseKey);
 
-    let subscribedUsers: { token: string, chatId: string }[] = [];
+    // ==========================================
+    // CASE A: NEW TRADE OPPORTUNITY (BROADCAST)
+    // ==========================================
+    if (payload.table === "trade_opportunities") {
+      if (record.status === "REJECTED") {
+        return new Response("Ignored REJECTED signal", { status: 200 });
+      }
 
-    if (supabaseUrl && supabaseKey) {
-      const supabase = createClient(supabaseUrl, supabaseKey);
-      
+      let subscribedUsers: { token: string, chatId: string }[] = [];
+
       // Fetch all users who have configured Telegram credentials
       const { data: settings, error } = await supabase
         .from('user_risk_settings')
@@ -52,37 +63,28 @@ serve(async (req) => {
           }
         });
       }
-    }
 
-    // Fallback for single-tenant backward compatibility if database has no active users
-    if (subscribedUsers.length === 0 && FALLBACK_TELEGRAM_BOT_TOKEN && FALLBACK_TELEGRAM_CHAT_ID) {
-      subscribedUsers.push({
-        token: FALLBACK_TELEGRAM_BOT_TOKEN,
-        chatId: FALLBACK_TELEGRAM_CHAT_ID
-      });
-    }
+      // Fallback for single-tenant backward compatibility
+      if (subscribedUsers.length === 0 && FALLBACK_TELEGRAM_BOT_TOKEN && FALLBACK_TELEGRAM_CHAT_ID) {
+        subscribedUsers.push({
+          token: FALLBACK_TELEGRAM_BOT_TOKEN,
+          chatId: FALLBACK_TELEGRAM_CHAT_ID
+        });
+      }
 
-    if (subscribedUsers.length === 0) {
-      console.log("No users with active Telegram credentials found. Aborting broadcast.");
-      return new Response("No active telegram subscriptions", { status: 200 });
-    }
+      if (subscribedUsers.length === 0) {
+        console.log("No active telegram subscriptions found.");
+        return new Response("No active telegram subscriptions", { status: 200 });
+      }
 
-    // Escape special characters for MarkdownV2 syntax in Telegram
-    // Special characters: _ * [ ] ( ) ~ ` > # + - = | { } . !
-    const escapeMd = (text: string | null | undefined) => {
-      if (!text) return "";
-      return text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, "\\$1");
-    };
-
-    const symbol = escapeMd(signal.symbol);
-    const side = escapeMd(signal.side);
-    const entryPrice = signal.entry_plan_json?.price ? escapeMd(String(signal.entry_plan_json.price)) : "Market Execution";
-    const status = escapeMd(signal.status);
-    const aiSummary = escapeMd(signal.ai_summary || "Automated mathematical setup evaluated by Alpha Engine.");
-    const riskSummary = escapeMd(signal.risk_summary || "Standard Model Risk Constraints Applied.");
-    
-    // Formatting the message
-    const message = `
+      const symbol = escapeMd(record.symbol);
+      const side = escapeMd(record.side);
+      const entryPrice = record.entry_plan_json?.price ? escapeMd(String(record.entry_plan_json.price)) : "Market Execution";
+      const status = escapeMd(record.status);
+      const aiSummary = escapeMd(record.ai_summary || "Automated mathematical setup evaluated by Alpha Engine.");
+      const riskSummary = escapeMd(record.risk_summary || "Standard Model Risk Constraints Applied.");
+      
+      const message = `
 🚨 *RAINEBANK ALPHA SIGNAL* 🚨
 
 *Symbol:* ${symbol}
@@ -96,18 +98,85 @@ serve(async (req) => {
 _${aiSummary}_
 
 [View Ledger](https://yourdomain.com/dashboard)
-    `.trim();
+      `.trim();
 
-    // Fan-out broadcasting to all subscribed users concurrently
-    const broadcastPromises = subscribedUsers.map(async (user) => {
-      const telegramUrl = `https://api.telegram.org/bot${user.token}/sendMessage`;
+      // Fan-out broadcasting
+      const broadcastPromises = subscribedUsers.map(async (user) => {
+        const telegramUrl = `https://api.telegram.org/bot${user.token}/sendMessage`;
+        const response = await fetch(telegramUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: user.chatId,
+            text: message,
+            parse_mode: "MarkdownV2",
+            disable_web_page_preview: true,
+          }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.text();
+          throw new Error(`ChatID ${user.chatId} failed: ${errorData}`);
+        }
+        return user.chatId;
+      });
+
+      const results = await Promise.allSettled(broadcastPromises);
+      const successes = results.filter(r => r.status === "fulfilled").length;
+      const failures = results.filter(r => r.status === "rejected").length;
+      console.log(`Broadcast complete. Success: ${successes}, Failures: ${failures}`);
+
+      return new Response(JSON.stringify({ success: true, successes, failures }), {
+        headers: { "Content-Type": "application/json" },
+        status: 200,
+      });
+    }
+
+    // ==========================================
+    // CASE B: USER TRADE (DIRECT MESSAGE)
+    // ==========================================
+    if (payload.table === "user_trades") {
+      if (record.status !== "REJECTED") {
+        return new Response("Only processing REJECTED user trades", { status: 200 });
+      }
+
+      // Fetch this specific user's telegram credentials
+      const { data: userSettings } = await supabase
+        .from('user_risk_settings')
+        .select('telegram_bot_token, telegram_chat_id')
+        .eq('user_id', record.user_id)
+        .single();
+
+      const botToken = userSettings?.telegram_bot_token?.trim() || FALLBACK_TELEGRAM_BOT_TOKEN;
+      const chatId = userSettings?.telegram_chat_id?.trim() || FALLBACK_TELEGRAM_CHAT_ID;
+
+      if (!botToken || !chatId) {
+        console.log("User has no telegram credentials configured.");
+        return new Response("User has no telegram credentials", { status: 200 });
+      }
+
+      const symbol = escapeMd(record.symbol);
+      const side = escapeMd(record.side);
+      const reason = escapeMd(record.error_message || "Trade failed risk/tier checks.");
+
+      const message = `
+❌ *TRADE EXECUTION REJECTED* ❌
+
+*Symbol:* ${symbol}
+*Side:* ${side}
+
+*Reason:*
+_${reason}_
+
+[Manage Account](https://yourdomain.com/dashboard)
+      `.trim();
+
+      const telegramUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
       const response = await fetch(telegramUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          chat_id: user.chatId,
+          chat_id: chatId,
           text: message,
           parse_mode: "MarkdownV2",
           disable_web_page_preview: true,
@@ -116,26 +185,19 @@ _${aiSummary}_
 
       if (!response.ok) {
         const errorData = await response.text();
-        throw new Error(`ChatID ${user.chatId} failed: ${errorData}`);
+        console.error(`Direct message failed: ${errorData}`);
+        return new Response(`Direct message failed`, { status: 500 });
       }
-      return user.chatId;
-    });
 
-    const results = await Promise.allSettled(broadcastPromises);
-    
-    const successes = results.filter(r => r.status === "fulfilled").length;
-    const failures = results.filter(r => r.status === "rejected").length;
+      console.log(`Successfully sent rejection notice to user ${record.user_id}`);
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { "Content-Type": "application/json" },
+        status: 200,
+      });
+    }
 
-    console.log(`Broadcast complete. Success: ${successes}, Failures: ${failures}`);
+    return new Response("Unhandled payload", { status: 200 });
 
-    results.filter(r => r.status === "rejected").forEach((r: any) => {
-      console.error("Telegram Fan-out Error:", r.reason);
-    });
-
-    return new Response(JSON.stringify({ success: true, successes, failures }), {
-      headers: { "Content-Type": "application/json" },
-      status: 200,
-    });
   } catch (error) {
     console.error("Webhook processing error:", error);
     return new Response(`Error: ${error.message}`, { status: 500 });

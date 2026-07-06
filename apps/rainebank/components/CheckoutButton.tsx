@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { usePaystackPayment } from 'react-paystack';
 import { useRouter } from 'next/navigation';
 import { CreditCard, Loader2 } from 'lucide-react';
@@ -8,25 +8,47 @@ import { CreditCard, Loader2 } from 'lucide-react';
 interface CheckoutButtonProps {
   email: string;
   userId: string;
-  planCode: string;
-  amount: number; // in lowest denomination, e.g., kobo/pesewas
+  amountUSD: number; // The base software fee in USD
 }
 
 export default function CheckoutButton({
   email,
   userId,
-  planCode,
-  amount,
+  amountUSD,
 }: CheckoutButtonProps) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [exchangeRate, setExchangeRate] = useState<number | null>(null);
+
+  // Fetch the live USD -> GHS exchange rate on mount
+  useEffect(() => {
+    async function fetchRate() {
+      try {
+        const res = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
+        const data = await res.json();
+        if (data && data.rates && data.rates.GHS) {
+          setExchangeRate(data.rates.GHS);
+        } else {
+          setExchangeRate(15.0); // Fallback rate if API fails
+        }
+      } catch (err) {
+        console.error("Failed to fetch exchange rate", err);
+        setExchangeRate(15.0); // Fallback rate
+      }
+    }
+    fetchRate();
+  }, []);
+
+  // Calculate dynamic amount in pesewas (lowest denomination)
+  const dynamicAmountPesewas = exchangeRate ? Math.round(amountUSD * exchangeRate * 100) : 0;
 
   const config = {
     reference: new Date().getTime().toString(),
     email,
-    amount,
+    amount: dynamicAmountPesewas, 
+    currency: 'GHS',
     publicKey: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY || '',
-    plan: planCode,
+    channels: ['card', 'bank', 'ussd', 'qr', 'mobile_money', 'bank_transfer'],
     metadata: {
       custom_fields: [
         {
@@ -34,15 +56,31 @@ export default function CheckoutButton({
           variable_name: 'user_id',
           value: userId,
         },
+        {
+          display_name: 'Billing Amount USD',
+          variable_name: 'billing_amount_usd',
+          value: amountUSD,
+        }
       ],
     },
+  };
+
+  const handleCheckout = () => {
+    if (!exchangeRate) return; // Prevent checkout until rate loads
+    setLoading(true);
+    console.log("PAYSTACK CONFIG DEBUG:", config);
+    if (!config.publicKey) {
+      alert("Missing Paystack Public Key! Did you restart the server?");
+      setLoading(false);
+      return;
+    }
+    initializePayment({ onSuccess, onClose } as any);
   };
 
   const initializePayment = usePaystackPayment(config);
 
   const onSuccess = (reference: any) => {
     setLoading(true);
-    // In a real app, you might poll your backend or rely on webhooks
     // We refresh the router to aggressively invalidate cache and re-fetch the subscription tier
     setTimeout(() => {
       router.refresh();
@@ -52,11 +90,6 @@ export default function CheckoutButton({
 
   const onClose = () => {
     setLoading(false);
-  };
-
-  const handleCheckout = () => {
-    setLoading(true);
-    initializePayment({ onSuccess, onClose } as any);
   };
 
   return (

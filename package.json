@@ -19,8 +19,11 @@
     "dev:backend": "supabase start && supabase functions serve --no-verify-jwt --env-file .env",
     "dev:all": "docker-compose down && supabase start && (supabase functions serve --no-verify-jwt --env-file .env & pnpm --filter @raine/bank dev)",
     "start:docker": "supabase start && (supabase functions serve --no-verify-jwt --env-file .env & docker compose up --build)",
-    "deploy:prod": "supabase db push && supabase functions deploy && supabase postgres-config update --config app.settings.edge_function_url=https://ktezlusdkqlfdwqrldtn.supabase.co",
+    "deploy:prod": "supabase db push && supabase functions deploy",
     "lint": "pnpm -r lint",
     "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "supabase": "^2.109.0"
   }
 }

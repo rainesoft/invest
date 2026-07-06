@@ -47,11 +47,14 @@ export default function SettingsPage() {
   
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [subscription, setSubscription] = useState<any>(null);
   
   const [settings, setSettings] = useState({
     portfolio_capital: 10000,
     risk_per_trade_pct: 0.01,
     max_portfolio_heat_pct: 0.10,
+    max_drawdown_pct: 0.05,
+    high_water_mark_equity: 0,
     max_spread_points: 50,
     max_volume_per_trade: 50,
     active_broker: 'ALPACA',
@@ -76,6 +79,8 @@ export default function SettingsPage() {
             portfolio_capital: data.settings.portfolio_capital || 10000,
             risk_per_trade_pct: data.settings.risk_per_trade_pct || 0.01,
             max_portfolio_heat_pct: data.settings.max_portfolio_heat_pct || 0.10,
+            max_drawdown_pct: data.settings.max_drawdown_pct || 0.05,
+            high_water_mark_equity: data.settings.high_water_mark_equity || 0,
             max_spread_points: data.settings.max_spread_points || 50,
             max_volume_per_trade: data.settings.max_volume_per_trade || 50,
             active_broker: data.settings.active_broker || 'ALPACA',
@@ -94,6 +99,13 @@ export default function SettingsPage() {
         setLoading(false);
       })
       .catch(() => setLoading(false));
+
+    fetch('/api/billing')
+      .then(res => res.json())
+      .then(data => {
+        if (data.subscription) setSubscription(data.subscription);
+      })
+      .catch(console.error);
   }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -113,6 +125,25 @@ export default function SettingsPage() {
         : [...current, tier];
       return { ...prev, auto_trade_tiers: updated };
     });
+  };
+
+  const toggleCancellation = async () => {
+    if (!subscription) return;
+    const newCancelState = !subscription.cancel_at_period_end;
+    
+    setSubscription({ ...subscription, cancel_at_period_end: newCancelState });
+    toast.success(newCancelState ? 'Subscription will cancel at period end' : 'Subscription resumed');
+
+    try {
+      await fetch('/api/billing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cancel: newCancelState })
+      });
+    } catch (e) {
+      toast.error('Failed to update subscription');
+      setSubscription({ ...subscription, cancel_at_period_end: !newCancelState });
+    }
   };
 
   const handleSave = async () => {
@@ -161,6 +192,46 @@ export default function SettingsPage() {
         </button>
       </div>
 
+      {subscription && (
+        <div style={{ background: 'var(--input-bg)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', marginBottom: '32px' }}>
+          <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '18px', margin: '0 0 16px 0' }}>
+            <Activity size={20} color="var(--accent)" />
+            Billing & Subscription
+          </h2>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+            <div>
+              <p style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: 600 }}>{subscription.plan_tier === 'pro' ? `Autopilot Pro ($${subscription.billing_amount_usd}/mo)` : 'Free Tier'}</p>
+              <p style={{ margin: 0, fontSize: '14px', color: 'var(--text-secondary)' }}>
+                {subscription.status === 'active' ? (
+                  subscription.cancel_at_period_end 
+                    ? `Cancels on ${new Date(subscription.next_billing_date).toLocaleDateString()}`
+                    : `Next billing date: ${new Date(subscription.next_billing_date).toLocaleDateString()}`
+                ) : (
+                  `Status: ${subscription.status}`
+                )}
+              </p>
+            </div>
+            {subscription.status === 'active' && (
+              <button 
+                onClick={toggleCancellation}
+                style={{
+                  padding: '10px 20px',
+                  borderRadius: '8px',
+                  background: subscription.cancel_at_period_end ? 'var(--accent)' : 'transparent',
+                  color: subscription.cancel_at_period_end ? '#fff' : '#ef4444',
+                  border: `1px solid ${subscription.cancel_at_period_end ? 'var(--accent)' : '#ef4444'}`,
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  transition: 'all 0.2s'
+                }}
+              >
+                {subscription.cancel_at_period_end ? 'Resume Subscription' : 'Cancel Subscription'}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '32px' }}>
         
         {/* Risk Panel */}
@@ -191,6 +262,25 @@ export default function SettingsPage() {
                 <HintTooltip text="Your 'total exposure limit'. If set to 10%, across all open trades combined you will never risk more than 10% of your account at the same time. If hit, the system prevents opening new trades until some close." />
               </label>
               <input type="number" step="0.01" name="max_portfolio_heat_pct" value={settings.max_portfolio_heat_pct} onChange={handleChange} style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
+            </div>
+            <div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                Max Drawdown Protection (%) - {Number(settings.max_drawdown_pct) * 100}%
+                <HintTooltip text="The absolute maximum drop your account can take from its highest peak. If the AI loses this much, the Drawdown Breaker physically disconnects the broker to protect your capital. Perfect for passing strict Prop Firm rules." />
+              </label>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                <input type="number" step="0.01" name="max_drawdown_pct" value={settings.max_drawdown_pct} onChange={handleChange} style={{ flex: 1, padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
+                <button 
+                  onClick={() => {
+                    if (window.confirm("Resetting the Drawdown Breaker will erase your High-Water Mark and immediately resume trading. Are you sure?")) {
+                      setSettings(prev => ({ ...prev, high_water_mark_equity: 0 }));
+                      toast.success("Breaker Reset! Remember to click Save Settings.");
+                    }
+                  }}
+                  style={{ padding: '12px 16px', background: 'var(--panel-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '14px', fontWeight: 600 }}>
+                  Reset Breaker
+                </button>
+              </div>
             </div>
             <div>
               <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>

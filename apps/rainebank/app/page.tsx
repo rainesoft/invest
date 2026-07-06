@@ -2,6 +2,7 @@ import Link from 'next/link';
 import Logo from '@components/Logo';
 import { createClient } from '@supabase/supabase-js';
 import LandingNavbar from '@components/LandingNavbar';
+import PricingSlider from '@components/PricingSlider';
 import { supabaseServer } from '@lib/supabase-server';
 
 export default async function LandingPage() {
@@ -123,10 +124,10 @@ export default async function LandingPage() {
 
         </section>
 
-        {/* Simple Explanation Bento Box */}
-        <section id="how-it-works" style={{ maxWidth: '1200px', width: '100%', marginBottom: '120px' }}>
+        {/* Features / How it Works Box */}
+        <section id="features" style={{ maxWidth: '1200px', width: '100%', marginBottom: '120px' }}>
           <div style={{ textAlign: 'center', marginBottom: '64px' }}>
-            <h2 style={{ fontSize: '40px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-1px' }}>How it actually works</h2>
+            <h2 style={{ fontSize: '40px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-1px' }}>Institutional Features</h2>
             <p style={{ color: '#9ca3af', fontSize: '18px', maxWidth: '600px', margin: '0 auto' }}>
               Trading doesn't have to be confusing. Here is exactly what our AI does for you behind the scenes.
             </p>
@@ -176,7 +177,7 @@ export default async function LandingPage() {
               display: 'flex', flexDirection: 'column'
             }}>
               <div style={{ fontSize: '20px', fontWeight: 700, color: '#fff', marginBottom: '16px' }}>Spectator Mode</div>
-              <div style={{ fontSize: '48px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-2px' }}>$0<span style={{ fontSize: '18px', color: '#9ca3af', fontWeight: 500, letterSpacing: '0' }}>/mo</span></div>
+              <div style={{ fontSize: '48px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-2px' }}>GH₵ 0<span style={{ fontSize: '18px', color: '#9ca3af', fontWeight: 500, letterSpacing: '0' }}>/mo</span></div>
               <p style={{ color: '#9ca3af', fontSize: '15px', marginBottom: '32px' }}>Perfect if you just want to watch the AI work.</p>
 
               <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 40px 0', display: 'flex', flexDirection: 'column', gap: '16px', color: '#e5e7eb', flex: 1 }}>
@@ -200,47 +201,8 @@ export default async function LandingPage() {
               }}>Get Started for Free</Link>
             </div>
 
-            {/* Alpha Tier */}
-            <div style={{
-              background: 'linear-gradient(180deg, rgba(37,99,235,0.1) 0%, rgba(10,10,10,1) 100%)',
-              border: '1px solid rgba(56, 189, 248, 0.4)', borderRadius: '24px', padding: '40px',
-              display: 'flex', flexDirection: 'column', position: 'relative',
-              boxShadow: '0 24px 64px rgba(37, 99, 235, 0.15)'
-            }}>
-              <div style={{
-                position: 'absolute', top: '-16px', right: '40px', background: '#38bdf8', color: '#000',
-                padding: '6px 16px', borderRadius: '100px', fontSize: '13px', fontWeight: 700
-              }}>
-                POPULAR
-              </div>
-              <div style={{ fontSize: '20px', fontWeight: 700, color: '#38bdf8', marginBottom: '16px' }}>Autopilot Trader</div>
-              <div style={{ fontSize: '48px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-2px' }}>$99<span style={{ fontSize: '18px', color: '#9ca3af', fontWeight: 500, letterSpacing: '0' }}>/mo</span></div>
-              <p style={{ color: '#9ca3af', fontSize: '15px', marginBottom: '32px' }}>The AI hooks directly into your brokerage account.</p>
-
-              <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 40px 0', display: 'flex', flexDirection: 'column', gap: '16px', color: '#e5e7eb', flex: 1 }}>
-                <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2"><path d="M20 6L9 17l-5-5" /></svg>
-                  Get trades in real-time
-                </li>
-                <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2"><path d="M20 6L9 17l-5-5" /></svg>
-                  1-Click Execution directly to your broker
-                </li>
-                <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2"><path d="M20 6L9 17l-5-5" /></svg>
-                  AI Risk and Money Management
-                </li>
-                <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2"><path d="M20 6L9 17l-5-5" /></svg>
-                  Detailed reasoning for every trade
-                </li>
-              </ul>
-
-              <Link href={isLoggedIn ? "/dashboard" : "/login"} style={{
-                background: '#fff', color: '#000', padding: '16px', borderRadius: '100px',
-                textDecoration: 'none', fontSize: '15px', fontWeight: 600, textAlign: 'center'
-              }}>{isLoggedIn ? "Start your Autopilot" : "Get Started"}</Link>
-            </div>
+            {/* Alpha Tier (Dynamic Slider) */}
+            <PricingSlider isLoggedIn={isLoggedIn} />
           </div>
         </section>
 

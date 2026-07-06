@@ -108,6 +108,7 @@ export default function Page() {
   useEffect(() => {
     const load = async () => {
       setLoading(true);
+
       const from = (page - 1) * pageSize;
       const to = from + pageSize - 1;
 
@@ -133,42 +134,7 @@ export default function Page() {
     load();
   }, [client, page, showWarnings]);
 
-  const approve = async (id: string) => {
-    setProcessing(id);
-    try {
-      const res = await fetch(`/api/opportunities/${id}/approve`, { method: 'POST' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.ok === false) {
-        toast.error(data.error || 'Failed to approve execution. Check your broker API keys.');
-      } else {
-        toast.success('Execution approved');
-        setOpps((prev) => prev.filter((o) => o.id !== id));
-      }
-    } catch (e: any) {
-      toast.error(e.message || 'A network error occurred.');
-    }
-    setProcessing(null);
-  };
 
-  const reject = async (id: string) => {
-    setProcessing(id);
-    await client
-      .from('trade_opportunities')
-      .update({ status: 'REJECTED' })
-      .eq('id', id);
-    setOpps((prev) => prev.filter((o) => o.id !== id));
-    setProcessing(null);
-  };
-
-  const archive = async (id: string) => {
-    setProcessing(id);
-    await client
-      .from('trade_opportunities')
-      .update({ is_archived: true })
-      .eq('id', id);
-    setOpps((prev) => prev.filter((o) => o.id !== id));
-    setProcessing(null);
-  };
 
   if (loading) {
     return <div style={{ color: '#9ca3af', fontSize: '15px' }}>Loading signals...</div>;
@@ -312,60 +278,15 @@ export default function Page() {
               </div>
 
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '24px' }}>
-                  <button 
-                  onClick={() => archive(signal.id)}
-                  style={{
-                    padding: '10px 24px',
-                    background: 'transparent',
-                    border: '1px solid rgba(156,163,175,0.3)',
-                    color: '#9ca3af',
-                    borderRadius: '8px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                  }}
-                  onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(156,163,175,0.1)'; e.currentTarget.style.borderColor = '#9ca3af'; }}
-                  onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(156,163,175,0.3)'; }}
-                >
-                  Archive
-                </button>
-                {!isWarning && (
-                  <button 
-                    onClick={() => reject(signal.id)}
-                    style={{
-                      padding: '10px 24px',
-                      background: 'transparent',
-                      border: '1px solid rgba(248,113,113,0.3)',
-                      color: '#f87171',
-                      borderRadius: '8px',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      transition: 'all 0.2s',
-                    }}
-                    onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(248,113,113,0.1)'; e.currentTarget.style.borderColor = '#f87171'; }}
-                    onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(248,113,113,0.3)'; }}
-                  >
-                    Reject Trade
-                  </button>
+                {signal.status === 'PENDING_APPROVAL' ? (
+                  <div style={{ color: '#f59e0b', fontSize: '13px', fontStyle: 'italic', fontWeight: 600 }}>
+                    Awaiting Admin Approval
+                  </div>
+                ) : (
+                  <div style={{ color: signal.status === 'APPROVED' ? '#10b981' : '#9ca3af', fontSize: '13px', fontWeight: 600 }}>
+                    Status: {signal.status}
+                  </div>
                 )}
-                <button 
-                  onClick={() => approve(signal.id)}
-                  style={{
-                    padding: '10px 24px',
-                    background: isWarning ? '#f87171' : '#38bdf8',
-                    border: 'none',
-                    color: '#000',
-                    borderRadius: '8px',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    boxShadow: isWarning ? '0 4px 14px 0 rgba(248,113,113,0.39)' : '0 4px 14px 0 rgba(56,189,248,0.39)',
-                    transition: 'all 0.2s',
-                  }}
-                  onMouseOver={(e) => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = isWarning ? '0 6px 20px rgba(248,113,113,0.5)' : '0 6px 20px rgba(56,189,248,0.5)'; }}
-                  onMouseOut={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = isWarning ? '0 4px 14px 0 rgba(248,113,113,0.39)' : '0 4px 14px 0 rgba(56,189,248,0.39)'; }}
-                >
-                  {isWarning ? 'Override & Approve' : 'Approve Execution'}
-                </button>
               </div>
             </div>
           );
