@@ -232,7 +232,7 @@ export default function VaultDashboard() {
               email={user.email}
               userId={user.id}
               planCode={process.env.NEXT_PUBLIC_PAYSTACK_ALPHA_PLAN_CODE || ""} 
-              amountUSD={99}
+              amountUSD={19}
             />
           </div>
         </div>

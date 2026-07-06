@@ -8,11 +8,11 @@ interface PricingSliderProps {
 }
 
 const tiers = [
-  { minCapital: 500, label: "$500", feeUSD: 49, projMin: 25, projMax: 50 },
-  { minCapital: 1000, label: "$1,000", feeUSD: 99, projMin: 50, projMax: 100 },
-  { minCapital: 2500, label: "$2,500", feeUSD: 199, projMin: 125, projMax: 250 },
-  { minCapital: 5000, label: "$5,000", feeUSD: 399, projMin: 250, projMax: 500 },
-  { minCapital: 10000, label: "$10,000+", feeUSD: 799, projMin: 500, projMax: 1000 },
+  { minCapital: 500, label: "$500", feeUSD: 9, projMin: 25, projMax: 50 },
+  { minCapital: 1000, label: "$1,000", feeUSD: 19, projMin: 50, projMax: 100 },
+  { minCapital: 2500, label: "$2,500", feeUSD: 39, projMin: 125, projMax: 250 },
+  { minCapital: 5000, label: "$5,000", feeUSD: 79, projMin: 250, projMax: 500 },
+  { minCapital: 10000, label: "$10,000+", feeUSD: 149, projMin: 500, projMax: 1000 },
 ];
 
 export default function PricingSlider({ isLoggedIn }: PricingSliderProps) {
