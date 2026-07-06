@@ -206,7 +206,7 @@ serve(async (req) => {
   const modelVersion = searchParams.get("model_version") ?? undefined;
   const newsContext = searchParams.get("news") ?? undefined;
   const symbolsParam =
-    searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "XAUUSD,XAGUSD,BTCUSD,UKOIL,US30,NAS100,EURUSD,USDJPY";
+    searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "XAUUSD,XAGUSD,BTCUSD,UKOIL";
   const symbols = symbolsParam.split(",").map((s) => s.trim()).filter(Boolean);
 
   const url = Deno.env.get("SUPABASE_URL");
