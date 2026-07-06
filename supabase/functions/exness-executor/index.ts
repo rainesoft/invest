@@ -93,6 +93,61 @@ serve(async (req) => {
          continue;
       }
 
+      // 2.5 Pre-Trade Tier Enforcer Check
+      let tierExceeded = false;
+      let tierRejectReason = "";
+      
+      if (user.is_live_execution_enabled && user.meta_api_token && user.meta_api_account_id) {
+         const { data: subData } = await supabase
+           .from("user_subscriptions")
+           .select("billing_amount_usd")
+           .eq("user_id", user.user_id)
+           .eq("status", "active")
+           .single();
+
+         if (subData) {
+            const fee = subData.billing_amount_usd || 0;
+            let maxEquity = Infinity;
+            if (fee <= 9) maxEquity = 999;
+            else if (fee <= 19) maxEquity = 2499;
+            else if (fee <= 39) maxEquity = 4999;
+            else if (fee <= 79) maxEquity = 9999;
+
+            try {
+               const accountUrl = `${baseUrl}/users/current/accounts/${user.meta_api_account_id}/accountInformation`;
+               const accRes = await fetch(accountUrl, {
+                  headers: { "auth-token": user.meta_api_token }
+               });
+               if (accRes.ok) {
+                  const accData = await accRes.json();
+                  const equity = accData.equity || 0;
+                  if (equity > maxEquity) {
+                     tierExceeded = true;
+                     tierRejectReason = `Account equity ($${equity.toFixed(2)}) exceeds subscription tier limit ($${maxEquity}). Please upgrade your Autopilot plan.`;
+                  }
+               }
+            } catch (e) {
+               console.error(`[Router] Failed to fetch account info for ${user.user_id}: ${e}`);
+            }
+         }
+      }
+
+      if (tierExceeded) {
+         console.log(`[Router] User ${user.user_id} rejected: ${tierRejectReason}`);
+         await supabase.from("user_trades").insert({
+           user_id: user.user_id,
+           opportunity_id: signal.id,
+           symbol: signal.symbol,
+           side: signal.side,
+           volume: volume,
+           risk_amount: userRiskAmount,
+           status: "REJECTED",
+           error_message: tierRejectReason
+         });
+         // Notify user via Telegram (handled downstream by insert trigger on user_trades)
+         continue;
+      }
+
       // 3. Spread Check
       let spreadExceeded = false;
       let spreadRejectReason = "";

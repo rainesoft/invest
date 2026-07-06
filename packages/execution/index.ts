@@ -67,6 +67,13 @@ async function alpacaFetch(path: string, opts: RequestInit, key: string, secret:
   return res.json();
 }
 
+export async function getAccountInformation(settings: any) {
+  if (settings.active_broker !== 'METAAPI') {
+    return null;
+  }
+  return metaApiFetch('/accountInformation', { method: 'GET' }, settings.meta_api_token, settings.meta_api_account_id);
+}
+
 export async function placePaperOrder(
   order: OrderRequest,
   supabase: SupabaseClient,
