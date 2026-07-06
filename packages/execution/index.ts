@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
-import { insertAuditLog } from "../core/audit";
+import { insertAuditLog } from "../core/audit.ts";
 
 function getEnv(name: string): string | undefined {
   const _Deno = (globalThis as any).Deno;
