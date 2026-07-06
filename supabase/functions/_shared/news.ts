@@ -28,8 +28,8 @@ export async function fetchMacroEvents(symbol: string): Promise<string> {
     if (symbol.includes("CAD")) targetCurrencies.push("CAD");
     if (symbol.includes("CHF")) targetCurrencies.push("CHF");
     if (symbol.includes("NZD")) targetCurrencies.push("NZD");
-    if (symbol.includes("XAU") || symbol.includes("BTC") || symbol.includes("ETH")) {
-      // For commodities and crypto priced in USD, we care heavily about USD macro
+    if (symbol.includes("XAU") || symbol.includes("XAG") || symbol.includes("BTC") || symbol.includes("ETH") || symbol.includes("OIL") || symbol.includes("US30") || symbol.includes("NAS") || symbol.includes("SPX")) {
+      // For commodities, crypto, and indices priced in USD, we care heavily about USD macro
       if (!targetCurrencies.includes("USD")) targetCurrencies.push("USD");
     }
 
