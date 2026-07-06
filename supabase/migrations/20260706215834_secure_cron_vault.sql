@@ -1,3 +1,14 @@
+-- Enable the Supabase Vault extension if it isn't already enabled
+CREATE EXTENSION IF NOT EXISTS "supabase_vault" WITH SCHEMA "vault";
+
+-- Unschedule all existing jobs first to prevent duplicates
+SELECT cron.unschedule('auto_expire_signals');
+SELECT cron.unschedule('monitor_open_trades');
+SELECT cron.unschedule('research_run_1h');
+SELECT cron.unschedule('research_run_4h');
+SELECT cron.unschedule('research_run_1d');
+SELECT cron.unschedule('daily_drip_campaign');
+
 -- Schedule Auto Expire Signals RPC (Runs every 15 minutes)
 SELECT cron.schedule('auto_expire_signals', '*/15 * * * *', $$ select rpc_expire_stale_opportunities(); $$);
 
