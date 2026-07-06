@@ -109,9 +109,8 @@ You MUST respond strictly with a raw JSON object matching the exact schema below
 1. DYNAMIC STRATEGY SELECTION: Do not default to pullbacks. First, identify the market structure. If the asset is trending heavily (Price > 50 & 200 EMA), prioritize MOMENTUM_CONTINUATION setups using minor retracements. If the asset is trapped between major support and resistance, prioritize MEAN_REVERSION setups targeting the range boundaries.
 2. THE 'EMPTY AIR' CHECK: Before suggesting a direction, evaluate the distance to the next major liquidity zone. If the current price is floating in 'empty air' midway between support and resistance, you MUST normally reject the setup. EXCEPTION: If the asset is in a powerful trend (e.g. adx_14 > 25), you are permitted to take Momentum Continuation trades at market price even in empty air.
 3. STOP LOSS & VOLATILITY (ATR): The snapshot provides \`safe_long_stop_loss\`, \`safe_short_stop_loss\`, and \`atr_14\`. 
-   - Your \`suggested_stop_loss\` MUST exactly match the price point at which your setup is technically invalidated.
-   - VOLATILITY CHECK: For highly volatile assets (e.g., Gold, Silver, Crypto), if the structural swing low/high stop loss exceeds a 3% distance from the entry, you MUST override it and calculate a tighter Volatility Stop at \`Entry - (1.5 * atr_14)\` (for Longs) or \`Entry + (1.5 * atr_14)\` (for Shorts).
-   - MAX STOP LOSS LIMIT: Your calculated stop loss MUST NEVER exceed a 4.5% distance from the suggested entry price. If the ATR or structural level forces a stop loss wider than 4.5% away, the setup is mathematically untradeable. REJECT it by setting recommended_direction to NONE.
+   - MANDATORY ATR OVERRIDE: First, calculate the structural stop loss (the price where the setup is invalidated). Then, calculate the ATR-based volatility stop: \`Entry - (1.5 * atr_14)\` for Longs or \`Entry + (1.5 * atr_14)\` for Shorts. Your \`suggested_stop_loss\` MUST be the TIGHTER of these two values (i.e., the one closest to entry). If you are forced to use the ATR volatility stop instead of the structural stop, you MUST downgrade your confidence_score by 10 points (e.g., A-Tier 80 becomes B-Tier 70) to reflect the reduced structural protection.
+   - MAX STOP LOSS LIMIT: Your calculated stop loss MUST NEVER exceed a distance of \`3.0 * atr_14\` from the suggested entry price. If the tighter stop still exceeds 3x ATR, the setup is mathematically untradeable. REJECT it by setting recommended_direction to NONE.
    - If the structural stop required is greater than 4x the ATR, the setup is mathematically untradeable. REJECT it by setting recommended_direction to NONE.
 4. FUNDAMENTAL REALITY CHECK: You MUST heavily weigh the provided \`fundamental_context\`. If significant macro news opposes the technical setup, REJECT the setup immediately. 
    - [CRITICAL MACRO DIRECTIVE]: If the technical setup is strong (B-Tier or A-Tier) and aligns perfectly with a High-Impact fundamental catalyst in the \`fundamental_context\`, you MUST upgrade your confidence to S-Tier (90+).
@@ -207,7 +206,7 @@ serve(async (req) => {
   const modelVersion = searchParams.get("model_version") ?? undefined;
   const newsContext = searchParams.get("news") ?? undefined;
   const symbolsParam =
-    searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "AAPL";
+    searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "XAUUSD,XAGUSD,BTCUSD,UKOIL,US30,NAS100,EURUSD,USDJPY";
   const symbols = symbolsParam.split(",").map((s) => s.trim()).filter(Boolean);
 
   const url = Deno.env.get("SUPABASE_URL");
@@ -349,6 +348,47 @@ serve(async (req) => {
               fundamental_context
             };
 
+            // PRE-EVALUATION ASSET ISOLATION (with candle-duration caching)
+            // Check if this symbol was already isolated on this cron cycle's candle
+            const tfMinutes: Record<string, number> = { '1H': 60, '4H': 240, '1D': 1440 };
+            const candleDurationMs = (tfMinutes[timeframe.toUpperCase()] || 240) * 60 * 1000;
+            const { data: recentIsolation } = await supabase
+              .from('audit_logs')
+              .select('created_at')
+              .eq('action', 'REJECTED_BY_RISK_PRE_AI')
+              .eq('entity_type', 'research')
+              .filter('payload_json->>symbol', 'eq', symbol)
+              .gte('created_at', new Date(Date.now() - candleDurationMs).toISOString())
+              .limit(1);
+
+            if (recentIsolation && recentIsolation.length > 0) {
+              console.log(`[Pre-AI Guard] Cached skip for ${symbol}: Already isolated within this ${timeframe} candle.`);
+              sendEvent({ type: 'progress', message: `[Pre-AI Guard] Cached skip for ${symbol}: Isolated this candle.` });
+              rejections.push({ symbol, reason: 'Cached isolation skip (already checked this candle)', layer: 'Pre-AI Guard' });
+              continue;
+            }
+
+            sendEvent({ type: 'progress', message: `[Pre-AI Guard] Validating global signal constraints for ${symbol}...` });
+            const riskValidation = await validateGlobalSignal(supabase, symbol, snapshot);
+            if (!riskValidation.valid) {
+              console.log(`[Pre-AI Guard] REJECTED ${symbol}: ${riskValidation.reason}`);
+              sendEvent({ type: 'progress', message: `[Pre-AI Guard] Skipped ${symbol}: Exposure constraints violated.` });
+              await insertAuditLog(supabase, {
+                actor_type: "SYSTEM",
+                action: "REJECTED_BY_RISK_PRE_AI",
+                entity_type: "research",
+                payload_json: { symbol, reason: riskValidation.reason },
+              });
+              
+              rejections.push({
+                symbol,
+                reason: riskValidation.reason,
+                layer: "Pre-AI Guard"
+              });
+              // We skip AI evaluation entirely and DO NOT save a database signal to prevent C-Tier spam in the Vault
+              continue;
+            }
+
             console.log(`[Strategy Eval] Market snapshot for ${symbol}: Trend=${snapshot.trend_alignment}, RSI=${snapshot.rsi_14.toFixed(2)}, CurrentPrice=${snapshot.current_price}`);
             
             // LAYER A: Deterministic Guard
@@ -486,18 +526,24 @@ serve(async (req) => {
 
             // AI is now a pure signal generator. We don't calculate user-specific volume or riskAmount here.
             
-            // LAYER C: Risk Manager (Global Asset Isolation)
-            sendEvent({ type: 'progress', message: `[Layer C: Risk Manager] Validating global signal constraints...` });
-            const riskValidation = await validateGlobalSignal(supabase, symbol, snapshot);
-            const rrRatio = 2.0; // Mathematically forced above
             const expectedReturnPct = Math.abs(take_profit - entry_price) / entry_price;
             
             const stopLossPercentage = risk / entry_price;
-            let maxAllowedRiskPct = 0.05; // 5% default for macro
+            let defaultStaticPct = 0.05; // 5% default for macro
             if (timeframe.toLowerCase().includes("min") || timeframe === "1H") {
-              maxAllowedRiskPct = 0.015; // 1.5% max for short intraday
+              defaultStaticPct = 0.015; // 1.5% max for short intraday
             } else if (timeframe === "4H") {
-              maxAllowedRiskPct = 0.03; // 3% max for 4H swing
+              defaultStaticPct = 0.03; // 3% max for 4H swing
+            }
+            
+            // Asset-class-specific ATR multipliers
+            const preciousMetals = ['XAUUSD', 'XAGUSD'];
+            const atrMultiplier = preciousMetals.includes(symbol) ? 3.0 : 2.0;
+            
+            let maxAllowedRiskPct = defaultStaticPct;
+            if (snapshot.atr_14 && snapshot.current_price) {
+              const dynamicAtrPct = (snapshot.atr_14 * atrMultiplier) / snapshot.current_price;
+              maxAllowedRiskPct = Math.max(defaultStaticPct, dynamicAtrPct);
             }
 
             if (stopLossPercentage > maxAllowedRiskPct) {
@@ -521,38 +567,7 @@ serve(async (req) => {
               });
               continue;
             }
-
-            if (!riskValidation.valid) {
-              console.log(`[Layer C: Risk Manager] REJECTED ${symbol}: ${riskValidation.reason}`);
-              sendEvent({ type: 'progress', message: `[Layer C: Risk Manager] REJECTED ${symbol}: Exposure constraints violated.` });
-              await insertAuditLog(supabase, {
-                actor_type: "SYSTEM",
-                action: "REJECTED_BY_RISK",
-                entity_type: "research",
-                payload_json: { symbol, reason: riskValidation.reason, context: snapshot },
-              });
-
-              // Trade is rejected by Risk Manager, we only keep it in the audit log.
-              rejections.push({
-                symbol,
-                reason: riskValidation.reason,
-                rationale: institutional_rationale,
-                layer: "Risk Manager"
-              });
-              await supabase.from("trade_opportunities").insert({
-                symbol,
-                side: dbSide,
-                timeframe: timeframe.toLowerCase(),
-                status: "REJECTED",
-                ai_summary: institutional_rationale,
-                ai_risks: riskValidation.reason,
-                model_id: modelId,
-                model_version: modelVersion,
-                risk_summary: `RSI ${snapshot.rsi_14}`
-              });
-              continue;
-            }
-
+            
             console.log(`[Layer C: Execution Desk] APPROVED ${symbol}: Generating pending opportunity...`);
             sendEvent({ type: 'progress', message: `[Execution] Creating opportunity for ${symbol}...` });
             
