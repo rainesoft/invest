@@ -434,7 +434,8 @@ CREATE TABLE IF NOT EXISTS "public"."user_risk_settings" (
     "is_live_execution_enabled" boolean DEFAULT false,
     "created_at" timestamp with time zone DEFAULT "now"(),
     "updated_at" timestamp with time zone DEFAULT "now"(),
-    "max_spread_points" numeric DEFAULT 50
+    "max_spread_points" numeric DEFAULT 50,
+    "is_admin" boolean DEFAULT false
 );
 
 
