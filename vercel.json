@@ -1,4 +1,5 @@
 {
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD ./apps/rainebank/ ./package.json ./package-lock.json",
   "crons": [
     {
       "path": "/api/cron/research",
