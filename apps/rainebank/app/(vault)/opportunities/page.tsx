@@ -99,6 +99,7 @@ export default function Page() {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<string | null>(null);
   const [showWarnings, setShowWarnings] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // Pagination State
   const [page, setPage] = useState(1);
@@ -108,6 +109,14 @@ export default function Page() {
   useEffect(() => {
     const load = async () => {
       setLoading(true);
+      const { data: authData } = await client.auth.getUser();
+      if (authData.user) {
+        const { data: settings } = await client.from('user_risk_settings').select('is_admin').eq('user_id', authData.user.id).single();
+        if (settings?.is_admin) {
+          setIsAdmin(true);
+        }
+      }
+
       const from = (page - 1) * pageSize;
       const to = from + pageSize - 1;
 
@@ -312,60 +321,68 @@ export default function Page() {
               </div>
 
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '24px' }}>
-                  <button 
-                  onClick={() => archive(signal.id)}
-                  style={{
-                    padding: '10px 24px',
-                    background: 'transparent',
-                    border: '1px solid rgba(156,163,175,0.3)',
-                    color: '#9ca3af',
-                    borderRadius: '8px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                  }}
-                  onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(156,163,175,0.1)'; e.currentTarget.style.borderColor = '#9ca3af'; }}
-                  onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(156,163,175,0.3)'; }}
-                >
-                  Archive
-                </button>
-                {!isWarning && (
-                  <button 
-                    onClick={() => reject(signal.id)}
-                    style={{
-                      padding: '10px 24px',
-                      background: 'transparent',
-                      border: '1px solid rgba(248,113,113,0.3)',
-                      color: '#f87171',
-                      borderRadius: '8px',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      transition: 'all 0.2s',
-                    }}
-                    onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(248,113,113,0.1)'; e.currentTarget.style.borderColor = '#f87171'; }}
-                    onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(248,113,113,0.3)'; }}
-                  >
-                    Reject Trade
-                  </button>
+                {isAdmin ? (
+                  <>
+                    <button 
+                      onClick={() => archive(signal.id)}
+                      style={{
+                        padding: '10px 24px',
+                        background: 'transparent',
+                        border: '1px solid rgba(156,163,175,0.3)',
+                        color: '#9ca3af',
+                        borderRadius: '8px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        transition: 'all 0.2s',
+                      }}
+                      onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(156,163,175,0.1)'; e.currentTarget.style.borderColor = '#9ca3af'; }}
+                      onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(156,163,175,0.3)'; }}
+                    >
+                      Archive
+                    </button>
+                    {!isWarning && (
+                      <button 
+                        onClick={() => reject(signal.id)}
+                        style={{
+                          padding: '10px 24px',
+                          background: 'transparent',
+                          border: '1px solid rgba(248,113,113,0.3)',
+                          color: '#f87171',
+                          borderRadius: '8px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          transition: 'all 0.2s',
+                        }}
+                        onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(248,113,113,0.1)'; e.currentTarget.style.borderColor = '#f87171'; }}
+                        onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(248,113,113,0.3)'; }}
+                      >
+                        Reject Trade
+                      </button>
+                    )}
+                    <button 
+                      onClick={() => approve(signal.id)}
+                      style={{
+                        padding: '10px 24px',
+                        background: isWarning ? '#f87171' : '#38bdf8',
+                        border: 'none',
+                        color: '#000',
+                        borderRadius: '8px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        boxShadow: isWarning ? '0 4px 14px 0 rgba(248,113,113,0.39)' : '0 4px 14px 0 rgba(56,189,248,0.39)',
+                        transition: 'all 0.2s',
+                      }}
+                      onMouseOver={(e) => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = isWarning ? '0 6px 20px rgba(248,113,113,0.5)' : '0 6px 20px rgba(56,189,248,0.5)'; }}
+                      onMouseOut={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = isWarning ? '0 4px 14px 0 rgba(248,113,113,0.39)' : '0 4px 14px 0 rgba(56,189,248,0.39)'; }}
+                    >
+                      {isWarning ? 'Override & Approve' : 'Approve Execution'}
+                    </button>
+                  </>
+                ) : (
+                  <div style={{ color: '#9ca3af', fontSize: '13px', fontStyle: 'italic' }}>
+                    Awaiting Admin Approval
+                  </div>
                 )}
-                <button 
-                  onClick={() => approve(signal.id)}
-                  style={{
-                    padding: '10px 24px',
-                    background: isWarning ? '#f87171' : '#38bdf8',
-                    border: 'none',
-                    color: '#000',
-                    borderRadius: '8px',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    boxShadow: isWarning ? '0 4px 14px 0 rgba(248,113,113,0.39)' : '0 4px 14px 0 rgba(56,189,248,0.39)',
-                    transition: 'all 0.2s',
-                  }}
-                  onMouseOver={(e) => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = isWarning ? '0 6px 20px rgba(248,113,113,0.5)' : '0 6px 20px rgba(56,189,248,0.5)'; }}
-                  onMouseOut={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = isWarning ? '0 4px 14px 0 rgba(248,113,113,0.39)' : '0 4px 14px 0 rgba(56,189,248,0.39)'; }}
-                >
-                  {isWarning ? 'Override & Approve' : 'Approve Execution'}
-                </button>
               </div>
             </div>
           );

@@ -623,69 +623,73 @@ serve(async (req) => {
                 if (usersToAutoTrade && usersToAutoTrade.length > 0) {
                   console.log(`[Auto-Trade] Found ${usersToAutoTrade.length} users with auto-trade enabled for ${tier}.`);
                   
-                  // For a single-tenant assumption, we just execute using the service role client
-                  const settings = usersToAutoTrade[0];
-                  // 2. Fetch Global Risk Caps
-                  const baseEquity = Number(settings.portfolio_capital ?? Deno.env.get('STARTING_EQUITY_USD') ?? '100000');
-                  const perTradePct = Number(settings.risk_per_trade_pct ?? 0.01);
-                  const [{ data: dayPnl }, { data: weekPnl }, { data: portfolioPnl }] = await Promise.all([
-                      supabase.rpc('day_pnl'),
-                      supabase.rpc('week_pnl'),
-                      supabase.rpc('portfolio_pnl'),
-                  ]);
-                  const dayRiskUSD = Math.abs(Number(dayPnl) || 0);
-                  const weekRiskUSD = Math.abs(Number(weekPnl) || 0);
-                  const equityUSD = baseEquity + (Number(portfolioPnl) || 0);
-                  const atrUSD = Math.abs(entry_price - stop_loss);
+                  let executedAny = false;
 
-                  // 3. Size Position
-                  const allowedQty = sizeWithRiskCaps(equityUSD, atrUSD, dayRiskUSD, weekRiskUSD, perTradePct, 0.02, 0.05, Number(settings.max_volume_per_trade ?? 50));
+                  for (const settings of usersToAutoTrade) {
+                    try {
+                      // 2. Fetch User-Specific Risk Caps
+                      const baseEquity = Number(settings.portfolio_capital ?? Deno.env.get('STARTING_EQUITY_USD') ?? '100000');
+                      const perTradePct = Number(settings.risk_per_trade_pct ?? 0.01);
+                      const [{ data: dayPnl }, { data: weekPnl }, { data: portfolioPnl }] = await Promise.all([
+                          supabase.rpc('day_pnl', { p_user_id: settings.user_id }),
+                          supabase.rpc('week_pnl', { p_user_id: settings.user_id }),
+                          supabase.rpc('portfolio_pnl', { p_user_id: settings.user_id }),
+                      ]);
+                      const dayRiskUSD = Math.abs(Number(dayPnl) || 0);
+                      const weekRiskUSD = Math.abs(Number(weekPnl) || 0);
+                      const equityUSD = baseEquity + (Number(portfolioPnl) || 0);
+                      const atrUSD = Math.abs(entry_price - stop_loss);
 
-                  if (allowedQty > 0) {
-                    console.log(`[Auto-Trade] Executing ${allowedQty} units for ${symbol}`);
-                    sendEvent({ type: 'progress', message: `[Auto-Trade] Executing ${allowedQty} units for ${symbol}` });
+                      // 3. Size Position
+                      const allowedQty = sizeWithRiskCaps(equityUSD, atrUSD, dayRiskUSD, weekRiskUSD, perTradePct, 0.02, 0.05, Number(settings.max_volume_per_trade ?? 50));
 
-                    // 4. Create Trades record
-                    const { data: tradeRow, error: tradeErr } = await supabase
-                      .from('trades')
-                      .insert({ opportunity_id: data.id, symbol, side: dbSide, qty: allowedQty })
-                      .select('id')
-                      .single();
+                      if (allowedQty > 0) {
+                        console.log(`[Auto-Trade] Executing ${allowedQty} units for ${symbol} (User: ${settings.user_id})`);
+                        
+                        // 4. Create Trades record
+                        const { data: tradeRow, error: tradeErr } = await supabase
+                          .from('trades')
+                          .insert({ opportunity_id: data.id, symbol, side: dbSide, qty: allowedQty, user_id: settings.user_id })
+                          .select('id')
+                          .single();
 
-                    if (!tradeErr && tradeRow) {
-                      // 5. Audit Log
-                      await insertAuditLog(supabase, {
-                        actor_type: 'SYSTEM', action: 'APPROVE_OPPORTUNITY', entity_type: 'opportunity', entity_id: data.id,
-                        payload_json: { qty: allowedQty, equityUSD, atrUSD, dayRiskUSD, weekRiskUSD, is_auto_trade: true },
-                      });
+                        if (!tradeErr && tradeRow) {
+                          // 5. Audit Log
+                          await insertAuditLog(supabase, {
+                            actor_type: 'SYSTEM', actor_id: settings.user_id, action: 'APPROVE_OPPORTUNITY', entity_type: 'opportunity', entity_id: data.id,
+                            payload_json: { qty: allowedQty, equityUSD, atrUSD, dayRiskUSD, weekRiskUSD, is_auto_trade: true },
+                          });
 
-                      // 6. Execute Order via MetaApi or Alpaca
-                      try {
-                        let execType: 'market' | 'limit' | 'stop' = 'market';
-                        if (order_type.includes('LIMIT')) execType = 'limit';
-                        else if (order_type.includes('STOP')) execType = 'stop';
+                          // 6. Execute Order via MetaApi or Alpaca
+                          let execType: 'market' | 'limit' | 'stop' = 'market';
+                          if (order_type.includes('LIMIT')) execType = 'limit';
+                          else if (order_type.includes('STOP')) execType = 'stop';
 
-                        await placePaperOrder({
-                          symbol,
-                          side: dbSide === 'LONG' ? 'buy' : 'sell',
-                          qty: allowedQty,
-                          type: execType,
-                          limitPrice: execType === 'limit' ? entry_price : undefined,
-                          stopPrice: execType === 'stop' ? entry_price : undefined,
-                          stopLoss: stop_loss,
-                          takeProfit: take_profit
-                        }, supabase, settings);
+                          await placePaperOrder({
+                            symbol,
+                            side: dbSide === 'LONG' ? 'buy' : 'sell',
+                            qty: allowedQty,
+                            type: execType,
+                            limitPrice: execType === 'limit' ? entry_price : undefined,
+                            stopPrice: execType === 'stop' ? entry_price : undefined,
+                            stopLoss: stop_loss,
+                            takeProfit: take_profit
+                          }, supabase, settings);
 
-                        // 7. Mark as APPROVED
-                        await supabase.from('trade_opportunities').update({ status: 'APPROVED' }).eq('id', data.id);
-                        console.log(`[Auto-Trade] Successfully executed ${symbol}`);
-                      } catch (execErr: any) {
-                        console.error(`[Auto-Trade] Execution Failed for ${symbol}: ${execErr.message}`);
-                        await supabase.from('trades').delete().eq('id', tradeRow.id);
+                          executedAny = true;
+                          console.log(`[Auto-Trade] Successfully executed ${symbol} for user ${settings.user_id}`);
+                        }
+                      } else {
+                        console.log(`[Auto-Trade] Skipped ${symbol} for user ${settings.user_id}: Risk Caps Exceeded (Allowed Qty: 0)`);
                       }
+                    } catch (userErr: any) {
+                      console.error(`[Auto-Trade] Execution Failed for ${symbol} on user ${settings.user_id}: ${userErr.message}`);
                     }
-                  } else {
-                     console.log(`[Auto-Trade] Skipped ${symbol}: Risk Caps Exceeded (Allowed Qty: 0)`);
+                  }
+
+                  if (executedAny) {
+                    // 7. Mark as APPROVED if at least one user successfully executed
+                    await supabase.from('trade_opportunities').update({ status: 'APPROVED' }).eq('id', data.id);
                   }
                 }
               } catch (autoErr: any) {
