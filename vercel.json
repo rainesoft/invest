@@ -1,5 +1,5 @@
 {
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD ./apps/rainebank/ ./package.json ./pnpm-lock.yaml ./vercel.json",
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- ./apps/rainebank/ ./package.json ./pnpm-lock.yaml ./vercel.json",
   "crons": [
     {
       "path": "/api/cron/research",
