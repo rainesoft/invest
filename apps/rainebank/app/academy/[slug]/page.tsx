@@ -4,6 +4,33 @@ import { ArrowLeft, Lock, CheckCircle2 } from 'lucide-react';
 import { ACADEMY_POSTS } from '../../../data/academy';
 import LandingNavbar from '@components/LandingNavbar';
 import { supabaseServer } from '@lib/supabase-server';
+import { Metadata } from 'next';
+
+export async function generateMetadata({ params }: { params: { slug: string } }): Promise<Metadata> {
+  const post = ACADEMY_POSTS.find(p => p.slug === params.slug);
+  
+  if (!post) return { title: 'Post Not Found | Rainebank' };
+
+  // Generate a dynamic beautiful thumbnail using the post title
+  const ogImageUrl = `https://og-image.vercel.app/${encodeURIComponent(post.title)}.png?theme=dark&md=1&fontSize=75px`;
+
+  return {
+    title: `${post.title} | Rainebank Academy`,
+    description: post.excerpt,
+    openGraph: {
+      title: post.title,
+      description: post.excerpt,
+      type: 'article',
+      images: [{ url: ogImageUrl, width: 1200, height: 630, alt: post.title }],
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: post.title,
+      description: post.excerpt,
+      images: [ogImageUrl],
+    },
+  };
+}
 
 export default async function AcademyPostPage({ params }: { params: { slug: string } }) {
   const post = ACADEMY_POSTS.find(p => p.slug === params.slug);
