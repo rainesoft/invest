@@ -46,6 +46,7 @@ export default function LandingNavbar({ isLoggedIn = false }: { isLoggedIn?: boo
                     <Link href="#how-it-works" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>How it Works</Link>
                     <Link href="/compare" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>How we compare</Link>
                     <Link href="#pricing" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>Pricing</Link>
+                    <Link href="/academy" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>Academy</Link>
                     <Link href="/docs" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>API Docs</Link>
                   </>
                 )}
@@ -79,6 +80,7 @@ export default function LandingNavbar({ isLoggedIn = false }: { isLoggedIn?: boo
                   <Link onClick={() => setIsOpen(false)} href="#how-it-works" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 600 }}>How it Works</Link>
                   <Link onClick={() => setIsOpen(false)} href="/compare" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 600 }}>How we compare</Link>
                   <Link onClick={() => setIsOpen(false)} href="#pricing" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 600 }}>Pricing</Link>
+                  <Link onClick={() => setIsOpen(false)} href="/academy" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 600 }}>Academy</Link>
                   <Link onClick={() => setIsOpen(false)} href="/docs" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 600 }}>API Docs</Link>
                 </>
               )}
