@@ -591,7 +591,7 @@ serve(async (req) => {
                 entry_plan_json: {
                   price: entry_price,
                 },
-                stop_plan_json: { stop: stop_loss },
+                stop_plan_json: { stop: stop_loss, initial: stop_loss, atr: snapshot.atr_14 },
                 take_profit_json: { tp: take_profit },
                 risk_summary: `RSI ${snapshot.rsi_14}`,
                 confidence: confidence_score,
