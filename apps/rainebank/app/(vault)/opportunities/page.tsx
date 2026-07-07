@@ -120,9 +120,9 @@ export default function Page() {
         .range(from, to);
 
       if (!showWarnings) {
-        query = query.eq('status', 'PENDING_APPROVAL');
+        query = query.eq('status', 'PUBLISHED');
       } else {
-        query = query.or('status.eq.PENDING_APPROVAL,and(status.eq.REJECTED,ai_risks.eq.Rejected by AI Risk Officer)');
+        query = query.or('status.eq.PUBLISHED,and(status.eq.REJECTED,ai_risks.eq.Rejected by AI Risk Officer)');
       }
 
       const { data, count } = await query;
@@ -140,12 +140,29 @@ export default function Page() {
     return <div style={{ color: '#9ca3af', fontSize: '15px' }}>Loading signals...</div>;
   }
 
+  const handleExecute = async (id: string) => {
+    setProcessing(id);
+    try {
+      const res = await fetch(`/api/opportunities/${id}/execute`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Execution failed');
+      
+      toast.success('Trade executed successfully!');
+      // Optimistically update status so the user knows they executed it
+      setOpps(prev => prev.map(o => o.id === id ? { ...o, status: 'EXECUTED' } : o));
+    } catch (err: any) {
+      toast.error(`Error: ${err.message}`);
+    } finally {
+      setProcessing(null);
+    }
+  };
+
   return (
     <div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
         <h2 style={{ fontSize: '24px', fontWeight: 800, color: '#fff', letterSpacing: '-0.5px', margin: 0 }}>
-          Pending Opportunities
+          Published AI Signals
         </h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <span style={{ color: '#9ca3af', fontSize: '14px', fontWeight: 600 }}>Show C-Tier Signals</span>
@@ -278,10 +295,25 @@ export default function Page() {
               </div>
 
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '24px' }}>
-                {signal.status === 'PENDING_APPROVAL' ? (
-                  <div style={{ color: '#f59e0b', fontSize: '13px', fontStyle: 'italic', fontWeight: 600 }}>
-                    Awaiting Admin Approval
-                  </div>
+                {signal.status === 'PUBLISHED' ? (
+                  <button 
+                    onClick={() => handleExecute(signal.id)}
+                    disabled={processing === signal.id}
+                    style={{
+                      background: signal.side === 'LONG' ? '#10b981' : '#ef4444',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '8px',
+                      padding: '10px 24px',
+                      fontSize: '14px',
+                      fontWeight: 700,
+                      cursor: processing === signal.id ? 'not-allowed' : 'pointer',
+                      opacity: processing === signal.id ? 0.7 : 1,
+                      transition: 'opacity 0.2s'
+                    }}
+                  >
+                    {processing === signal.id ? 'Executing...' : `Execute ${signal.side}`}
+                  </button>
                 ) : (
                   <div style={{ color: signal.status === 'APPROVED' ? '#10b981' : '#9ca3af', fontSize: '13px', fontWeight: 600 }}>
                     Status: {signal.status}
