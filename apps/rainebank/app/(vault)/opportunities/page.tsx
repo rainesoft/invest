@@ -101,6 +101,7 @@ export default function Page() {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<string | null>(null);
   const [hideRejected, setHideRejected] = useState(true);
+  const [executedIds, setExecutedIds] = useState<Set<string>>(new Set());
 
   // Pagination State
   const [page, setPage] = useState(1);
@@ -133,6 +134,19 @@ export default function Page() {
       setOpps(data ?? []);
       setHasMore(count ? (from + pageSize) < count : false);
       setTotalPages(count ? Math.ceil(count / pageSize) : 1);
+      
+      if (data && data.length > 0) {
+        const oppIds = data.map(o => o.id);
+        const { data: userTrades } = await client
+          .from('user_trades')
+          .select('opportunity_id')
+          .in('opportunity_id', oppIds);
+          
+        if (userTrades) {
+           setExecutedIds(new Set(userTrades.map(ut => ut.opportunity_id)));
+        }
+      }
+
       setLoading(false);
     };
     load();
@@ -217,6 +231,8 @@ export default function Page() {
           const tpPrice = signal.take_profit_json?.tp || signal.take_profit_json?.tp_price;
           const isProcessing = processing === signal.id;
           const isWarning = signal.status === 'REJECTED';
+
+          const isExecuted = executedIds.has(signal.id) || signal.status === 'EXECUTED';
 
           return (
             <div key={signal.id} style={{
@@ -310,21 +326,21 @@ export default function Page() {
                 {signal.status === 'APPROVED' ? (
                   <button 
                     onClick={() => handleExecute(signal.id)}
-                    disabled={processing === signal.id}
+                    disabled={processing === signal.id || isExecuted}
                     style={{
-                      background: signal.side === 'LONG' ? '#10b981' : '#ef4444',
-                      color: '#fff',
+                      background: isExecuted ? '#374151' : (signal.side === 'LONG' ? '#10b981' : '#ef4444'),
+                      color: isExecuted ? '#9ca3af' : '#fff',
                       border: 'none',
                       borderRadius: '8px',
                       padding: '10px 24px',
                       fontSize: '14px',
                       fontWeight: 700,
-                      cursor: processing === signal.id ? 'not-allowed' : 'pointer',
-                      opacity: processing === signal.id ? 0.7 : 1,
-                      transition: 'opacity 0.2s'
+                      cursor: (processing === signal.id || isExecuted) ? 'not-allowed' : 'pointer',
+                      opacity: (processing === signal.id || isExecuted) ? 0.7 : 1,
+                      transition: 'all 0.2s'
                     }}
                   >
-                    {processing === signal.id ? 'Executing...' : `Execute ${signal.side}`}
+                    {processing === signal.id ? 'Executing...' : (isExecuted ? 'Executed' : `Execute ${signal.side}`)}
                   </button>
                 ) : (
                   <div style={{ color: signal.status === 'APPROVED' ? '#10b981' : '#9ca3af', fontSize: '13px', fontWeight: 600 }}>
