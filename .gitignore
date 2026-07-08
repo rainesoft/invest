@@ -56,3 +56,5 @@ next-env.d.ts
 .vercel
 supabase/config.toml
 scratch/
+.env*
+docs/

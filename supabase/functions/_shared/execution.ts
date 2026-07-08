@@ -86,8 +86,8 @@ export interface Bar {
 }
 
 export async function fetchPaperBars(symbol: string, timeframe = '1D', limit = 300): Promise<{source: string, bars: Bar[]}> {
-  // Route Crypto/Forex/Commodity pairs to Yahoo Finance
-  const isForexOrCrypto = symbol === 'XAUUSD' || symbol === 'UKOIL' || symbol.includes('USD') || symbol.includes('/');
+  // Route Crypto/Forex/Commodity/Indices pairs away from Alpaca US Stocks
+  const isForexOrCrypto = symbol === 'XAUUSD' || symbol === 'UKOIL' || symbol === 'US30' || symbol === 'NAS100' || symbol.includes('USD') || symbol.includes('/');
   
   if (isForexOrCrypto) {
     // 1. Try MetaTrader (MetaApi) First if configured
@@ -145,13 +145,17 @@ export async function fetchPaperBars(symbol: string, timeframe = '1D', limit = 3
       yfSymbol = 'BZ=F'; // Brent Crude Oil Futures as proxy for UKOIL
     } else if (symbol === 'XAUUSD') {
       yfSymbol = 'GC=F'; // Gold Futures as proxy for XAUUSD
+    } else if (symbol === 'US30') {
+      yfSymbol = '^DJI'; // Dow Jones Industrial Average
+    } else if (symbol === 'NAS100') {
+      yfSymbol = '^NDX'; // Nasdaq 100
     } else if (isCrypto && symbol.endsWith('USD')) {
       // BTCUSD -> BTC-USD
       yfSymbol = symbol.replace('USD', '') + '-USD';
     } else if (symbol.includes('/')) {
       yfSymbol = symbol.replace('/', '') + '=X'; // EUR/USD -> EURUSD=X
-    } else if (symbol.length === 6 && symbol.endsWith('USD')) {
-      yfSymbol = symbol + '=X'; // EURUSD -> EURUSD=X
+    } else if (symbol.length === 6 && (symbol.endsWith('USD') || symbol.startsWith('USD'))) {
+      yfSymbol = symbol + '=X'; // EURUSD -> EURUSD=X, USDJPY -> USDJPY=X
     }
     
     // Yahoo Finance timeframe mapping

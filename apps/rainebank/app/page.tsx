@@ -5,6 +5,70 @@ import LandingNavbar from '@components/LandingNavbar';
 import PricingSlider from '@components/PricingSlider';
 import { supabaseServer } from '@lib/supabase-server';
 
+function parseAnalysisText(text: string | null) {
+  if (!text) return { tier: null, structure: null, strategy: null, content: '' };
+  
+  // Try to match the exact pattern: [Tier] [Structure -> Strategy]
+  const match = text.match(/^\[(.*?-Tier)\] \[(.*?) -> (.*?)\]/);
+  
+  if (!match) {
+    // If exact pattern fails, maybe there's just a Tier at the start
+    const fallbackMatch = text.match(/^\[(.*?-Tier)\]/);
+    if (!fallbackMatch) return { tier: null, structure: null, strategy: null, content: text };
+    return {
+      tier: fallbackMatch[1],
+      structure: null,
+      strategy: null,
+      content: text.replace(/^\[(.*?-Tier)\]\s*-?\s*/, '').trim()
+    };
+  }
+
+  return {
+    tier: match[1],
+    structure: match[2],
+    strategy: match[3],
+    content: text.replace(/^\[(.*?-Tier)\] \[(.*?) -> (.*?)\]\s*-?\s*/, '').trim()
+  };
+}
+
+function TrendBadge({ tier, structure, strategy }: { tier: string | null, structure: string | null, strategy: string | null }) {
+  if (!tier && !structure && !strategy) return null;
+
+  // Tier Colors
+  let tierColor = '#9ca3af';
+  let tierBg = 'rgba(156,163,175,0.1)';
+  if (tier === 'S-Tier') {
+    tierColor = '#fbbf24'; // amber-400
+    tierBg = 'rgba(251,191,36,0.1)';
+  } else if (tier === 'A-Tier') {
+    tierColor = '#c084fc'; // purple-400
+    tierBg = 'rgba(192,132,252,0.1)';
+  } else if (tier === 'B-Tier') {
+    tierColor = '#38bdf8'; // sky-400
+    tierBg = 'rgba(56,189,248,0.1)';
+  } else if (tier === 'C-Tier') {
+    tierColor = '#f87171'; // red-400
+    tierBg = 'rgba(248,113,113,0.1)';
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
+      {tier && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: tierBg, color: tierColor, padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 800 }}>
+          <span>{tier}</span>
+        </div>
+      )}
+      {(structure || strategy) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(255,255,255,0.05)', color: '#d1d5db', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 600 }}>
+          {structure && <span>{structure}</span>}
+          {structure && strategy && <span style={{ color: '#6b7280' }}>→</span>}
+          {strategy && <span>{strategy}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default async function LandingPage() {
   const supabase = supabaseServer();
   const { data: { user } } = await supabase.auth.getUser();
@@ -17,14 +81,27 @@ export default async function LandingPage() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
   
-  // Fetch the latest trade opportunity for the live showcase
-  const { data: latestSignals } = await supabaseAdmin
+  // Fetch the latest A-Tier trade opportunity for the live showcase
+  let { data: latestSignals } = await supabaseAdmin
     .from('trade_opportunities')
     .select('*')
     .in('status', ['PENDING_APPROVAL', 'APPROVED', 'WON', 'LOST'])
+    .ilike('ai_summary', '%[A-Tier]%')
     .order('created_at', { ascending: false })
     .limit(1);
-    
+
+  // Fallback to B-Tier if no A-Tier signals exist
+  if (!latestSignals || latestSignals.length === 0) {
+    const { data: bTierSignals } = await supabaseAdmin
+      .from('trade_opportunities')
+      .select('*')
+      .in('status', ['PENDING_APPROVAL', 'APPROVED', 'WON', 'LOST'])
+      .ilike('ai_summary', '%[B-Tier]%')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    latestSignals = bTierSignals;
+  }
+
   const signal = latestSignals?.[0] || {
     symbol: 'SCANNING...',
     side: 'NEUTRAL',
@@ -114,9 +191,10 @@ export default async function LandingPage() {
               </div>
 
               <div style={{ background: '#0a0a0a', padding: '16px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                <div style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '8px', fontWeight: 600 }}>WHAT THE AI SAID:</div>
+                <div style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '12px', fontWeight: 600 }}>WHAT THE AI SAID:</div>
+                <TrendBadge {...parseAnalysisText(signal.ai_summary)} />
                 <p style={{ fontSize: '14px', color: '#e5e7eb', lineHeight: 1.5, margin: 0 }}>
-                  {signal.ai_summary?.slice(0, 150)}{signal.ai_summary?.length > 150 ? '...' : ''}
+                  {parseAnalysisText(signal.ai_summary).content.slice(0, 150)}{parseAnalysisText(signal.ai_summary).content.length > 150 ? '...' : ''}
                 </p>
               </div>
             </div>

@@ -41,7 +41,6 @@ export default function VaultNavbar() {
                 <Link href="/research" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', opacity: pathname === '/research' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>Research</Link>
                 <Link href="/opportunities" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', opacity: pathname === '/opportunities' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>Signals</Link>
                 <Link href="/dashboard" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', opacity: pathname === '/dashboard' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>Vault</Link>
-                <Link href="/trades" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', opacity: pathname === '/trades' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>Ledger</Link>
                 <Link href="/academy" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', opacity: pathname === '/academy' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>Academy</Link>
                 <Link href="/docs" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', opacity: pathname === '/docs' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>API Docs</Link>
                 <Link href="/help" style={{ color: 'inherit', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '6px', transition: 'opacity 0.2s', opacity: pathname === '/help' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>
@@ -74,7 +73,6 @@ export default function VaultNavbar() {
               <Link onClick={() => setIsOpen(false)} href="/research" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500 }}>Research</Link>
               <Link onClick={() => setIsOpen(false)} href="/opportunities" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500 }}>Signals</Link>
               <Link onClick={() => setIsOpen(false)} href="/dashboard" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500 }}>Vault</Link>
-              <Link onClick={() => setIsOpen(false)} href="/trades" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500 }}>Ledger</Link>
               <Link onClick={() => setIsOpen(false)} href="/academy" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500 }}>Academy</Link>
               <Link onClick={() => setIsOpen(false)} href="/docs" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500 }}>API Docs</Link>
               <Link onClick={() => setIsOpen(false)} href="/help" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '8px' }}>

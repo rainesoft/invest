@@ -321,7 +321,71 @@ export default function VaultDashboard() {
         </div>
       </div>
 
-      {signals.length === 0 && <p style={{ color: '#9ca3af' }}>No signals found in the vault.</p>}
+      {/* Ledger Table Section */}
+      <div style={{
+        background: '#1a1a1a',
+        border: '1px solid #333',
+        borderRadius: '16px',
+        overflow: 'hidden',
+        marginBottom: '40px'
+      }}>
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid #333' }}>
+          <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: '#fff' }}>Execution Log</h3>
+        </div>
+        
+        {signals.length === 0 ? (
+          <div style={{ padding: '48px', textAlign: 'center', color: '#6b7280' }}>
+            No executions found in your vault yet.
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+              <thead>
+                <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
+                  <th style={{ padding: '16px 24px', color: '#9ca3af', fontWeight: 500, fontSize: '13px' }}>ASSET</th>
+                  <th style={{ padding: '16px 24px', color: '#9ca3af', fontWeight: 500, fontSize: '13px' }}>DIRECTION</th>
+                  <th style={{ padding: '16px 24px', color: '#9ca3af', fontWeight: 500, fontSize: '13px' }}>PRICE</th>
+                  <th style={{ padding: '16px 24px', color: '#9ca3af', fontWeight: 500, fontSize: '13px' }}>STATUS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {signals.map((t) => (
+                  <tr key={t.id} style={{ borderTop: '1px solid #333', transition: 'background 0.2s' }}>
+                    <td style={{ padding: '16px 24px', color: '#fff', fontWeight: 600 }}>{t.symbol}</td>
+                    <td style={{ padding: '16px 24px' }}>
+                      <span style={{ 
+                        color: t.side === 'LONG' ? '#10b981' : '#ef4444',
+                        background: t.side === 'LONG' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        fontWeight: 700
+                      }}>{t.side}</span>
+                    </td>
+                    <td style={{ padding: '16px 24px', color: '#e5e7eb', fontFamily: 'monospace' }}>
+                      {t.entry_plan_json?.price ? `$${t.entry_plan_json.price}` : '—'}
+                    </td>
+                    <td style={{ padding: '16px 24px' }}>
+                      <span style={{ 
+                        color: t.status === 'WON' ? '#10b981' : t.status === 'LOST' ? '#ef4444' : t.status === 'OPEN' ? '#3b82f6' : '#9ca3af',
+                        background: t.status === 'WON' ? 'rgba(16,185,129,0.1)' : t.status === 'LOST' ? 'rgba(239,68,68,0.1)' : t.status === 'OPEN' ? 'rgba(59,130,246,0.1)' : 'rgba(156,163,175,0.1)',
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        fontWeight: 700
+                      }}>{t.status}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div style={{ padding: '20px 24px', borderBottom: '1px solid rgba(255,255,255,0.05)', marginBottom: '24px' }}>
+         <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: '#fff' }}>Detailed Rationale</h3>
+      </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
         {signals.map((signal) => {

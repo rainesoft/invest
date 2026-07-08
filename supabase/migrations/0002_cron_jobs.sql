@@ -8,7 +8,7 @@ SELECT cron.schedule(
     $$
     select net.http_post(
         url:='https://ktezlusdkqlfdwqrldtn.supabase.co/functions/v1/monitor-open-trades',
-        headers:=('{"Authorization": "Bearer ' || (SELECT secret FROM vault.decrypted_secrets WHERE name = 'cron_secret' LIMIT 1) || '"}')::jsonb
+        headers:=jsonb_build_object('x-cron-secret', replace((SELECT secret FROM vault.decrypted_secrets WHERE name = 'cron_secret' LIMIT 1), chr(10), ''))
     );
     $$
 );
@@ -20,7 +20,7 @@ SELECT cron.schedule(
     $$
     select net.http_post(
         url:='https://ktezlusdkqlfdwqrldtn.supabase.co/functions/v1/research-run',
-        headers:=('{"Authorization": "Bearer ' || (SELECT secret FROM vault.decrypted_secrets WHERE name = 'cron_secret' LIMIT 1) || '", "Content-Type": "application/json"}')::jsonb,
+        headers:=jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', replace((SELECT secret FROM vault.decrypted_secrets WHERE name = 'cron_secret' LIMIT 1), chr(10), '')),
         body:='{"timeframe": "1h"}'::jsonb,
         timeout_milliseconds:=300000
     );
@@ -34,7 +34,7 @@ SELECT cron.schedule(
     $$
     select net.http_post(
         url:='https://ktezlusdkqlfdwqrldtn.supabase.co/functions/v1/research-run',
-        headers:=('{"Authorization": "Bearer ' || (SELECT secret FROM vault.decrypted_secrets WHERE name = 'cron_secret' LIMIT 1) || '", "Content-Type": "application/json"}')::jsonb,
+        headers:=jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', replace((SELECT secret FROM vault.decrypted_secrets WHERE name = 'cron_secret' LIMIT 1), chr(10), '')),
         body:='{"timeframe": "4h"}'::jsonb,
         timeout_milliseconds:=300000
     );
@@ -48,7 +48,7 @@ SELECT cron.schedule(
     $$
     select net.http_post(
         url:='https://ktezlusdkqlfdwqrldtn.supabase.co/functions/v1/research-run',
-        headers:=('{"Authorization": "Bearer ' || (SELECT secret FROM vault.decrypted_secrets WHERE name = 'cron_secret' LIMIT 1) || '", "Content-Type": "application/json"}')::jsonb,
+        headers:=jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', replace((SELECT secret FROM vault.decrypted_secrets WHERE name = 'cron_secret' LIMIT 1), chr(10), '')),
         body:='{"timeframe": "1d"}'::jsonb,
         timeout_milliseconds:=300000
     );
@@ -62,7 +62,7 @@ SELECT cron.schedule(
     $$
     select net.http_post(
         url:='https://ktezlusdkqlfdwqrldtn.supabase.co/functions/v1/daily-drip-campaign',
-        headers:=('{"Authorization": "Bearer ' || (SELECT secret FROM vault.decrypted_secrets WHERE name = 'cron_secret' LIMIT 1) || '"}')::jsonb,
+        headers:=jsonb_build_object('x-cron-secret', replace((SELECT secret FROM vault.decrypted_secrets WHERE name = 'cron_secret' LIMIT 1), chr(10), '')),
         timeout_milliseconds:=300000
     );
     $$

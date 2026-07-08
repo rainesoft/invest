@@ -29,7 +29,7 @@ serve(async (req) => {
   const { data: openSignals, error: fetchError } = await supabase
     .from("trade_opportunities")
     .select("*")
-    .eq("status", "APPROVED");
+    .eq("status", "PUBLISHED");
 
   if (fetchError || !openSignals || openSignals.length === 0) {
     return new Response(JSON.stringify({ ok: true, message: "No active signals to evaluate" }), { status: 200 });

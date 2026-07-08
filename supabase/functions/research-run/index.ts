@@ -7,7 +7,7 @@ import { isMarketOpen } from "../_shared/market.ts";
 import { netEdge, transactionCost, slippage } from "../../../packages/strategy/index.ts";
 import { getContextSnapshot, LogicContext, calculatePivotPoints } from "../../../packages/strategy/indicators.ts";
 import { validateGlobalSignal } from "../../../packages/strategy/riskManager.ts";
-import { fetchMacroEvents } from "../_shared/news.ts";
+import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews } from "../_shared/news.ts";
 import { sizeWithRiskCaps } from "../../../packages/risk/index.ts";
 import OpenAI from "npm:openai";
 
@@ -106,28 +106,33 @@ You MUST respond strictly with a raw JSON object matching the exact schema below
 }
 
 [RISK EVALUATION RULES]
-1. DYNAMIC STRATEGY SELECTION: Do not default to pullbacks. First, identify the market structure. If the asset is trending heavily (Price > 50 & 200 EMA), prioritize MOMENTUM_CONTINUATION setups using minor retracements. If the asset is trapped between major support and resistance, prioritize MEAN_REVERSION setups targeting the range boundaries.
-2. THE 'EMPTY AIR' CHECK: Before suggesting a direction, evaluate the distance to the next major liquidity zone. If the current price is floating in 'empty air' midway between support and resistance, you MUST normally reject the setup. EXCEPTION: If the asset is in a powerful trend (e.g. adx_14 > 25), you are permitted to take Momentum Continuation trades at market price even in empty air.
+1. DYNAMIC STRATEGY SELECTION: Identify the market structure accurately. 
+   - If trending heavily (Price > 50 & 200 EMA), prioritize MOMENTUM_CONTINUATION setups using minor retracements. 
+   - If the market is in a CHOP or RANGE regime (trend_alignment is CHOP), you MUST prioritize MEAN_REVERSION setups targeting the range boundaries (Buy at Support, Sell at Resistance).
+2. THE 'EMPTY AIR' CHECK: Before suggesting a direction, evaluate the distance to the next major liquidity zone. If the current price is floating in 'empty air' midway between support and resistance, do NOT reject the setup automatically! Instead, originate a pending Limit Order (Buy Limit or Sell Limit) exactly at the nearest major support or resistance level to catch the reversion.
 3. STOP LOSS & VOLATILITY (ATR): The snapshot provides \`safe_long_stop_loss\`, \`safe_short_stop_loss\`, and \`atr_14\`. 
-   - MANDATORY ATR OVERRIDE: First, calculate the structural stop loss (the price where the setup is invalidated). Then, calculate the ATR-based volatility stop: \`Entry - (1.5 * atr_14)\` for Longs or \`Entry + (1.5 * atr_14)\` for Shorts. Your \`suggested_stop_loss\` MUST be the TIGHTER of these two values (i.e., the one closest to entry). If you are forced to use the ATR volatility stop instead of the structural stop, you MUST downgrade your confidence_score by 10 points (e.g., A-Tier 80 becomes B-Tier 70) to reflect the reduced structural protection.
-   - MAX STOP LOSS LIMIT: Your calculated stop loss MUST NEVER exceed a distance of \`3.0 * atr_14\` from the suggested entry price. If the tighter stop still exceeds 3x ATR, the setup is mathematically untradeable. REJECT it by setting recommended_direction to NONE.
-   - If the structural stop required is greater than 4x the ATR, the setup is mathematically untradeable. REJECT it by setting recommended_direction to NONE.
-4. FUNDAMENTAL REALITY CHECK: You MUST heavily weigh the provided \`fundamental_context\`. If significant macro news opposes the technical setup, REJECT the setup immediately. 
+   - TIGHT LOCAL STRUCTURE: Place your structural Stop Loss behind immediate lower-timeframe structure (e.g., the local 4H swing low or immediate support) rather than distant Daily macro support. This is critical to maintain a high Risk:Reward ratio.
+   - MANDATORY ATR OVERRIDE: First, calculate the structural stop loss. Then, calculate the ATR-based volatility stop: \`Entry - (1.5 * atr_14)\` for Longs or \`Entry + (1.5 * atr_14)\` for Shorts. Your \`suggested_stop_loss\` MUST be the TIGHTER of these two values (i.e., the one closest to entry). If you are forced to use the ATR volatility stop instead of the structural stop, downgrade your confidence_score slightly.
+   - MAX STOP LOSS LIMIT: Your calculated stop loss MUST NEVER exceed a distance of \`3.0 * atr_14\` from the suggested entry price. If it does, adjust your entry price closer to the structural invalidation point.
+4. FUNDAMENTAL REALITY CHECK: You MUST heavily weigh the provided \`fundamental_context\`. 
+   - [LIVE BREAKING NEWS]: If the \`fundamental_context\` contains live breaking headlines indicating sudden geopolitical shocks (e.g., airstrikes, war), severe equity sector fatigue (e.g., tech sell-off), or unannounced macroeconomic shifts that oppose the technical trend, you MUST abort the setup and return status: "REJECTED".
    - [CRITICAL MACRO DIRECTIVE]: If the technical setup is strong (B-Tier or A-Tier) and aligns perfectly with a High-Impact fundamental catalyst in the \`fundamental_context\`, you MUST upgrade your confidence to S-Tier (90+).
    - If no major news exists, explicitly note that the market is driven by technicals, but NEVER say 'Without fundamental context'.
-   - Do NOT invent generic macro platitudes (like 'geopolitical tensions' or 'inflation'). If you assess the macro environment, focus on the actual dominant drivers pushing the asset's current trend (e.g. hawkish Fed policy, strong DXY causing a massive drop).
-   - If fundamental reality is BEARISH, REJECT any LONG setups. If BULLISH, REJECT any SHORT setups.
-5. COUNTER-TREND MOMENTUM CHECK: 
-   - Strict Technical Definitions: Price > 50 EMA and > 200 EMA = BULLISH momentum. Price < 50 EMA and < 200 EMA = BEARISH momentum. Do not contradict this.
-   - Do not blindly buy assets that are crashing well below both the 50 EMA and 200 EMA just because RSI is low. REJECT long setups if the asset is in heavy bearish momentum unless price is within 0.1% to 0.25% of a major, higher-timeframe support level.
+5. COUNTER-TREND MOMENTUM CHECK (MEAN REVERSION): 
+   - Strict Technical Definitions: Price > 50 EMA and > 200 EMA = BULLISH momentum. Price < 50 EMA and < 200 EMA = BEARISH momentum.
+   - DEEP PULLBACK BUYS: If an asset is crashing well below its EMAs (Bearish momentum), do NOT automatically reject long setups! If price is approaching a major higher-timeframe support level or Bollinger Band lower bound, issue a Buy Limit order at that structural floor.
+   - EXHAUSTION SHORTS: If an asset is ripping parabolically well above its EMAs (Bullish momentum), do NOT automatically reject short setups! If price is approaching a major higher-timeframe resistance level or Bollinger Band upper bound, issue a Sell Limit order at that structural ceiling.
 6. INSTITUTIONAL TONE: 
-   - Never use apologetic, weak, or observational phrasing regarding missing data. If fundamental data is missing, do NOT claim there is a "lack of fundamental catalysts" (as macro is always active). Instead, dictate authoritatively: "Without fundamental context, this must be treated as a purely technical setup."
-   - Write with bulletproof brevity. Do NOT repeat your rationale. Never state the moving average conditions (price above 50/200 EMA) or RSI targets multiple times in the same output. Combine your thoughts into a single, sharp thesis.
-7. MULTI-TIMEFRAME ALIGNMENT: You are provided with the 'htf_trend' (Daily macro trend). You MUST NEVER suggest a setup that fights the Daily trend unless there is a devastating, top-tier fundamental catalyst reversing the market. If 4H is BULLISH but 1D is BEARISH, REJECT the setup (NONE).
-8. BOLLINGER BAND EXHAUSTION: You are provided with 'bb_upper' and 'bb_lower'. NEVER suggest a LONG entry if the current price is at or above 'bb_upper' (overbought). NEVER suggest a SHORT entry if the price is at or below 'bb_lower' (oversold). Wait for mean reversion.
+   - Never use apologetic, weak, or observational phrasing regarding missing data. Write with bulletproof brevity. Do NOT repeat your rationale. Combine your thoughts into a single, sharp thesis.
+7. MULTI-TIMEFRAME ALIGNMENT (COUNTER-TREND PULLBACKS): You are provided with the 'htf_trend' (Daily macro trend). You generally want to align with it. HOWEVER, if the 4H setup contradicts the Daily trend, you MAY originate a "Counter-Trend Pullback" trade IF AND ONLY IF you limit the confidence score to B-Tier (80 max) and mandate a tighter structural stop loss (max 1.5 * atr_14).
+8. BOLLINGER BAND EXHAUSTION (LIMIT ORDERS): You are provided with 'bb_upper' and 'bb_lower'. NEVER suggest a Market Entry LONG if the current price is at or above 'bb_upper'. NEVER suggest a Market Entry SHORT if the price is at or below 'bb_lower'. INSTEAD, use the \`execution_trigger\` to prescribe a pending LIMIT ORDER at the 50 EMA or the nearest Support/Resistance level to catch the pullback.
 9. RSI DYNAMICS IN TRENDS: In a strong uptrend (Price > 50 EMA and > 200 EMA), the daily RSI rarely drops all the way to 30. A pullback to the 40-45 range is typically sufficient to reset momentum. Do NOT demand a drop to 30 if the asset is in heavy bullish momentum.
-10. DIRECTIONAL MATH & SUPPORT VALIDATION: You MUST perform basic directional math. If Current Price < Support, the support has been BROKEN and is now Resistance. If Current Price > Resistance, it is now Support. Do not suggest a "pullback to support" if price has already broken below it. If structural support has failed, a pullback entry is invalid unless price fully reclaims the level.
-11. MOMENTUM CONTINUATION ENTRY LOGIC: Never recommend 'immediate market entry' directly underneath a major swing high or resistance. You must either recommend a pullback to a moving average/support, or a pending breakout (Buy Stop/Sell Stop) just beyond the structure. Avoid buying the local top.
+10. DIRECTIONAL MATH & SUPPORT VALIDATION: You MUST perform basic directional math. If Current Price < Support, the support has been BROKEN and is now Resistance. If Current Price > Resistance, it is now Support. Do not suggest a "pullback to support" if price has already broken below it.
+11. MOMENTUM CONTINUATION ENTRY LOGIC: Never recommend 'immediate market entry' directly underneath a major swing high or resistance. You must either recommend a pullback limit order to a moving average/support, or a pending breakout (Buy Stop/Sell Stop) just beyond the structure. Avoid buying the local top.
+12. STRICT STRUCTURAL TARGETS & RISK:REWARD: You MUST output a \`suggested_take_profit\` that matches the exact structural target (e.g. major support/resistance) identified in your rationale. 
+    - MINIMUM VIABLE TARGET: If your intended structural Take Profit target does not yield at least a 1:1.5 distance relative to your Stop Loss, you MUST project the Take Profit to the next major liquidity zone above it, or abort the trade by returning status: 'REJECTED'. We do not take trades with poor R:R profiles.
+13. FRONT-RUNNING LIMIT ORDERS (ENTRY PRICING): When suggesting a Buy Limit at support or a Sell Limit at resistance, do NOT place the exact entry price at the absolute extreme of the structural level. Markets frequently front-run major levels. You MUST adjust your Limit Order slightly closer to the current price (e.g., front-running the support/resistance by 10-20% of the daily ATR) to ensure the order actually gets filled during a shallow pullback.
+
 Current Market Context:
 ${JSON.stringify(snapshot, null, 2)}`;
 
@@ -189,6 +194,79 @@ ${JSON.stringify(snapshot, null, 2)}`;
   return JSON.parse(content);
 }
 
+async function revalidateOpportunity(signal: any, snapshot: LogicContext, newsContext: string | null) {
+  const openaiKey = Deno.env.get("OPENAI_API_KEY");
+  const azureKey = Deno.env.get("AZURE_OPENAI_API_KEY");
+  
+  let openai: OpenAI;
+  if (openaiKey) {
+    openai = new OpenAI({ apiKey: openaiKey });
+  } else if (azureKey) {
+    openai = new OpenAI({
+      apiKey: azureKey,
+      baseURL: `${Deno.env.get("AZURE_OPENAI_ENDPOINT")}/openai/deployments/${Deno.env.get("AZURE_OPENAI_DEPLOYMENT")}`,
+      defaultQuery: { "api-version": Deno.env.get("AZURE_OPENAI_API_VERSION") || "2023-07-01-preview" },
+      defaultHeaders: { "api-key": azureKey }
+    });
+  } else {
+    throw new Error("No OpenAI or Azure OpenAI keys found");
+  }
+
+  const systemPrompt = `You are a Senior Risk Officer re-evaluating a previously published trading signal.
+Your job is to determine if the original thesis is still valid given the NEW live market snapshot and NEW breaking news context.
+
+[ORIGINAL SIGNAL THESIS]
+Symbol: ${signal.symbol}
+Direction: ${signal.side}
+Thesis: ${signal.ai_summary}
+
+[NEW LIVE CONTEXT]
+Current Price: ${snapshot.current_price}
+Breaking News & Macro: ${newsContext || "No major macro events."}
+
+[VALIDATION RULES]
+1. MACRO CONTRADICTION: If the new breaking news fundamentally contradicts the original thesis (e.g. a 'risk-off' geopolitical shock occurs but the signal is LONG equities), you MUST reject the signal.
+2. TECHNICAL INVALIDATION: If the current price has crossed the suggested stop loss, the setup is mathematically dead. Reject it.
+3. If the thesis remains completely valid and supported by the new context, keep it valid.
+
+You MUST respond strictly with a raw JSON object:
+{
+  "is_valid": boolean,
+  "rejection_reason": "If invalid, concisely explain why the new context destroys the thesis. If valid, return null."
+}`;
+
+  const userPrompt = `Re-evaluate the ${signal.symbol} signal.`;
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt }
+    ],
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "revalidation",
+        schema: {
+          type: "object",
+          properties: {
+            is_valid: { type: "boolean" },
+            rejection_reason: { type: ["string", "null"] }
+          },
+          required: ["is_valid", "rejection_reason"],
+          additionalProperties: false
+        },
+        strict: true
+      }
+    },
+    temperature: 0.1
+  });
+
+  const content = response.choices[0].message.content;
+  if (!content) throw new Error("No content returned from AI");
+  return JSON.parse(content);
+}
+
 /**
  * Research run generates simple trade opportunities for one or more symbols.
  *
@@ -206,7 +284,7 @@ serve(async (req) => {
   const modelVersion = searchParams.get("model_version") ?? undefined;
   const newsContext = searchParams.get("news") ?? undefined;
   const symbolsParam =
-    searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "XAUUSD,XAGUSD,BTCUSD,UKOIL";
+    searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "XAUUSD,XAGUSD,BTCUSD,UKOIL,EURUSD,GBPUSD,USDJPY,US30,NAS100";
   const symbols = symbolsParam.split(",").map((s) => s.trim()).filter(Boolean);
 
   const url = Deno.env.get("SUPABASE_URL");
@@ -247,11 +325,84 @@ serve(async (req) => {
         console.log(`[Research Run] Starting pipeline for symbols: ${symbols.join(", ")}`);
         sendEvent({ type: 'progress', message: `Starting analysis pipeline for: ${symbols.join(", ")}` });
         
-        for (const symbol of symbols) {
-          if (isCron && !isMarketOpen(symbol)) {
+        let allEvents = null;
+        if (!newsContext) {
+          sendEvent({ type: 'progress', message: `[Macro Data] Fetching global economic calendar...` });
+          allEvents = await fetchAllMacroEvents();
+        }
+
+        // ==========================================
+        // PHASE 1: ACTIVE SIGNAL VALIDATION SWEEP
+        // ==========================================
+        console.log(`[Phase 1] Sweeping active PUBLISHED signals for revalidation...`);
+        sendEvent({ type: 'progress', message: `[Phase 1] Validating active signals against live market conditions...` });
+        
+        const { data: activeSignals } = await supabase
+          .from("trade_opportunities")
+          .select("*")
+          .eq("status", "PUBLISHED");
+
+        if (activeSignals && activeSignals.length > 0) {
+          for (const signal of activeSignals) {
+            try {
+              // 1. Math Validation (TTL)
+              const hoursElapsed = (Date.now() - new Date(signal.created_at).getTime()) / (1000 * 60 * 60);
+              if (hoursElapsed > 24) {
+                await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: "Expired: 24h TTL exceeded without execution." }).eq("id", signal.id);
+                console.log(`[Validation] REJECTED ${signal.symbol}: 24h TTL expired.`);
+                continue;
+              }
+
+              // 2. Fetch Live Snapshot
+              const result = await fetchPaperBars(signal.symbol, signal.timeframe);
+              const snapshot = getContextSnapshot(
+                result.bars.map((b: any) => b.t),
+                result.bars.map((b: any) => b.h),
+                result.bars.map((b: any) => b.l),
+                result.bars.map((b: any) => b.c)
+              );
+
+              // 3. Math Validation (Stop Loss Hit)
+              const stopLoss = signal.stop_plan_json?.stop;
+              if (stopLoss) {
+                if ((signal.side === 'LONG' && snapshot.current_price <= stopLoss) || 
+                    (signal.side === 'SHORT' && snapshot.current_price >= stopLoss)) {
+                  await supabase.from("trade_opportunities").update({ status: "LOST", r_multiple: -1, ai_risks: "Technical Invalidation: Stop Loss crossed." }).eq("id", signal.id);
+                  console.log(`[Validation] LOST ${signal.symbol}: Stop loss crossed by live price.`);
+                  continue;
+                }
+              }
+
+              // 4. Fundamental / AI Revalidation
+              let currentContext = newsContext;
+              if (!currentContext) {
+                const headlines = await fetchRealtimeNews(signal.symbol);
+                currentContext = generateMacroContext(signal.symbol, allEvents, headlines);
+              }
+              
+              const evalResult = await revalidateOpportunity(signal, snapshot, currentContext);
+              
+              if (!evalResult.is_valid) {
+                await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Invalidated by AI Risk Officer: ${evalResult.rejection_reason}` }).eq("id", signal.id);
+                console.log(`[Validation] REJECTED ${signal.symbol} by AI: ${evalResult.rejection_reason}`);
+              } else {
+                console.log(`[Validation] VALID ${signal.symbol}: Thesis remains intact.`);
+              }
+            } catch (err: any) {
+               console.error(`[Validation Error] Failed to revalidate ${signal.symbol}:`, err.message);
+            }
+          }
+        }
+        // ==========================================
+
+        const chunkSize = 2;
+        for (let i = 0; i < symbols.length; i += chunkSize) {
+          const chunk = symbols.slice(i, i + chunkSize);
+          await Promise.all(chunk.map(async (symbol) => {
+            if (isCron && !isMarketOpen(symbol)) {
             console.log(`[Market Hours] Skipping ${symbol}: Market is closed.`);
             sendEvent({ type: 'progress', message: `[Market Hours] Skipping ${symbol}: Market is closed.` });
-            continue;
+            return;
           }
           try {
             await insertAuditLog(supabase, {
@@ -282,16 +433,17 @@ serve(async (req) => {
                 reason: `Data Fetch Error: ${err.message}`,
                 layer: "Data"
               });
-              continue;
+              return;
             }
             
             console.log(`\n[Info] [Data Fetch] Successfully fetched ${bars.length} bars from ${source} for ${symbol}.`);
             sendEvent({ type: 'progress', message: `[Data Fetch] Successfully acquired ${bars.length} data points from ${source}.` });
 
             // Store fetched bars in PTI database asynchronously
-            saveBars(supabase, symbol, timeframe, bars).catch(err => 
-              console.error(`[Error] Failed to save bars for ${symbol}:`, err)
-            );
+            // [TEMPORARILY DISABLED] This is causing WORKER_RESOURCE_LIMIT due to thousands of unawaited N+1 queries.
+            // saveBars(supabase, symbol, timeframe, bars).catch(err => 
+            //   console.error(`[Error] Failed to save bars for ${symbol}:`, err)
+            // );
 
             // LAYER A: Deterministic Evaluation Guard
             sendEvent({ type: 'progress', message: `[Layer A: Deterministic Guard] Evaluating mathematical momentum and regime...` });
@@ -339,8 +491,8 @@ serve(async (req) => {
             // Inject macro context if provided via URL params
             let fundamental_context = newsContext;
             if (!fundamental_context) {
-              sendEvent({ type: 'progress', message: `[Macro Data] Fetching economic calendar catalysts for ${symbol}...` });
-              fundamental_context = await fetchMacroEvents(symbol);
+              const headlines = await fetchRealtimeNews(symbol);
+              fundamental_context = generateMacroContext(symbol, allEvents, headlines);
             }
 
             const snapshot = {
@@ -353,7 +505,7 @@ serve(async (req) => {
             const tfMinutes: Record<string, number> = { '1H': 60, '4H': 240, '1D': 1440 };
             const candleDurationMs = (tfMinutes[timeframe.toUpperCase()] || 240) * 60 * 1000;
             const { data: recentIsolation } = await supabase
-              .from('audit_logs')
+              .from('audit_log')
               .select('created_at')
               .eq('action', 'REJECTED_BY_RISK_PRE_AI')
               .eq('entity_type', 'research')
@@ -365,7 +517,7 @@ serve(async (req) => {
               console.log(`[Pre-AI Guard] Cached skip for ${symbol}: Already isolated within this ${timeframe} candle.`);
               sendEvent({ type: 'progress', message: `[Pre-AI Guard] Cached skip for ${symbol}: Isolated this candle.` });
               rejections.push({ symbol, reason: 'Cached isolation skip (already checked this candle)', layer: 'Pre-AI Guard' });
-              continue;
+              return;
             }
 
             sendEvent({ type: 'progress', message: `[Pre-AI Guard] Validating global signal constraints for ${symbol}...` });
@@ -386,27 +538,16 @@ serve(async (req) => {
                 layer: "Pre-AI Guard"
               });
               // We skip AI evaluation entirely and DO NOT save a database signal to prevent C-Tier spam in the Vault
-              continue;
+              return;
             }
 
             console.log(`[Strategy Eval] Market snapshot for ${symbol}: Trend=${snapshot.trend_alignment}, RSI=${snapshot.rsi_14.toFixed(2)}, CurrentPrice=${snapshot.current_price}`);
             
             // LAYER A: Deterministic Guard
-            if (snapshot.trend_alignment === 'CHOP') {
-              console.log(`[Layer A: Deterministic Guard] REJECTED ${symbol}: Market is in CHOP regime. No clear trend.`);
-              sendEvent({ type: 'progress', message: `[Layer A: Deterministic Guard] REJECTED ${symbol}: Market is in CHOP regime.` });
-              await insertAuditLog(supabase, {
-                actor_type: "SYSTEM",
-                action: "RESEARCH_HALTED",
-                entity_type: "research",
-                payload_json: { symbol, reason: "CHOP_REGIME", context: snapshot },
-              });
-              rejections.push({
-                symbol,
-                reason: "Deterministic Guard: Market is in CHOP regime. No clear trend.",
-                layer: "A"
-              });
-              continue;
+            // [MODIFIED]: CHOP regimes now bypass the halt and proceed to the AI for Mean Reversion evaluation.
+            if ((snapshot.trend_alignment as string) === 'UNTRADEABLE') {
+              // Reserve for future hard mathematical rejects (e.g. extreme volatility halts)
+              return;
             }
 
             // --- AI MEMORY CALIBRATION ---
@@ -447,7 +588,7 @@ serve(async (req) => {
                 reason: `AI Evaluation Error: ${err.message}`,
                 layer: "B"
               });
-              continue;
+              return;
             }
 
             let is_valid = evaluation.recommended_direction !== "NONE";
@@ -456,8 +597,8 @@ serve(async (req) => {
               ? (snapshot.trend_alignment.startsWith('BULLISH') ? 'LONG' : 'SHORT') 
               : evaluation.recommended_direction;
             
-            let entry_price = evaluation.execution_parameters?.suggested_entry_price || snapshot.current_price;
-            let stop_loss = evaluation.execution_parameters?.suggested_stop_loss || (dbSide === "LONG" ? snapshot.safe_long_stop_loss : snapshot.safe_short_stop_loss);
+            let entry_price = Number((evaluation.execution_parameters?.suggested_entry_price || snapshot.current_price).toFixed(3));
+            let stop_loss = Number((evaluation.execution_parameters?.suggested_stop_loss || (dbSide === "LONG" ? snapshot.safe_long_stop_loss : snapshot.safe_short_stop_loss)).toFixed(3));
             let raw_confidence = evaluation.confidence_score || 50;
             const confidence_score = raw_confidence <= 1.0 ? raw_confidence * 100 : raw_confidence;
             let tier = "C-Tier";
@@ -497,32 +638,45 @@ serve(async (req) => {
                 layer: "Cognitive AI"
               });
 
-              if (is_valid) {
-                await supabase.from("trade_opportunities").insert({
-                  symbol,
-                  side: dbSide,
-                  timeframe: timeframe.toLowerCase(),
-                  status: "REJECTED",
-                  ai_summary: rejectReason,
-                  ai_risks: "Rejected by AI Risk Officer",
-                  model_id: modelId,
-                  model_version: modelVersion,
-                  risk_summary: `RSI ${snapshot.rsi_14}`,
-                  confidence: confidence_score
-                });
-              }
-              continue;
+              await supabase.from("trade_opportunities").insert({
+                symbol,
+                side: dbSide,
+                timeframe: timeframe.toLowerCase(),
+                status: "REJECTED",
+                ai_summary: rejectReason,
+                ai_risks: "Rejected by AI Risk Officer",
+                model_id: modelId,
+                model_version: modelVersion,
+                risk_summary: `RSI ${snapshot.rsi_14}`,
+                confidence: confidence_score
+              });
+              return;
             }
 
             console.log(`[Layer B: Cognitive Guard] APPROVED ${symbol} by AI Risk Officer.`);
             sendEvent({ type: 'progress', message: `[Layer B: Cognitive Guard] APPROVED by AI Risk Officer.` });
 
-            // LAYER C: Deterministic Risk/Reward Math (Force exactly 1:2 R:R)
+            // LAYER C: Structural Risk/Reward Validation
             const risk = Math.abs(entry_price - stop_loss);
-            const take_profit = Number((dbSide === 'LONG' ? entry_price + (risk * 2) : entry_price - (risk * 2)).toFixed(5));
+            let take_profit = evaluation.execution_parameters?.suggested_take_profit;
+            if (take_profit) take_profit = Number(take_profit.toFixed(3));
+            
+            if (!take_profit) {
+               console.log(`[Layer C: Execution Desk] REJECTED ${symbol}: AI failed to provide a structural take profit.`);
+               rejections.push({ symbol, reason: "Missing Take Profit parameter", layer: "Execution Desk" });
+               return;
+            }
 
-            // Append deterministic math to AI rationale
-            institutional_rationale += ` Execution Math: Take Profit perfectly aligned at ${take_profit} for a guaranteed 1:2.0 Risk:Reward ratio.`;
+            const reward = Math.abs(take_profit - entry_price);
+            const rrRatio = reward / risk;
+
+            if (rrRatio < 1.20) {
+               console.log(`[Layer C: Execution Desk] WARNING ${symbol}: R:R ratio (${rrRatio.toFixed(2)}) is below 1.2 optimal threshold, but publishing anyway.`);
+               institutional_rationale += ` [NOTE: Structural Risk:Reward is suboptimal at 1:${rrRatio.toFixed(1)}.]`;
+            }
+
+            // Append actual math to AI rationale
+            institutional_rationale += ` Execution Math: Structural target set at ${take_profit} yielding a 1:${rrRatio.toFixed(1)} Risk:Reward ratio.`;
 
             // AI is now a pure signal generator. We don't calculate user-specific volume or riskAmount here.
             
@@ -565,7 +719,7 @@ serve(async (req) => {
                 model_version: modelVersion,
                 risk_summary: `RSI ${snapshot.rsi_14}`
               });
-              continue;
+              return;
             }
             
             console.log(`[Layer C: Execution Desk] APPROVED ${symbol}: Generating pending opportunity...`);
@@ -586,10 +740,10 @@ serve(async (req) => {
                 symbol,
                 side: dbSide,
                 timeframe: timeframe.toLowerCase(),
-                status: "PENDING_APPROVAL",
-                order_type,
+                status: "APPROVED",
                 entry_plan_json: {
                   price: entry_price,
+                  order_type: order_type
                 },
                 stop_plan_json: { stop: stop_loss, initial: stop_loss, atr: snapshot.atr_14 },
                 take_profit_json: { tp: take_profit },
@@ -609,93 +763,8 @@ serve(async (req) => {
               
               // order_type is now pre-calculated and saved to the database!
 
-              // ==========================================
-              // AUTO-TRADING EXECUTION
-              // ==========================================
-              try {
-                // 1. Fetch user risk settings for auto-trading
-                const { data: usersToAutoTrade } = await supabase
-                  .from('user_risk_settings')
-                  .select('*')
-                  .eq('auto_trade_enabled', true)
-                  .contains('auto_trade_tiers', [tier]);
-
-                if (usersToAutoTrade && usersToAutoTrade.length > 0) {
-                  console.log(`[Auto-Trade] Found ${usersToAutoTrade.length} users with auto-trade enabled for ${tier}.`);
-                  
-                  let executedAny = false;
-
-                  for (const settings of usersToAutoTrade) {
-                    try {
-                      // 2. Fetch User-Specific Risk Caps
-                      const baseEquity = Number(settings.portfolio_capital ?? Deno.env.get('STARTING_EQUITY_USD') ?? '100000');
-                      const perTradePct = Number(settings.risk_per_trade_pct ?? 0.01);
-                      const [{ data: dayPnl }, { data: weekPnl }, { data: portfolioPnl }] = await Promise.all([
-                          supabase.rpc('day_pnl', { p_user_id: settings.user_id }),
-                          supabase.rpc('week_pnl', { p_user_id: settings.user_id }),
-                          supabase.rpc('portfolio_pnl', { p_user_id: settings.user_id }),
-                      ]);
-                      const dayRiskUSD = Math.abs(Number(dayPnl) || 0);
-                      const weekRiskUSD = Math.abs(Number(weekPnl) || 0);
-                      const equityUSD = baseEquity + (Number(portfolioPnl) || 0);
-                      const atrUSD = Math.abs(entry_price - stop_loss);
-
-                      // 3. Size Position
-                      const allowedQty = sizeWithRiskCaps(equityUSD, atrUSD, dayRiskUSD, weekRiskUSD, perTradePct, 0.02, 0.05, Number(settings.max_volume_per_trade ?? 50));
-
-                      if (allowedQty > 0) {
-                        console.log(`[Auto-Trade] Executing ${allowedQty} units for ${symbol} (User: ${settings.user_id})`);
-                        
-                        // 4. Create Trades record
-                        const { data: tradeRow, error: tradeErr } = await supabase
-                          .from('trades')
-                          .insert({ opportunity_id: data.id, symbol, side: dbSide, qty: allowedQty, user_id: settings.user_id })
-                          .select('id')
-                          .single();
-
-                        if (!tradeErr && tradeRow) {
-                          // 5. Audit Log
-                          await insertAuditLog(supabase, {
-                            actor_type: 'SYSTEM', actor_id: settings.user_id, action: 'APPROVE_OPPORTUNITY', entity_type: 'opportunity', entity_id: data.id,
-                            payload_json: { qty: allowedQty, equityUSD, atrUSD, dayRiskUSD, weekRiskUSD, is_auto_trade: true },
-                          });
-
-                          // 6. Execute Order via MetaApi or Alpaca
-                          let execType: 'market' | 'limit' | 'stop' = 'market';
-                          if (order_type.includes('LIMIT')) execType = 'limit';
-                          else if (order_type.includes('STOP')) execType = 'stop';
-
-                          await placePaperOrder({
-                            symbol,
-                            side: dbSide === 'LONG' ? 'buy' : 'sell',
-                            qty: allowedQty,
-                            type: execType,
-                            limitPrice: execType === 'limit' ? entry_price : undefined,
-                            stopPrice: execType === 'stop' ? entry_price : undefined,
-                            stopLoss: stop_loss,
-                            takeProfit: take_profit
-                          }, supabase, settings);
-
-                          executedAny = true;
-                          console.log(`[Auto-Trade] Successfully executed ${symbol} for user ${settings.user_id}`);
-                        }
-                      } else {
-                        console.log(`[Auto-Trade] Skipped ${symbol} for user ${settings.user_id}: Risk Caps Exceeded (Allowed Qty: 0)`);
-                      }
-                    } catch (userErr: any) {
-                      console.error(`[Auto-Trade] Execution Failed for ${symbol} on user ${settings.user_id}: ${userErr.message}`);
-                    }
-                  }
-
-                  if (executedAny) {
-                    // 7. Mark as APPROVED if at least one user successfully executed
-                    await supabase.from('trade_opportunities').update({ status: 'APPROVED' }).eq('id', data.id);
-                  }
-                }
-              } catch (autoErr: any) {
-                console.error(`[Auto-Trade] System Error: ${autoErr.message}`);
-              }
-              // ==========================================
+              // Execution is now entirely delegated to the exness-executor webhook, 
+              // which automatically listens for INSERTs with status: 'APPROVED'.
 
               results.push({ 
                 symbol, 
@@ -708,14 +777,14 @@ serve(async (req) => {
 
               await insertAuditLog(supabase, {
                 actor_type: "SYSTEM",
-                action: "OPPORTUNITY_CREATED",
-                entity_type: "trade_opportunity",
+                action: "TRADE_SIGNAL_APPROVED",
+                entity_type: "research",
                 entity_id: data.id,
-                payload_json: { symbol, timeframe, model_id: modelId, model_version: modelVersion },
+                payload_json: { symbol, rationale: institutional_rationale, execution: { order_type, entry_price, stop_loss, take_profit } },
               });
             } else if (error) {
-              console.error(`[Database Error] Failed to insert opportunity for ${symbol}: ${error.message}`);
-              sendEvent({ type: 'progress', message: `[Database Error] ${error.message}` });
+              console.error(`[Layer C: Execution Desk] FATAL DB ERROR for ${symbol}: ${error.message}`);
+              sendEvent({ type: 'progress', message: `[Database] Failed to save signal for ${symbol}: ${error.message}` });
             }
           } catch (globalErr: any) {
             console.error(`[Global Error] Unexpected error processing ${symbol}: ${globalErr.message}`);
@@ -725,9 +794,10 @@ serve(async (req) => {
               reason: `System Error: ${globalErr.message}`,
               layer: "System"
             });
-            continue;
+            return;
           }
-        }
+        }));
+      }
 
         sendEvent({ type: 'complete', opportunities: results, rejections });
         return { opportunities: results, rejections };

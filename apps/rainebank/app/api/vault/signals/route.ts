@@ -27,77 +27,35 @@ export async function GET(request: Request) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // Fetch subscription tier
-  const { data: sub, error: subError } = await adminClient
-    .from('user_subscriptions')
-    .select('plan_tier, status')
+  // Fetch user's executed trades
+  const { data, count, error } = await adminClient
+    .from('trades')
+    .select('*, trade_opportunities(*)', { count: 'exact' })
     .eq('user_id', user.id)
-    .single();
+    .order('opened_at', { ascending: false })
+    .range(from, to);
 
-  console.log('[DEBUG /api/vault/signals]', { userId: user.id, sub, subError });
-
-  const is_pro = (sub?.plan_tier === 'alpha' || sub?.plan_tier === 'pro') && sub?.status === 'active';
-
-  if (is_pro) {
-    // PRO USER: Unrestricted access to real-time opportunities
-    let query = adminClient
-      .from('trade_opportunities')
-      .select('*', { count: 'exact' })
-      .or('is_archived.eq.false,is_archived.is.null')
-      .order('created_at', { ascending: false })
-      .range(from, to);
-
-    if (hideRejected) {
-      query = query.neq('status', 'REJECTED');
-    }
-
-    const { data, count, error } = await query;
-      
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-    
-    return NextResponse.json({ 
-      signals: data, 
-      is_pro: true,
-      pagination: { total: count || 0, page, limit }
-    });
-  } else {
-    // FREE USER: 4-hour delay and masked metadata
-    const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
-    
-    let query = adminClient
-      .from('trade_opportunities')
-      // Note: intentionally excluding stop_plan_json, take_profit_json, entry_plan_json, and ai_summary
-      .select('id, symbol, side, timeframe, status, created_at', { count: 'exact' })
-      .lt('created_at', fourHoursAgo)
-      .or('is_archived.eq.false,is_archived.is.null')
-      .order('created_at', { ascending: false })
-      .range(from, to);
-
-    if (hideRejected) {
-      query = query.neq('status', 'REJECTED');
-    }
-
-    const { data, count, error } = await query;
-      
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-    
-    // We add explicit nulls so the frontend can type-check consistently
-    const maskedData = data.map((signal: any) => ({
-      ...signal,
-      entry_plan_json: null,
-      stop_plan_json: null,
-      take_profit_json: null,
-      ai_summary: null
-    }));
-    
-    return NextResponse.json({ 
-      signals: maskedData, 
-      is_pro: false,
-      pagination: { total: count || 0, page, limit }
-    });
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  // Map to VaultSignal expected by frontend
+  const mappedData = data.map((trade: any) => ({
+    id: trade.id,
+    symbol: trade.symbol,
+    side: trade.side,
+    timeframe: trade.trade_opportunities?.timeframe || 'Unknown',
+    status: trade.status,
+    created_at: trade.opened_at,
+    entry_plan_json: trade.trade_opportunities?.entry_plan_json,
+    stop_plan_json: trade.trade_opportunities?.stop_plan_json,
+    take_profit_json: trade.trade_opportunities?.take_profit_json,
+    ai_summary: trade.trade_opportunities?.ai_summary
+  }));
+
+  return NextResponse.json({ 
+    signals: mappedData, 
+    is_pro: true, // Legacy flag, true so full UI renders
+    pagination: { total: count || 0, page, limit }
+  });
 }
