@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { supabase } from '@lib/supabase';
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -95,6 +96,7 @@ function TrendBadge({ tier, structure, strategy }: { tier: string | null, struct
 
 export default function Page() {
   const client = supabase;
+  const router = useRouter();
   const [opps, setOpps] = useState<Opportunity[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<string | null>(null);
@@ -147,9 +149,12 @@ export default function Page() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Execution failed');
       
-      toast.success('Trade executed successfully!');
+      toast.success('Trade executed successfully! Redirecting to Ledger...');
       // Optimistically update status so the user knows they executed it
       setOpps(prev => prev.map(o => o.id === id ? { ...o, status: 'EXECUTED' } : o));
+      setTimeout(() => {
+        router.push('/dashboard');
+      }, 1000);
     } catch (err: any) {
       toast.error(`Error: ${err.message}`);
     } finally {
