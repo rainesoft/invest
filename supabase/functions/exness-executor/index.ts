@@ -96,10 +96,32 @@ serve(async (req) => {
       const riskPerTrade = Number(user.portfolio_capital) * Number(user.risk_per_trade_pct);
       const pointsAtRisk = Math.abs(entryPrice - stopLoss);
       
-      let volume = pointsAtRisk > 0 ? riskPerTrade / (pointsAtRisk * 100) : 0.01;
+      const contractSizes: Record<string, number> = {
+         "UKOIL": 1000,
+         "XAUUSD": 100,
+         "XAGUSD": 5000,
+         "US30": 1,
+         "NAS100": 1,
+         "SPX500": 1,
+         "GER30": 1,
+         "BTCUSD": 1,
+         "EURUSD": 100000,
+         "GBPUSD": 100000,
+         "USDJPY": 100000
+      };
+      const contractSize = contractSizes[signal.symbol] || 100000;
+      
+      let pointValueUsd = contractSize;
+      if (signal.symbol.endsWith('JPY')) {
+         pointValueUsd = contractSize / entryPrice;
+      } else if (signal.symbol === 'GER30') {
+         pointValueUsd = contractSize * 1.1; // EUR multiplier approx
+      }
+
+      let volume = pointsAtRisk > 0 ? riskPerTrade / (pointsAtRisk * pointValueUsd) : 0.01;
       volume = Math.max(0.01, Math.round(volume * 100) / 100);
 
-      const userRiskAmount = pointsAtRisk * volume * 100;
+      const userRiskAmount = pointsAtRisk * volume * pointValueUsd;
 
       // 2. Portfolio Heat Check
       const riskValidation = await validateUserExposure(supabase, user.user_id, userRiskAmount);
