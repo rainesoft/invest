@@ -307,7 +307,7 @@ export default function Page() {
               </div>
 
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '24px' }}>
-                {signal.status === 'PUBLISHED' ? (
+                {signal.status === 'APPROVED' ? (
                   <button 
                     onClick={() => handleExecute(signal.id)}
                     disabled={processing === signal.id}

@@ -29,10 +29,10 @@ export async function GET(request: Request) {
 
   // Fetch user's executed trades
   const { data, count, error } = await adminClient
-    .from('trades')
+    .from('user_trades')
     .select('*, trade_opportunities(*)', { count: 'exact' })
     .eq('user_id', user.id)
-    .order('opened_at', { ascending: false })
+    .order('created_at', { ascending: false })
     .range(from, to);
 
   if (error) {
@@ -46,7 +46,7 @@ export async function GET(request: Request) {
     side: trade.side,
     timeframe: trade.trade_opportunities?.timeframe || 'Unknown',
     status: trade.status,
-    created_at: trade.opened_at,
+    created_at: trade.created_at,
     entry_plan_json: trade.trade_opportunities?.entry_plan_json,
     stop_plan_json: trade.trade_opportunities?.stop_plan_json,
     take_profit_json: trade.trade_opportunities?.take_profit_json,

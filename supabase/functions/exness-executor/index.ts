@@ -77,7 +77,7 @@ serve(async (req) => {
     const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.new-york.agiliumtrade.ai";
 
     let actionType = "ORDER_TYPE_BUY";
-    const aiOrderType = (signal.order_type || "Market").toUpperCase();
+    const aiOrderType = (signal.entry_plan_json?.order_type || "Market").toUpperCase();
     
     if (aiOrderType.includes("BUY LIMIT")) actionType = "ORDER_TYPE_BUY_LIMIT";
     else if (aiOrderType.includes("SELL LIMIT")) actionType = "ORDER_TYPE_SELL_LIMIT";
