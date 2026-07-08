@@ -100,12 +100,13 @@ export default function Page() {
   const [opps, setOpps] = useState<Opportunity[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<string | null>(null);
-  const [showWarnings, setShowWarnings] = useState(false);
+  const [hideRejected, setHideRejected] = useState(true);
 
   // Pagination State
   const [page, setPage] = useState(1);
   const pageSize = 10;
   const [hasMore, setHasMore] = useState(false);
+  const [totalPages, setTotalPages] = useState(1);
 
   useEffect(() => {
     const load = async () => {
@@ -121,24 +122,25 @@ export default function Page() {
         .order('created_at', { ascending: false })
         .range(from, to);
 
-      if (!showWarnings) {
-        query = query.eq('status', 'PUBLISHED');
+      if (hideRejected) {
+        query = query.eq('status', 'APPROVED').not('ai_summary', 'ilike', '%C-Tier%');
       } else {
-        query = query.or('status.eq.PUBLISHED,and(status.eq.REJECTED,ai_risks.eq.Rejected by AI Risk Officer)');
+        query = query.in('status', ['APPROVED', 'REJECTED']);
       }
 
       const { data, count } = await query;
 
       setOpps(data ?? []);
       setHasMore(count ? (from + pageSize) < count : false);
+      setTotalPages(count ? Math.ceil(count / pageSize) : 1);
       setLoading(false);
     };
     load();
-  }, [client, page, showWarnings]);
+  }, [client, page, hideRejected]);
 
 
 
-  if (loading) {
+  if (loading && opps.length === 0) {
     return <div style={{ color: '#9ca3af', fontSize: '15px' }}>Loading signals...</div>;
   }
 
@@ -170,16 +172,16 @@ export default function Page() {
           Published AI Signals
         </h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ color: '#9ca3af', fontSize: '14px', fontWeight: 600 }}>Show C-Tier Signals</span>
+          <span style={{ color: '#9ca3af', fontSize: '14px', fontWeight: 600 }}>Hide Weak Signals</span>
           <div
             onClick={() => {
               setPage(1);
-              setShowWarnings(!showWarnings);
+              setHideRejected(!hideRejected);
             }}
             style={{
               width: '44px',
               height: '24px',
-              background: showWarnings ? '#f87171' : '#374151',
+              background: hideRejected ? '#38bdf8' : '#374151',
               borderRadius: '9999px',
               position: 'relative',
               cursor: 'pointer',
@@ -189,7 +191,7 @@ export default function Page() {
             <div style={{
               position: 'absolute',
               top: '2px',
-              left: showWarnings ? '22px' : '2px',
+              left: hideRejected ? '22px' : '2px',
               width: '20px',
               height: '20px',
               background: '#fff',
@@ -203,7 +205,12 @@ export default function Page() {
       
       {opps.length === 0 && <p style={{ color: '#9ca3af' }}>No pending opportunities.</p>}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      <div style={{ 
+        display: 'flex', flexDirection: 'column', gap: '24px',
+        opacity: loading ? 0.5 : 1,
+        transition: 'opacity 0.2s ease-in-out',
+        pointerEvents: loading ? 'none' : 'auto'
+      }}>
         {opps.map((signal) => {
           const entryPrice = signal.entry_plan_json?.price || signal.entry_plan_json?.limit_price;
           const stopPrice = signal.stop_plan_json?.stop || signal.stop_plan_json?.stop_price;
@@ -347,7 +354,7 @@ export default function Page() {
           >
             Previous
           </button>
-          <div style={{ color: '#9ca3af', fontSize: '14px' }}>Page {page}</div>
+          <div style={{ color: '#9ca3af', fontSize: '14px', fontWeight: 600 }}>Page {page} of {totalPages}</div>
           <button
             onClick={() => setPage((p) => p + 1)}
             disabled={!hasMore}
