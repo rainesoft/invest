@@ -289,36 +289,6 @@ export default function VaultDashboard() {
       {/* Signals List */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '16px' }}>
         <h2 style={{ fontSize: '24px', fontWeight: 800, color: '#fff', margin: 0, letterSpacing: '-0.5px' }}>Ledger Feed</h2>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ color: '#9ca3af', fontSize: '14px', fontWeight: 600 }}>Hide Rejected Trades</span>
-          <div
-            onClick={() => {
-              setHideRejected(!hideRejected);
-              setPage(1);
-            }}
-            style={{
-              width: '44px',
-              height: '24px',
-              background: hideRejected ? '#38bdf8' : '#374151',
-              borderRadius: '9999px',
-              position: 'relative',
-              cursor: 'pointer',
-              transition: 'background 0.2s ease-in-out'
-            }}
-          >
-            <div style={{
-              position: 'absolute',
-              top: '2px',
-              left: hideRejected ? '22px' : '2px',
-              width: '20px',
-              height: '20px',
-              background: '#fff',
-              borderRadius: '50%',
-              transition: 'left 0.2s ease-in-out',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-            }} />
-          </div>
-        </div>
       </div>
 
       {/* Ledger Table Section */}

@@ -132,6 +132,11 @@ You MUST respond strictly with a raw JSON object matching the exact schema below
 12. STRICT STRUCTURAL TARGETS & RISK:REWARD: You MUST output a \`suggested_take_profit\` that matches the exact structural target (e.g. major support/resistance) identified in your rationale. 
     - MINIMUM VIABLE TARGET: If your intended structural Take Profit target does not yield at least a 1:1.5 distance relative to your Stop Loss, you MUST project the Take Profit to the next major liquidity zone above it, or abort the trade by returning status: 'REJECTED'. We do not take trades with poor R:R profiles.
 13. FRONT-RUNNING LIMIT ORDERS (ENTRY PRICING): When suggesting a Buy Limit at support or a Sell Limit at resistance, do NOT place the exact entry price at the absolute extreme of the structural level. Markets frequently front-run major levels. You MUST adjust your Limit Order slightly closer to the current price (e.g., front-running the support/resistance by 10-20% of the daily ATR) to ensure the order actually gets filled during a shallow pullback.
+14. CONFIDENCE SCORING HEURISTICS: You must apply the following baseline scoring criteria:
+    - S-Tier (90-100): Perfect technical alignment + High-Impact Macro Catalyst supporting the trade.
+    - A-Tier (80-89): Pristine technical setup. Price is trending cleanly on the correct side of the 50 & 200 EMAs, pulling back to a clear structural zone with empty air to the Take Profit target.
+    - B-Tier (70-79): Decent setup but possesses a minor flaw (e.g., Counter-Trend, forced to use wide ATR stop, or weak fundamentals).
+    - C-Tier (<70): Choppy market, price floating in empty air, or poor R:R. (These will be automatically rejected by the execution desk).
 
 Current Market Context:
 ${JSON.stringify(snapshot, null, 2)}`;
