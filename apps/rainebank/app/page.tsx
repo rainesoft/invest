@@ -81,14 +81,27 @@ export default async function LandingPage() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
   
-  // Fetch the latest trade opportunity for the live showcase
-  const { data: latestSignals } = await supabaseAdmin
+  // Fetch the latest A-Tier trade opportunity for the live showcase
+  let { data: latestSignals } = await supabaseAdmin
     .from('trade_opportunities')
     .select('*')
     .in('status', ['PENDING_APPROVAL', 'APPROVED', 'WON', 'LOST'])
+    .ilike('ai_summary', '%[A-Tier]%')
     .order('created_at', { ascending: false })
     .limit(1);
-    
+
+  // Fallback to B-Tier if no A-Tier signals exist
+  if (!latestSignals || latestSignals.length === 0) {
+    const { data: bTierSignals } = await supabaseAdmin
+      .from('trade_opportunities')
+      .select('*')
+      .in('status', ['PENDING_APPROVAL', 'APPROVED', 'WON', 'LOST'])
+      .ilike('ai_summary', '%[B-Tier]%')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    latestSignals = bTierSignals;
+  }
+
   const signal = latestSignals?.[0] || {
     symbol: 'SCANNING...',
     side: 'NEUTRAL',
