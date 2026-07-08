@@ -5,6 +5,8 @@ import LandingNavbar from '@components/LandingNavbar';
 import PricingSlider from '@components/PricingSlider';
 import { supabaseServer } from '@lib/supabase-server';
 
+export const dynamic = 'force-dynamic';
+
 function parseAnalysisText(text: string | null) {
   if (!text) return { tier: null, structure: null, strategy: null, content: '' };
   
