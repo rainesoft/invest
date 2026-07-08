@@ -6,39 +6,65 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
 interface WebhookPayload {
-  type: "INSERT" | "UPDATE";
-  table: "trade_opportunities";
-  record: any;
+  type?: "INSERT" | "UPDATE";
+  table?: "trade_opportunities";
+  record?: any;
+  action?: "MANUAL_EXECUTION";
+  user_id?: string;
+  opportunity_id?: string;
 }
 
 serve(async (req) => {
   try {
     const payload: WebhookPayload = await req.json();
 
-    if (payload.type !== "INSERT" && payload.type !== "UPDATE") {
-      return new Response("Ignored non-actionable webhook", { status: 200 });
-    }
-
-    const signal = payload.record;
-    const oldSignal = (payload as any).old_record;
-    
-    if (payload.type === "UPDATE" && oldSignal && oldSignal.status === "APPROVED") {
-      return new Response("Signal was already approved. Ignoring.", { status: 200 });
-    }
-
-    if (signal.status !== "APPROVED") {
-      return new Response("Signal not approved.", { status: 200 });
-    }
-
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // Fetch all active user risk settings
-    const { data: users, error: usersError } = await supabase
-      .from("user_risk_settings")
-      .select("*");
+    let signal: any = null;
+    let usersToProcess: any[] = [];
 
-    if (usersError || !users) {
-      return new Response("No users found or error querying users.", { status: 500 });
+    // --- MANUAL EXECUTION BRANCH ---
+    if (payload.action === "MANUAL_EXECUTION") {
+      if (!payload.user_id || !payload.opportunity_id) {
+        return new Response("Missing user_id or opportunity_id for manual execution", { status: 400 });
+      }
+
+      // Fetch the signal
+      const { data: oppData } = await supabase.from("trade_opportunities").select("*").eq("id", payload.opportunity_id).single();
+      if (!oppData) return new Response("Signal not found", { status: 404 });
+      signal = oppData;
+
+      // Fetch the specific user
+      const { data: userData } = await supabase.from("user_risk_settings").select("*").eq("user_id", payload.user_id).single();
+      if (!userData) return new Response("User settings not found", { status: 404 });
+      usersToProcess = [userData];
+    } 
+    // --- WEBHOOK BRANCH ---
+    else {
+      if (payload.type !== "INSERT" && payload.type !== "UPDATE") {
+        return new Response("Ignored non-actionable webhook", { status: 200 });
+      }
+
+      signal = payload.record;
+      const oldSignal = (payload as any).old_record;
+      
+      if (payload.type === "UPDATE" && oldSignal && oldSignal.status === "APPROVED") {
+        return new Response("Signal was already approved. Ignoring.", { status: 200 });
+      }
+
+      if (signal.status !== "APPROVED") {
+        return new Response("Signal not approved.", { status: 200 });
+      }
+
+      // Fetch all active user risk settings
+      const { data: users, error: usersError } = await supabase
+        .from("user_risk_settings")
+        .select("*");
+
+      if (usersError || !users) {
+        return new Response("No users found or error querying users.", { status: 500 });
+      }
+      usersToProcess = users;
     }
 
     const entryPlan = signal.entry_plan_json || {};
@@ -62,8 +88,8 @@ serve(async (req) => {
 
     const executions = [];
 
-    // Route signal to all subscribed users
-    for (const user of users) {
+    // Route signal to all target users
+    for (const user of usersToProcess) {
       console.log(`[Router] Processing user ${user.user_id}`);
 
       // 1. Position Sizing
