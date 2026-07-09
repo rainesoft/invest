@@ -352,9 +352,9 @@ serve(async (req) => {
             try {
               // 1. Math Validation (TTL)
               const hoursElapsed = (Date.now() - new Date(signal.created_at).getTime()) / (1000 * 60 * 60);
-              if (hoursElapsed > 24) {
-                await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: "Expired: 24h TTL exceeded without execution." }).eq("id", signal.id);
-                console.log(`[Validation] REJECTED ${signal.symbol}: 24h TTL expired.`);
+              if (hoursElapsed > 12) {
+                await supabase.from("trade_opportunities").update({ status: "EXPIRED", ai_risks: "Expired: 12h TTL exceeded without execution." }).eq("id", signal.id);
+                console.log(`[Validation] EXPIRED ${signal.symbol}: 12h TTL expired.`);
                 continue;
               }
 
