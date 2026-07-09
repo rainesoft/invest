@@ -18,7 +18,7 @@ export async function fetchRealtimeNews(symbol: string): Promise<string[] | null
     } else if (symbol.includes("BTC") || symbol.includes("ETH")) {
       query = "Crypto Bitcoin Ethereum Market";
     } else if (symbol.includes("OIL")) {
-      query = "Crude Oil Market";
+      query = "Crude Oil Brent OPEC Strait Hormuz supply disruption";
     }
 
     const controller = new AbortController();
