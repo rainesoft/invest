@@ -27,7 +27,8 @@ export async function validateGlobalSignal(
   const { data: activeSignals, error: activeError } = await supabase
     .from("trade_opportunities")
     .select("id, symbol, side, entry_plan_json, stop_plan_json")
-    .in("status", ["APPROVED", "PENDING_APPROVAL"]);
+    .in("status", ["APPROVED", "PENDING_APPROVAL"])
+    .eq("is_archived", false);
 
   if (activeError) {
     return { valid: false, reason: "Risk Check Failed: Could not query active signals" };
