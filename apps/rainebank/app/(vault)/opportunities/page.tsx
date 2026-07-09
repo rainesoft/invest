@@ -136,14 +136,14 @@ export default function Page() {
       setTotalPages(count ? Math.ceil(count / pageSize) : 1);
       
       if (data && data.length > 0) {
-        const oppIds = data.map(o => o.id);
+        const oppIds = data.map((o: any) => o.id);
         const { data: userTrades } = await client
           .from('user_trades')
           .select('opportunity_id')
           .in('opportunity_id', oppIds);
           
         if (userTrades) {
-           setExecutedIds(new Set(userTrades.map(ut => ut.opportunity_id)));
+           setExecutedIds(new Set(userTrades.map((ut: any) => ut.opportunity_id)));
         }
       }
 

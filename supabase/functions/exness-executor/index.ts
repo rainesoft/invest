@@ -189,6 +189,7 @@ serve(async (req) => {
             status: "REJECTED",
             error_message: riskValidation.reason,
           });
+          executions.push({ user_id: user.user_id, status: "REJECTED", error_message: riskValidation.reason });
           continue;
         }
 
@@ -271,6 +272,7 @@ serve(async (req) => {
             error_message: tierRejectReason,
           });
           // Notify user via Telegram (handled downstream by insert trigger on user_trades)
+          executions.push({ user_id: user.user_id, status: "REJECTED", error_message: tierRejectReason });
           continue;
         }
 
@@ -329,6 +331,7 @@ serve(async (req) => {
             status: "REJECTED",
             error_message: spreadRejectReason,
           });
+          executions.push({ user_id: user.user_id, status: "REJECTED", error_message: spreadRejectReason });
           continue;
         }
 
@@ -423,7 +426,7 @@ serve(async (req) => {
           error_message: error_message,
         });
 
-        executions.push({ user_id: user.user_id, status });
+        executions.push({ user_id: user.user_id, status, error_message: error_message || riskValidation?.reason || spreadRejectReason || tierRejectReason });
       }
     }
 
