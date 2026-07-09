@@ -37,7 +37,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       throw new Error(errorText);
     }
 
-    return NextResponse.json({ ok: true });
+    const result = await response.json();
+    const execution = result.executions?.[0];
+
+    if (execution && (execution.status === 'REJECTED' || execution.status === 'FAILED')) {
+       throw new Error(`Execution ${execution.status} by Risk Manager.`);
+    }
+
+    return NextResponse.json({ ok: true, result });
     
   } catch (error: any) {
     console.error('[Execution Error]', error.message);
