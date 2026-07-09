@@ -350,13 +350,13 @@ serve(async (req) => {
         // ==========================================
         // PHASE 1: ACTIVE SIGNAL VALIDATION SWEEP
         // ==========================================
-        console.log(`[Phase 1] Sweeping active PUBLISHED signals for revalidation...`);
+        console.log(`[Phase 1] Sweeping active APPROVED signals for revalidation...`);
         sendEvent({ type: 'progress', message: `[Phase 1] Validating active signals against live market conditions...` });
         
         const { data: activeSignals } = await supabase
           .from("trade_opportunities")
           .select("*")
-          .eq("status", "PUBLISHED");
+          .eq("status", "APPROVED");
 
         if (activeSignals && activeSignals.length > 0) {
           for (const signal of activeSignals) {
