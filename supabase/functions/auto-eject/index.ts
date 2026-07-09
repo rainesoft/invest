@@ -31,12 +31,12 @@ serve(async (req) => {
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // Fetch all open trades associated with this rejected signal
+    // Fetch all open user trades associated with this rejected signal
     const { data: openTrades, error: tradesError } = await supabase
-      .from("trades")
+      .from("user_trades")
       .select("*")
       .eq("opportunity_id", signal.id)
-      .in("status", ["OPEN", "PENDING", "PAPER_OPEN"]);
+      .in("status", ["PENDING", "ACTIVE", "OPEN", "PAPER_OPEN"]);
 
     if (tradesError || !openTrades || openTrades.length === 0) {
       return new Response("No active trades found for this signal. Nothing to eject.", { status: 200 });
@@ -50,7 +50,7 @@ serve(async (req) => {
       try {
         // Handle Paper Trades locally
         if (trade.status === "PAPER_OPEN" || !trade.meta_api_order_id) {
-          await supabase.from("trades").update({ status: "AUTO_CLOSED", close_reason: "AUTO_EJECT_REJECTED" }).eq("id", trade.id);
+          await supabase.from("user_trades").update({ status: "AUTO_CLOSED", error_message: "AUTO_EJECT_REJECTED" }).eq("id", trade.id);
           executions.push({ trade_id: trade.id, status: "AUTO_CLOSED", type: "PAPER" });
           
           await insertAuditLog(supabase, {
@@ -108,17 +108,19 @@ serve(async (req) => {
             body: JSON.stringify(closePayload),
           });
 
-          if (res.ok) {
+          if (res2.ok) {
              success = true;
              console.log(`[Auto-Eject] Closed live position ${trade.meta_api_order_id} on Exness.`);
           } else {
-             errorMessage = await res.text();
-             console.log(`[Auto-Eject] Failed to close live position ${trade.meta_api_order_id}: ${errorMessage}`);
+             console.error(`[Auto-Eject] Both CANCEL and CLOSE attempts failed for trade ${trade.id}.`);
+             await supabase.from("user_trades").update({ status: "AUTO_EJECT_FAILED", error_message: res2.statusText }).eq("id", trade.id);
+             executions.push({ trade_id: trade.id, status: "FAILED", type: "LIVE" });
           }
         }
 
+        // Finalize locally if successful
         if (success) {
-           await supabase.from("trades").update({ status: "AUTO_CLOSED", close_reason: "AUTO_EJECT_REJECTED" }).eq("id", trade.id);
+           await supabase.from("user_trades").update({ status: "AUTO_CLOSED", error_message: "AUTO_EJECT_REJECTED" }).eq("id", trade.id);
            executions.push({ trade_id: trade.id, status: "AUTO_CLOSED", type: "LIVE" });
            
            await insertAuditLog(supabase, {
