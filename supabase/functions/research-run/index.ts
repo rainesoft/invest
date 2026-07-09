@@ -92,6 +92,7 @@ You MUST respond strictly with a raw JSON object matching the exact schema below
   "execution_parameters": {
     "entry_type": "Buy Limit" | "Sell Limit" | "Buy Stop" | "Sell Stop" | "Market" | "NONE",
     "suggested_entry_price": number | null,
+    "scaled_entries": [{"price": number, "weight": number}] | null,
     "suggested_stop_loss": number | null,
     "suggested_take_profit": number | null
   },
@@ -132,7 +133,7 @@ You MUST respond strictly with a raw JSON object matching the exact schema below
 11. MOMENTUM CONTINUATION ENTRY LOGIC: Never recommend 'immediate market entry' directly underneath a major swing high or resistance. You must either recommend a pullback limit order to a moving average/support, or a pending breakout (Buy Stop/Sell Stop) just beyond the structure. Avoid buying the local top.
 12. STRICT STRUCTURAL TARGETS & RISK:REWARD OPTIMIZATION: You MUST output a \`suggested_take_profit\` that matches the exact structural target (e.g. major support/resistance) identified in your rationale. 
     - MINIMUM VIABLE R:R: Institutional setups require a MINIMUM Risk:Reward of 1:1.5, ideally 1:2.0 or higher. 
-    - ENTRY PRICING TRADEOFF: If your setup yields a weak R:R (e.g., 1:1.2), you MUST mathematically optimize your \`suggested_entry_price\`. Move the pending Limit Order deeper into the retracement zone to artificially shrink the Stop Loss distance and expand the Take Profit distance until a 1:2.0 R:R is mathematically achieved. Better pricing comes at the cost of lower probability of execution, but we never take sub-optimal R:R trades.
+    - ENTRY PRICING TRADEOFF (SCALING IN): If your setup yields a weak R:R (e.g., 1:1.2), you MUST mathematically optimize your \`suggested_entry_price\`. Instead of moving the entire entry, you MUST split your risk by providing the \`scaled_entries\` array. Provide a primary entry price near the current support/resistance (e.g., \`weight: 0.5\`) and a secondary entry deeper into the retracement zone (e.g., \`weight: 0.5\`) to ensure a blended 1:2.0 R:R is achieved.
 13. FRONT-RUNNING LIMIT ORDERS (ENTRY PRICING): When suggesting a Buy Limit at support or a Sell Limit at resistance, do NOT place the exact entry price at the absolute extreme of the structural level. Markets frequently front-run major levels. You MUST adjust your Limit Order slightly closer to the current price (e.g., front-running the support/resistance by 10-20% of the daily ATR) to ensure the order actually gets filled during a shallow pullback.
 14. CONFIDENCE SCORING HEURISTICS: You must apply the following baseline scoring criteria:
     - S-Tier (90-100): Perfect technical alignment + High-Impact Macro Catalyst supporting the trade.
@@ -750,7 +751,8 @@ serve(async (req) => {
                 status: "APPROVED",
                 entry_plan_json: {
                   price: entry_price,
-                  order_type: order_type
+                  order_type: order_type,
+                  scaled_entries: evaluation.execution_parameters?.scaled_entries || null
                 },
                 stop_plan_json: { stop: stop_loss, initial: stop_loss, atr: snapshot.atr_14 },
                 take_profit_json: { tp: take_profit },
