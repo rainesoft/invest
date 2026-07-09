@@ -400,7 +400,7 @@ serve(async (req) => {
         }
         // ==========================================
 
-        const chunkSize = 2;
+        const chunkSize = 10;
         for (let i = 0; i < symbols.length; i += chunkSize) {
           const chunk = symbols.slice(i, i + chunkSize);
           await Promise.all(chunk.map(async (symbol) => {
