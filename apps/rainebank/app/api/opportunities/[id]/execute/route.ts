@@ -41,7 +41,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const execution = result.executions?.[0];
 
     if (execution && (execution.status === 'REJECTED' || execution.status === 'FAILED')) {
-       throw new Error(`Execution ${execution.status} by Risk Manager.`);
+       throw new Error(`Execution ${execution.status} by Risk Manager: ${execution.error_message || 'Unknown reason'}`);
     }
 
     return NextResponse.json({ ok: true, result });
