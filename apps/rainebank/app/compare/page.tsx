@@ -110,7 +110,7 @@ export default async function ComparePage() {
       }}>
         <Logo />
         <div style={{ color: '#4b5563', fontSize: '13px' }}>
-          © {new Date().getFullYear()} RaineBank. Developed by RaineSoft Solutions.
+          © {new Date().getFullYear()} RaineBank. Developed by Rainesoft Solutions.
         </div>
       </footer>
     </div>

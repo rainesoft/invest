@@ -86,4 +86,4 @@ The system is engineered to run completely hands-off, managing its own execution
    ```
 
 ---
-*Built by RaineSoft Solutions.*
+*Built by Rainesoft Solutions.*
