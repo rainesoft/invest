@@ -235,6 +235,9 @@ Your job is to determine if the original thesis is still valid given the NEW liv
 [ORIGINAL SIGNAL THESIS]
 Symbol: ${signal.symbol}
 Direction: ${signal.side}
+Entry Plan: ${JSON.stringify(signal.entry_plan_json)}
+Stop Loss Plan: ${JSON.stringify(signal.stop_plan_json)}
+Take Profit Plan: ${JSON.stringify(signal.take_profit_json)}
 Thesis: ${signal.ai_summary}
 
 [NEW LIVE CONTEXT]
@@ -243,8 +246,9 @@ Breaking News & Macro: ${newsContext || "No major macro events."}
 
 [VALIDATION RULES]
 1. MACRO CONTRADICTION: If the new breaking news fundamentally contradicts the original thesis (e.g. a 'risk-off' geopolitical shock occurs but the signal is LONG equities), you MUST reject the signal.
-2. TECHNICAL INVALIDATION: If the current price has crossed the suggested stop loss, the setup is mathematically dead. Reject it.
-3. If the thesis remains completely valid and supported by the new context, keep it valid.
+2. STRUCTURAL DECAY: If the price action has significantly shifted and the original structural rationale no longer makes sense, reject it.
+3. DO NOT HALLUCINATE MATH: The system has ALREADY mathematically verified that the current price has NOT hit the stop loss or take profit. Do NOT reject the setup claiming the stop loss was hit. You must only reject based on fundamental macro shifts or severe structural decay.
+4. If the thesis remains valid and supported by the new context, keep it valid.
 
 You MUST respond strictly with a raw JSON object:
 {
