@@ -16,6 +16,7 @@ type Opportunity = {
   stop_plan_json: any;
   take_profit_json: any;
   ai_summary: string | null;
+  ai_risks: string | null;
   status: string;
 };
 
@@ -100,7 +101,7 @@ export default function Page() {
   const [opps, setOpps] = useState<Opportunity[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<string | null>(null);
-  const [hideRejected, setHideRejected] = useState(true);
+  const [activeTab, setActiveTab] = useState<'ACTIVE' | 'INVALIDATED' | 'REJECTED'>('ACTIVE');
   const [executedIds, setExecutedIds] = useState<Set<string>>(new Set());
 
   // Pagination State
@@ -118,15 +119,17 @@ export default function Page() {
 
       let query = client
         .from('trade_opportunities')
-        .select('id, symbol, side, timeframe, created_at, entry_plan_json, stop_plan_json, take_profit_json, ai_summary, status', { count: 'exact' })
+        .select('id, symbol, side, timeframe, created_at, entry_plan_json, stop_plan_json, take_profit_json, ai_summary, ai_risks, status', { count: 'exact' })
         .eq('is_archived', false)
         .order('created_at', { ascending: false })
         .range(from, to);
 
-      if (hideRejected) {
+      if (activeTab === 'ACTIVE') {
         query = query.eq('status', 'APPROVED').not('ai_summary', 'ilike', '%C-Tier%');
+      } else if (activeTab === 'INVALIDATED') {
+        query = query.eq('status', 'REJECTED').ilike('ai_risks', '%Invalidated%');
       } else {
-        query = query.in('status', ['APPROVED', 'REJECTED']);
+        query = query.eq('status', 'REJECTED').not('ai_risks', 'ilike', '%Invalidated%');
       }
 
       const { data, count } = await query;
@@ -150,7 +153,7 @@ export default function Page() {
       setLoading(false);
     };
     load();
-  }, [client, page, hideRejected]);
+  }, [client, page, activeTab]);
 
 
 
@@ -186,33 +189,26 @@ export default function Page() {
           Published AI Signals
         </h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ color: '#9ca3af', fontSize: '14px', fontWeight: 600 }}>Hide Weak Signals</span>
-          <div
-            onClick={() => {
-              setPage(1);
-              setHideRejected(!hideRejected);
-            }}
-            style={{
-              width: '44px',
-              height: '24px',
-              background: hideRejected ? '#38bdf8' : '#374151',
-              borderRadius: '9999px',
-              position: 'relative',
-              cursor: 'pointer',
-              transition: 'background 0.2s ease-in-out'
-            }}
-          >
-            <div style={{
-              position: 'absolute',
-              top: '2px',
-              left: hideRejected ? '22px' : '2px',
-              width: '20px',
-              height: '20px',
-              background: '#fff',
-              borderRadius: '50%',
-              transition: 'left 0.2s ease-in-out',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-            }} />
+          <div style={{ display: 'flex', background: '#111', padding: '4px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
+            {(['ACTIVE', 'INVALIDATED', 'REJECTED'] as const).map(tab => (
+              <button
+                key={tab}
+                onClick={() => { setPage(1); setActiveTab(tab); }}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: activeTab === tab ? '#262626' : 'transparent',
+                  color: activeTab === tab ? '#fff' : '#9ca3af',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+              >
+                {tab}
+              </button>
+            ))}
           </div>
         </div>
       </div>
@@ -303,6 +299,15 @@ export default function Page() {
                   )}
                 </div>
               </div>
+
+              {activeTab === 'INVALIDATED' && signal.ai_risks && (
+                <div style={{ background: 'rgba(248,113,113,0.1)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(248,113,113,0.2)', marginBottom: '24px' }}>
+                  <div style={{ fontSize: '12px', color: '#f87171', marginBottom: '8px', fontWeight: 800 }}>REASON FOR INVALIDATION</div>
+                  <p style={{ margin: 0, fontSize: '14px', color: '#fca5a5', lineHeight: 1.5, fontWeight: 500 }}>
+                    {signal.ai_risks}
+                  </p>
+                </div>
+              )}
 
               <div style={{ background: isWarning ? 'rgba(248,113,113,0.05)' : 'rgba(37,99,235,0.05)', padding: '20px', borderRadius: '16px', border: `1px solid ${isWarning ? 'rgba(248,113,113,0.2)' : 'rgba(37,99,235,0.1)'}`, marginBottom: '24px' }}>
                 <div style={{ fontSize: '12px', color: isWarning ? '#f87171' : '#38bdf8', marginBottom: '12px', fontWeight: 700 }}>

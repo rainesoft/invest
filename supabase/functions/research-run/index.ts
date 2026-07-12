@@ -572,7 +572,7 @@ serve(async (req) => {
             sendEvent({ type: 'progress', message: `[AI Memory] Pulling last 5 trades to calibrate bias for ${symbol}...` });
             const { data: pastTrades } = await supabase
               .from("trade_opportunities")
-              .select("status, side, ai_summary, r_multiple")
+              .select("status, side, ai_summary, ai_risks, r_multiple")
               .eq("symbol", symbol)
               .in("status", ["WON", "LOST", "REJECTED"])
               .order("created_at", { ascending: false })
@@ -580,9 +580,13 @@ serve(async (req) => {
 
             let historicalMemory = "";
             if (pastTrades && pastTrades.length > 0) {
-              historicalMemory = pastTrades.map((t, i) => 
-                `Past Decision ${i+1} (${t.side} -> ${t.status}, ${t.r_multiple !== null ? t.r_multiple + 'R' : 'N/A'}): "${t.ai_summary || 'No rationale logged'}"`
-              ).join("\n");
+              historicalMemory = pastTrades.map((t, i) => {
+                let text = `Past Decision ${i+1} (${t.side} -> ${t.status}, ${t.r_multiple !== null ? t.r_multiple + 'R' : 'N/A'}): "${t.ai_summary || 'No rationale logged'}"`;
+                if (t.status === 'REJECTED' && t.ai_risks && t.ai_risks.includes('Invalidated')) {
+                  text += `\n   -> [CRITICAL] REASON FOR INVALIDATION: "${t.ai_risks}" - You must learn from this and avoid similar structural setups.`;
+                }
+                return text;
+              }).join("\n");
             }
 
             // LAYER B: Cognitive Guard (Senior Risk Officer)
