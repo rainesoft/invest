@@ -362,7 +362,7 @@ export default function VaultDashboard() {
                           fontSize: '12px',
                           fontWeight: 700
                         }}>{t.status}</span>
-                        {(t.status === 'REJECTED' || t.status === 'LOST' || t.status === 'EXPIRED') && t.ai_risks && (
+                        {t.ai_risks && (
                           <span 
                             title={t.ai_risks}
                             style={{
@@ -438,7 +438,7 @@ export default function VaultDashboard() {
                     gap: '6px'
                   }}>
                     {signal.status}
-                    {signal.status === 'REJECTED' && signal.ai_risks && (
+                    {signal.ai_risks && (
                       <span 
                         title={signal.ai_risks}
                         style={{

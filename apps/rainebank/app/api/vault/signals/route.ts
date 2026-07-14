@@ -27,11 +27,17 @@ export async function GET(request: Request) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // Fetch user's executed trades
-  const { data, count, error } = await adminClient
+  let query = adminClient
     .from('user_trades')
     .select('*, trade_opportunities(*)', { count: 'exact' })
-    .eq('user_id', user.id)
+    .eq('user_id', user.id);
+
+  if (hideRejected) {
+    // Hide trades that never executed successfully
+    query = query.not('status', 'in', '("REJECTED","EXPIRED","CANCELLED","FAILED")');
+  }
+
+  const { data, count, error } = await query
     .order('created_at', { ascending: false })
     .range(from, to);
 
@@ -50,7 +56,8 @@ export async function GET(request: Request) {
     entry_plan_json: trade.trade_opportunities?.entry_plan_json,
     stop_plan_json: trade.trade_opportunities?.stop_plan_json,
     take_profit_json: trade.trade_opportunities?.take_profit_json,
-    ai_summary: trade.trade_opportunities?.ai_summary
+    ai_summary: trade.trade_opportunities?.ai_summary,
+    ai_risks: trade.trade_opportunities?.ai_risks || trade.error_message
   }));
 
   return NextResponse.json({ 
