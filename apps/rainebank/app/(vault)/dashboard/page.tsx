@@ -289,6 +289,23 @@ export default function VaultDashboard() {
       {/* Signals List */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '16px' }}>
         <h2 style={{ fontSize: '24px', fontWeight: 800, color: '#fff', margin: 0, letterSpacing: '-0.5px' }}>Ledger Feed</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <span style={{ color: '#9ca3af', fontSize: '14px', fontWeight: 600 }}>Hide Rejected / Expired</span>
+          <div 
+            onClick={() => setHideRejected(!hideRejected)}
+            style={{ 
+              width: '40px', height: '24px', borderRadius: '12px', 
+              background: hideRejected ? '#38bdf8' : '#333',
+              position: 'relative', cursor: 'pointer', transition: 'background 0.2s'
+            }}
+          >
+            <div style={{
+              width: '18px', height: '18px', borderRadius: '50%', background: '#fff',
+              position: 'absolute', top: '3px', left: hideRejected ? '19px' : '3px',
+              transition: 'left 0.2s'
+            }} />
+          </div>
+        </div>
       </div>
 
       {/* Ledger Table Section */}
@@ -336,14 +353,27 @@ export default function VaultDashboard() {
                       {t.entry_plan_json?.price ? `$${t.entry_plan_json.price}` : '—'}
                     </td>
                     <td style={{ padding: '16px 24px' }}>
-                      <span style={{ 
-                        color: t.status === 'WON' ? '#10b981' : t.status === 'LOST' ? '#ef4444' : t.status === 'OPEN' ? '#3b82f6' : '#9ca3af',
-                        background: t.status === 'WON' ? 'rgba(16,185,129,0.1)' : t.status === 'LOST' ? 'rgba(239,68,68,0.1)' : t.status === 'OPEN' ? 'rgba(59,130,246,0.1)' : 'rgba(156,163,175,0.1)',
-                        padding: '4px 10px',
-                        borderRadius: '6px',
-                        fontSize: '12px',
-                        fontWeight: 700
-                      }}>{t.status}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ 
+                          color: t.status === 'WON' ? '#10b981' : t.status === 'LOST' ? '#ef4444' : t.status === 'OPEN' ? '#3b82f6' : '#9ca3af',
+                          background: t.status === 'WON' ? 'rgba(16,185,129,0.1)' : t.status === 'LOST' ? 'rgba(239,68,68,0.1)' : t.status === 'OPEN' ? 'rgba(59,130,246,0.1)' : 'rgba(156,163,175,0.1)',
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          fontSize: '12px',
+                          fontWeight: 700
+                        }}>{t.status}</span>
+                        {(t.status === 'REJECTED' || t.status === 'LOST' || t.status === 'EXPIRED') && t.ai_risks && (
+                          <span 
+                            title={t.ai_risks}
+                            style={{
+                              display: 'inline-flex', justifyContent: 'center', alignItems: 'center',
+                              width: '16px', height: '16px', borderRadius: '50%',
+                              background: 'rgba(156,163,175,0.2)', color: '#9ca3af',
+                              fontSize: '10px', cursor: 'help', fontWeight: 800
+                            }}
+                          >i</span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -402,9 +432,23 @@ export default function VaultDashboard() {
                     borderRadius: '100px',
                     fontSize: '12px',
                     fontWeight: 800,
-                    border: `1px solid ${signal.status === 'REJECTED' ? 'rgba(248,113,113,0.3)' : signal.status === 'APPROVED' ? 'rgba(74,222,128,0.3)' : 'rgba(234,179,8,0.3)'}`
+                    border: `1px solid ${signal.status === 'REJECTED' ? 'rgba(248,113,113,0.3)' : signal.status === 'APPROVED' ? 'rgba(74,222,128,0.3)' : 'rgba(234,179,8,0.3)'}`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
                   }}>
                     {signal.status}
+                    {signal.status === 'REJECTED' && signal.ai_risks && (
+                      <span 
+                        title={signal.ai_risks}
+                        style={{
+                          display: 'inline-flex', justifyContent: 'center', alignItems: 'center',
+                          width: '16px', height: '16px', borderRadius: '50%',
+                          background: 'rgba(248,113,113,0.2)', color: '#f87171',
+                          fontSize: '10px', cursor: 'help'
+                        }}
+                      >i</span>
+                    )}
                   </div>
                   <div style={{ color: '#9ca3af', fontSize: '14px', fontWeight: 600 }}>{signal.timeframe}</div>
                 </div>
