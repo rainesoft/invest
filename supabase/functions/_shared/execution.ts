@@ -248,3 +248,85 @@ export async function fetchPaperBars(symbol: string, timeframe = '1D', limit = 3
   return { source: 'Alpaca', bars: json.bars ?? [] };
 }
 
+/**
+ * Cancels any pending broker orders (MetaAPI) tied to an invalidated or expired opportunity.
+ */
+export async function cancelBrokerOrdersForOpportunity(supabase: SupabaseClient, opportunityId: string): Promise<void> {
+  // 1. Fetch all OPEN trades for this opportunity that have a broker order ID
+  const { data: activeTrades, error: tradesErr } = await supabase
+    .from("user_trades")
+    .select("id, user_id, meta_api_order_id")
+    .eq("opportunity_id", opportunityId)
+    .eq("status", "OPEN")
+    .not("meta_api_order_id", "is", null);
+
+  if (tradesErr || !activeTrades || activeTrades.length === 0) {
+    return;
+  }
+
+  // 2. Extract unique user IDs to fetch their MetaAPI tokens
+  const userIds = [...new Set(activeTrades.map(t => t.user_id))];
+  const { data: userSettings, error: settingsErr } = await supabase
+    .from("user_risk_settings")
+    .select("user_id, meta_api_token, meta_api_account_id")
+    .in("user_id", userIds);
+
+  if (settingsErr || !userSettings) {
+    return;
+  }
+
+  const settingsMap = new Map(userSettings.map(s => [s.user_id, s]));
+  const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.new-york.agiliumtrade.ai";
+
+  // 3. Loop through and cancel each pending order
+  for (const trade of activeTrades) {
+    const userConfig = settingsMap.get(trade.user_id);
+    if (!userConfig || !userConfig.meta_api_token || !userConfig.meta_api_account_id) {
+      continue;
+    }
+
+    const cancelPayload = {
+      actionType: "ORDER_CANCEL",
+      orderId: trade.meta_api_order_id
+    };
+
+    try {
+      const cancelUrl = `${baseUrl}/users/current/accounts/${userConfig.meta_api_account_id}/trade`;
+      const response = await fetch(cancelUrl, {
+        method: "POST",
+        headers: {
+          "auth-token": userConfig.meta_api_token,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(cancelPayload),
+      });
+
+      if (response.ok) {
+        console.log(`[Broker Sync] Successfully cancelled pending order ${trade.meta_api_order_id} for user ${trade.user_id}`);
+        await supabase.from("user_trades").update({ status: "CANCELLED" }).eq("id", trade.id);
+      } else {
+        const errorText = await response.text();
+        console.error(`[Broker Sync] Failed to cancel order ${trade.meta_api_order_id}: ${errorText}`);
+        
+        // Push to retry queue
+        await supabase.from("meta_api_retry_queue").insert({
+          user_id: trade.user_id,
+          meta_api_account_id: userConfig.meta_api_account_id,
+          request_type: "ORDER_CANCEL",
+          api_payload: cancelPayload,
+          last_error: errorText
+        });
+      }
+    } catch (e: any) {
+      console.error(`[Broker Sync] Exception cancelling order ${trade.meta_api_order_id}: ${e.message}`);
+      await supabase.from("meta_api_retry_queue").insert({
+        user_id: trade.user_id,
+        meta_api_account_id: userConfig.meta_api_account_id,
+        request_type: "ORDER_CANCEL",
+        api_payload: cancelPayload,
+        last_error: e.message
+      });
+    }
+  }
+}
+

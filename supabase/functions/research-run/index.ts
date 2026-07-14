@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2.108.2";
-import { fetchPaperBars, Bar, placePaperOrder, makeClientOrderId } from "../_shared/execution.ts";
+import { fetchPaperBars, Bar, placePaperOrder, makeClientOrderId, cancelBrokerOrdersForOpportunity } from "../_shared/execution.ts";
 import { sma, rsi, detectRegime } from "../_shared/strategy.ts";
 import { insertAuditLog } from "../_shared/audit.ts";
 import { isMarketOpen } from "../_shared/market.ts";
@@ -372,6 +372,7 @@ serve(async (req) => {
               const hoursElapsed = (Date.now() - new Date(signal.created_at).getTime()) / (1000 * 60 * 60);
               if (hoursElapsed > 12) {
                 await supabase.from("trade_opportunities").update({ status: "EXPIRED", ai_risks: "Expired: 12h TTL exceeded without execution." }).eq("id", signal.id);
+                await cancelBrokerOrdersForOpportunity(supabase, signal.id);
                 console.log(`[Validation] EXPIRED ${signal.symbol}: 12h TTL expired.`);
                 continue;
               }
@@ -391,6 +392,7 @@ serve(async (req) => {
                 if ((signal.side === 'LONG' && snapshot.current_price <= stopLoss) || 
                     (signal.side === 'SHORT' && snapshot.current_price >= stopLoss)) {
                   await supabase.from("trade_opportunities").update({ status: "LOST", r_multiple: -1, ai_risks: "Technical Invalidation: Stop Loss crossed." }).eq("id", signal.id);
+                  await cancelBrokerOrdersForOpportunity(supabase, signal.id);
                   console.log(`[Validation] LOST ${signal.symbol}: Stop loss crossed by live price.`);
                   continue;
                 }
@@ -407,6 +409,7 @@ serve(async (req) => {
               
               if (!evalResult.is_valid) {
                 await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Invalidated by AI Risk Officer: ${evalResult.rejection_reason}` }).eq("id", signal.id);
+                await cancelBrokerOrdersForOpportunity(supabase, signal.id);
                 console.log(`[Validation] REJECTED ${signal.symbol} by AI: ${evalResult.rejection_reason}`);
               } else {
                 console.log(`[Validation] VALID ${signal.symbol}: Thesis remains intact.`);
