@@ -14,9 +14,9 @@ export async function GET() {
   try {
     const { data: closedTrades, error } = await supabase
       .from('trade_opportunities')
-      .select('status, r_multiple, closed_at')
+      .select('status, r_multiple, closed_at, created_at')
       .in('status', ['WON', 'LOST'])
-      .order('closed_at', { ascending: true });
+      .order('created_at', { ascending: true });
 
     if (error) {
       console.error(error);
@@ -46,7 +46,7 @@ export async function GET() {
 
     for (const trade of closedTrades) {
       const r = Number(trade.r_multiple) || 0;
-      const closedAt = new Date(trade.closed_at);
+      const closedAt = trade.closed_at ? new Date(trade.closed_at) : new Date(trade.created_at);
       
       netR += r;
       cumulativeR += r;
