@@ -82,6 +82,30 @@ function TrendBadge({ tier, structure, strategy }: { tier: string | null, struct
   );
 }
 
+const TooltipIcon = ({ text, color, bgColor }: { text: string, color: string, bgColor: string }) => {
+  const [show, setShow] = useState(false);
+  return (
+    <div 
+      style={{ position: 'relative', display: 'inline-flex', verticalAlign: 'middle', marginLeft: '4px' }}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      <span style={{ display: 'inline-flex', justifyContent: 'center', alignItems: 'center', width: '16px', height: '16px', borderRadius: '50%', background: bgColor, color: color, fontSize: '10px', cursor: 'help', fontWeight: 800 }}>i</span>
+      {show && (
+        <div style={{
+          position: 'absolute', bottom: '100%', left: '50%', transform: 'translateX(-50%)',
+          marginBottom: '8px', padding: '12px', background: '#1a1a1a', color: '#e5e7eb', fontSize: '13px',
+          borderRadius: '8px', width: 'max-content', maxWidth: '300px', whiteSpace: 'normal',
+          zIndex: 100, border: '1px solid #333', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.5)',
+          lineHeight: '1.4', fontWeight: 500, textAlign: 'left'
+        }}>
+          {text}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const CheckoutButton = dynamic(() => import('@components/CheckoutButton'), {
   ssr: false,
 });
@@ -97,6 +121,7 @@ type VaultSignal = {
   stop_plan_json?: { stop: number; stop_price?: number } | null;
   take_profit_json?: { tp: number; tp_price?: number } | null;
   ai_summary?: string | null;
+  ai_risks?: string | null;
 };
 
 export default function VaultDashboard() {
@@ -363,15 +388,11 @@ export default function VaultDashboard() {
                           fontWeight: 700
                         }}>{t.status}</span>
                         {t.ai_risks && (
-                          <span 
-                            title={t.ai_risks}
-                            style={{
-                              display: 'inline-flex', justifyContent: 'center', alignItems: 'center',
-                              width: '16px', height: '16px', borderRadius: '50%',
-                              background: 'rgba(156,163,175,0.2)', color: '#9ca3af',
-                              fontSize: '10px', cursor: 'help', fontWeight: 800
-                            }}
-                          >i</span>
+                          <TooltipIcon 
+                            text={t.ai_risks} 
+                            bgColor="rgba(156,163,175,0.2)" 
+                            color="#9ca3af" 
+                          />
                         )}
                       </div>
                     </td>
@@ -439,15 +460,11 @@ export default function VaultDashboard() {
                   }}>
                     {signal.status}
                     {signal.ai_risks && (
-                      <span 
-                        title={signal.ai_risks}
-                        style={{
-                          display: 'inline-flex', justifyContent: 'center', alignItems: 'center',
-                          width: '16px', height: '16px', borderRadius: '50%',
-                          background: 'rgba(248,113,113,0.2)', color: '#f87171',
-                          fontSize: '10px', cursor: 'help'
-                        }}
-                      >i</span>
+                      <TooltipIcon 
+                        text={signal.ai_risks} 
+                        bgColor={signal.status === 'REJECTED' ? 'rgba(248,113,113,0.2)' : 'rgba(156,163,175,0.2)'} 
+                        color={signal.status === 'REJECTED' ? '#f87171' : '#9ca3af'} 
+                      />
                     )}
                   </div>
                   <div style={{ color: '#9ca3af', fontSize: '14px', fontWeight: 600 }}>{signal.timeframe}</div>
