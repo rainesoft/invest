@@ -95,41 +95,64 @@ export async function fetchPaperBars(symbol: string, timeframe = '1D', limit = 3
     const metaAccountId = Deno.env.get("META_API_ACCOUNT_ID");
     
     if (metaToken && metaAccountId) {
-      try {
-        let metaTimeframe = '1d';
-        if (timeframe === '1D') metaTimeframe = '1d';
-        else if (timeframe === '1H') metaTimeframe = '1h';
-        else if (timeframe === '15Min') metaTimeframe = '15m';
+      // --- Symbol remapping: translate internal names to broker symbol names ---
+      const META_SYMBOL_MAP: Record<string, string> = {
+        'NAS100': 'US100',   // Exness/MT4 uses US100 for Nasdaq 100
+        'US30': 'US30',      // Confirmed correct
+        'UKOIL': 'UKOIL',    // Confirmed correct
+        'XAGUSD': 'XAGUSD',  // Confirmed correct on most brokers
+        'BTCUSD': 'BTCUSD',  // Confirmed correct
+      };
+      const brokerSymbol = META_SYMBOL_MAP[symbol] ?? symbol;
 
-        const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.new-york.agiliumtrade.ai";
-        const marketDataUrl = baseUrl.replace("mt-client-api-v1", "mt-market-data-client-api-v1");
-        const metaUrl = `${marketDataUrl}/users/current/accounts/${metaAccountId}/historical-market-data/symbols/${symbol}/timeframes/${metaTimeframe}/candles?limit=${limit}`;
-        
-        const metaRes = await fetch(metaUrl, {
-          headers: { 'auth-token': metaToken }
-        });
+      let metaTimeframe = '1d';
+      if (timeframe === '1D') metaTimeframe = '1d';
+      else if (timeframe === '4H') metaTimeframe = '4h';
+      else if (timeframe === '1H') metaTimeframe = '1h';
+      else if (timeframe === '15Min') metaTimeframe = '15m';
 
-        if (metaRes.ok) {
-          const metaCandles = await metaRes.json();
-          const bars: Bar[] = metaCandles.map((c: any) => ({
-            t: new Date(c.time).toISOString(),
-            o: c.open,
-            h: c.high,
-            l: c.low,
-            c: c.close,
-            v: c.tickVolume || c.volume || 0
-          })).sort((a: Bar, b: Bar) => new Date(a.t).getTime() - new Date(b.t).getTime());
-
-          if (bars.length > 0) {
-            console.log(`[Data Fetch] Pulled ${bars.length} bars from MetaTrader Broker Feed for ${symbol}`);
-            return { source: 'MetaAPI', bars };
+      const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.new-york.agiliumtrade.ai";
+      const marketDataUrl = baseUrl.replace("mt-client-api-v1", "mt-market-data-client-api-v1");
+      const metaUrl = `${marketDataUrl}/users/current/accounts/${metaAccountId}/historical-market-data/symbols/${brokerSymbol}/timeframes/${metaTimeframe}/candles?limit=${limit}`;
+      
+      // --- Retry logic: 2 attempts with 500ms backoff ---
+      let lastMetaError: unknown;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          if (attempt > 1) {
+            console.warn(`[Data Fetch] MetaAPI attempt ${attempt} for ${brokerSymbol}...`);
+            await new Promise(r => setTimeout(r, 500));
           }
-        } else {
-          console.warn(`MetaApi returned ${metaRes.status} for ${symbol}. Falling back to Yahoo Finance.`);
+
+          const metaRes = await fetch(metaUrl, {
+            headers: { 'auth-token': metaToken }
+          });
+
+          if (metaRes.ok) {
+            const metaCandles = await metaRes.json();
+            const bars: Bar[] = metaCandles.map((c: any) => ({
+              t: new Date(c.time).toISOString(),
+              o: c.open,
+              h: c.high,
+              l: c.low,
+              c: c.close,
+              v: c.tickVolume || c.volume || 0
+            })).sort((a: Bar, b: Bar) => new Date(a.t).getTime() - new Date(b.t).getTime());
+
+            if (bars.length > 0) {
+              console.log(`[Data Fetch] Pulled ${bars.length} bars from MetaTrader Broker Feed for ${brokerSymbol}`);
+              return { source: 'MetaAPI', bars };
+            }
+          } else {
+            console.warn(`MetaApi returned ${metaRes.status} for ${brokerSymbol} (attempt ${attempt}).`);
+            lastMetaError = `HTTP ${metaRes.status}`;
+          }
+        } catch (err) {
+          console.warn(`MetaApi fetch failed for ${brokerSymbol} (attempt ${attempt}):`, err);
+          lastMetaError = err;
         }
-      } catch (err) {
-        console.warn(`MetaApi fetch failed for ${symbol}:`, err);
       }
+      console.error(`[Data Fetch] MetaAPI exhausted all retries for ${brokerSymbol}. Last error:`, lastMetaError);
     }
 
     // 2. Fallback to Yahoo Finance (ONLY IN DEV MODE)
