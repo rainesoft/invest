@@ -79,25 +79,40 @@ serve(async (req) => {
 
       const symbol = escapeMd(record.symbol);
       const side = escapeMd(record.side);
-      const entryPrice = record.entry_plan_json?.price ? escapeMd(String(record.entry_plan_json.price)) : "Market Execution";
       const status = escapeMd(record.status);
       const aiSummary = escapeMd(record.ai_summary || "Automated mathematical setup evaluated by Alpha Engine.");
-      const riskSummary = escapeMd(record.risk_summary || "Standard Model Risk Constraints Applied.");
+
+      // Parse trade levels from JSON plans
+      const entryPrice = record.entry_plan_json?.price ?? record.entry_plan_json?.limit_price ?? record.entry_plan_json?.entry_price ?? "—";
+      const stopLoss   = record.stop_plan_json?.stop  ?? record.stop_plan_json?.stop_price ?? "—";
+      const takeProfit = record.take_profit_json?.tp   ?? record.take_profit_json?.tp_price ?? "—";
+      const orderType  = record.entry_plan_json?.order_type ?? "Limit";
+
+      // Extract tier and R:R from ai_summary
+      const tierMatch = (record.ai_summary || "").match(/\[(S|A|B|C)-Tier\]/);
+      const rrMatch   = (record.ai_summary || "").match(/1:([0-9.]+)\s*Risk:Reward/);
+      const tier      = tierMatch ? escapeMd(tierMatch[0]) : "—";
+      const rr        = rrMatch   ? escapeMd(`1:${rrMatch[1]}`) : "—";
+
+      const sideEmoji = record.side === "LONG" ? "🟢" : "🔴";
       
       const message = `
 🚨 *RAINEBANK ALPHA SIGNAL* 🚨
 
-*Symbol:* ${symbol}
-*Side:* ${side}
-*Status:* ${status}
+${sideEmoji} *${symbol}* — *${side}* \\| ${tier}
 
-*Entry Target:* ${entryPrice}
-*Risk Profile:* ${riskSummary}
+━━━━━━━━━━━━━━━━━
+📥 *Entry:* \`${escapeMd(String(entryPrice))}\`
+🛑 *Stop Loss:* \`${escapeMd(String(stopLoss))}\`
+🎯 *Take Profit:* \`${escapeMd(String(takeProfit))}\`
+━━━━━━━━━━━━━━━━━
+📐 *R:R Ratio:* ${rr}
+📋 *Order Type:* ${escapeMd(orderType)}
 
 *Institutional Rationale:*
 _${aiSummary}_
 
-[View Ledger](https://yourdomain.com/dashboard)
+[📊 View Ledger](https://yourdomain.com/dashboard)
       `.trim();
 
       // Fan-out broadcasting
