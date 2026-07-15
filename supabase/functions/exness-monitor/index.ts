@@ -70,6 +70,33 @@ serve(async (req) => {
 
       console.log(`[Exness Monitor] User ${userId} has ${positions.length} open positions.`);
 
+      // --- 0. Reconcile PENDING → OPEN ---
+      // The broker fills limit orders silently. We need to check if any of our
+      // PENDING trades have been filled by comparing broker position IDs against
+      // the meta_api_order_id stored in user_trades.
+      if (positions.length > 0) {
+        const { data: pendingTrades } = await supabase
+          .from("user_trades")
+          .select("id, symbol, meta_api_order_id")
+          .eq("user_id", userId)
+          .eq("status", "PENDING");
+
+        if (pendingTrades && pendingTrades.length > 0) {
+          // Build a set of broker position IDs (the broker uses the original order ID as position ID)
+          const brokerPositionIds = new Set(positions.map((p: any) => String(p.id)));
+
+          for (const trade of pendingTrades) {
+            if (trade.meta_api_order_id && brokerPositionIds.has(String(trade.meta_api_order_id))) {
+              console.log(`[Exness Monitor] Limit order ${trade.meta_api_order_id} (${trade.symbol}) has been FILLED. Promoting to OPEN.`);
+              await supabase
+                .from("user_trades")
+                .update({ status: "OPEN" })
+                .eq("id", trade.id);
+            }
+          }
+        }
+      }
+
       const trails = [];
 
       for (const pos of positions) {
