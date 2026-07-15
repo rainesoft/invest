@@ -21,6 +21,31 @@ serve(async (req) => {
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+    // --- SECURITY AUTHORIZATION CHECK ---
+    const webhookSecret = req.headers.get("x-webhook-secret");
+    const authHeader = req.headers.get("Authorization");
+    const expectedSecret = Deno.env.get("WEBHOOK_SECRET");
+
+    if (webhookSecret) {
+      if (webhookSecret !== expectedSecret) {
+        return new Response("Unauthorized Webhook Secret", { status: 401 });
+      }
+    } else if (authHeader) {
+      const token = authHeader.replace("Bearer ", "");
+      const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+      
+      if (authError || !user) {
+        return new Response("Unauthorized JWT", { status: 401 });
+      }
+      
+      if (payload.action === "MANUAL_EXECUTION" && payload.user_id !== user.id) {
+        return new Response("Forbidden: JWT does not match payload user_id", { status: 403 });
+      }
+    } else {
+      return new Response("Unauthorized: Missing credentials", { status: 401 });
+    }
+    // --- END SECURITY CHECK ---
+
     let signal: any = null;
     let usersToProcess: any[] = [];
 
