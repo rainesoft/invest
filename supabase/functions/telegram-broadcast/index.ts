@@ -22,6 +22,15 @@ serve(async (req) => {
   try {
     const payload: DatabaseWebhookPayload = await req.json();
 
+    // --- SECURITY AUTHORIZATION CHECK ---
+    const webhookSecret = req.headers.get("x-webhook-secret");
+    const expectedSecret = Deno.env.get("WEBHOOK_SECRET");
+    
+    if (!webhookSecret || webhookSecret !== expectedSecret) {
+      return new Response("Unauthorized Webhook Secret", { status: 401 });
+    }
+    // --- END SECURITY CHECK ---
+
     // We care about INSERTS into trade_opportunities OR user_trades
     if (payload.type !== "INSERT" || (payload.table !== "trade_opportunities" && payload.table !== "user_trades")) {
       return new Response("Ignored non-insert or wrong table", { status: 200 });

@@ -21,6 +21,31 @@ serve(async (req) => {
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+    // --- SECURITY AUTHORIZATION CHECK ---
+    const webhookSecret = req.headers.get("x-webhook-secret");
+    const authHeader = req.headers.get("Authorization");
+    const expectedSecret = Deno.env.get("WEBHOOK_SECRET");
+
+    if (webhookSecret) {
+      if (webhookSecret !== expectedSecret) {
+        return new Response("Unauthorized Webhook Secret", { status: 401 });
+      }
+    } else if (authHeader) {
+      const token = authHeader.replace("Bearer ", "");
+      const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+      
+      if (authError || !user) {
+        return new Response("Unauthorized JWT", { status: 401 });
+      }
+      
+      if (payload.action === "MANUAL_EXECUTION" && payload.user_id !== user.id) {
+        return new Response("Forbidden: JWT does not match payload user_id", { status: 403 });
+      }
+    } else {
+      return new Response("Unauthorized: Missing credentials", { status: 401 });
+    }
+    // --- END SECURITY CHECK ---
+
     let signal: any = null;
     let usersToProcess: any[] = [];
 
@@ -367,78 +392,53 @@ serve(async (req) => {
         let error_message = null;
         let meta_api_order_id = null;
 
+        const isMarketOrder = actionType === "ORDER_TYPE_BUY" || actionType === "ORDER_TYPE_SELL";
+
         if (
           user.is_live_execution_enabled &&
           user.meta_api_token &&
           user.meta_api_account_id
         ) {
-          const orderPayload: any = {
-            actionType: actionType,
-            symbol: signal.symbol,
-            volume: volume,
-            stopLoss: stopLoss,
-            takeProfit: takeProfit,
-          };
+          if (!isMarketOrder) {
+            // Soft Pending Order: Do NOT send limit/stop orders to the broker.
+            // We will hold them internally and monitor price action before converting to a Market Order.
+            status = "PENDING";
+          } else {
+            // Hard Market Order: Execute immediately
+            const orderPayload: any = {
+              actionType: actionType,
+              symbol: signal.symbol,
+              volume: volume,
+              stopLoss: stopLoss,
+              takeProfit: takeProfit,
+            };
 
-          if (actionType.includes("LIMIT") || actionType.includes("STOP")) {
-            orderPayload.openPrice = entryPrice;
-          }
-
-          try {
-            const metaApiUrl = `${baseUrl}/users/current/accounts/${user.meta_api_account_id}/trade`;
-            const response = await fetch(metaApiUrl, {
-              method: "POST",
-              headers: {
-                "auth-token": user.meta_api_token,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify(orderPayload),
-            });
-
-            if (!response.ok) {
-              error_message = await response.text();
-              const isMarketOrder =
-                actionType === "ORDER_TYPE_BUY" ||
-                actionType === "ORDER_TYPE_SELL";
-              if (!isMarketOrder) {
-                await supabase.from("meta_api_retry_queue").insert({
-                  user_id: user.user_id,
-                  meta_api_account_id: user.meta_api_account_id,
-                  request_type: "ORDER_CREATE",
-                  api_payload: orderPayload,
-                  last_error: error_message,
-                });
-                status = "RETRYING";
-              } else {
-                status = "FAILED";
-              }
-            } else {
-              const responseData = await response.json();
-              meta_api_order_id = responseData.orderId || "EXECUTED";
-              const isMarketOrder = actionType === "ORDER_TYPE_BUY" || actionType === "ORDER_TYPE_SELL";
-              status = isMarketOrder ? "OPEN" : "PENDING";
-            }
-          } catch (e: any) {
-            error_message = e.message;
-            const isMarketOrder =
-              actionType === "ORDER_TYPE_BUY" ||
-              actionType === "ORDER_TYPE_SELL";
-            if (!isMarketOrder) {
-              await supabase.from("meta_api_retry_queue").insert({
-                user_id: user.user_id,
-                meta_api_account_id: user.meta_api_account_id,
-                request_type: "ORDER_CREATE",
-                api_payload: orderPayload,
-                last_error: error_message,
+            try {
+              const metaApiUrl = `${baseUrl}/users/current/accounts/${user.meta_api_account_id}/trade`;
+              const response = await fetch(metaApiUrl, {
+                method: "POST",
+                headers: {
+                  "auth-token": user.meta_api_token,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify(orderPayload),
               });
-              status = "RETRYING";
-            } else {
+
+              if (!response.ok) {
+                error_message = await response.text();
+                status = "FAILED";
+              } else {
+                const responseData = await response.json();
+                meta_api_order_id = responseData.orderId || "EXECUTED";
+                status = "OPEN";
+              }
+            } catch (e: any) {
+              error_message = e.message;
               status = "FAILED";
             }
           }
         } else {
           // Paper trading
-          const isMarketOrder = actionType === "ORDER_TYPE_BUY" || actionType === "ORDER_TYPE_SELL";
           status = isMarketOrder ? "PAPER_OPEN" : "PENDING";
         }
 
