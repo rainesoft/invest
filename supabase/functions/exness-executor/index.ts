@@ -85,7 +85,34 @@ serve(async (req) => {
           status: 500,
         });
       }
-      usersToProcess = users;
+
+      // Extract the signal tier from ai_summary (e.g. "S-Tier", "A-Tier")
+      const signalTier = (() => {
+        const summary = signal.ai_summary || "";
+        const match = summary.match(/^(S|A|B|C)-Tier/m);
+        return match ? match[0] : null;
+      })();
+
+      // Only include users who have the Master Auto-Trade Switch ON
+      // and whose permitted tiers include this signal's tier.
+      usersToProcess = users.filter(u => {
+        if (!u.auto_trade_enabled) {
+          console.log(`[Router] Skipping user ${u.user_id}: Master Auto-Trade Switch is OFF.`);
+          return false;
+        }
+        if (signalTier && u.auto_trade_tiers && Array.isArray(u.auto_trade_tiers)) {
+          if (!u.auto_trade_tiers.includes(signalTier)) {
+            console.log(`[Router] Skipping user ${u.user_id}: Signal tier ${signalTier} not in permitted tiers [${u.auto_trade_tiers.join(', ')}].`);
+            return false;
+          }
+        }
+        return true;
+      });
+
+      if (usersToProcess.length === 0) {
+        return new Response("No users opted in to auto-trade for this signal tier.", { status: 200 });
+      }
+
     }
 
     const entryPlan = signal.entry_plan_json || {};
@@ -189,6 +216,7 @@ serve(async (req) => {
             status: "REJECTED",
             error_message: riskValidation.reason,
           });
+          executions.push({ user_id: user.user_id, status: "REJECTED", error_message: riskValidation.reason });
           continue;
         }
 
@@ -271,6 +299,7 @@ serve(async (req) => {
             error_message: tierRejectReason,
           });
           // Notify user via Telegram (handled downstream by insert trigger on user_trades)
+          executions.push({ user_id: user.user_id, status: "REJECTED", error_message: tierRejectReason });
           continue;
         }
 
@@ -329,6 +358,7 @@ serve(async (req) => {
             status: "REJECTED",
             error_message: spreadRejectReason,
           });
+          executions.push({ user_id: user.user_id, status: "REJECTED", error_message: spreadRejectReason });
           continue;
         }
 
@@ -385,7 +415,8 @@ serve(async (req) => {
             } else {
               const responseData = await response.json();
               meta_api_order_id = responseData.orderId || "EXECUTED";
-              status = "OPEN";
+              const isMarketOrder = actionType === "ORDER_TYPE_BUY" || actionType === "ORDER_TYPE_SELL";
+              status = isMarketOrder ? "OPEN" : "PENDING";
             }
           } catch (e: any) {
             error_message = e.message;
@@ -407,7 +438,8 @@ serve(async (req) => {
           }
         } else {
           // Paper trading
-          status = "PAPER_OPEN";
+          const isMarketOrder = actionType === "ORDER_TYPE_BUY" || actionType === "ORDER_TYPE_SELL";
+          status = isMarketOrder ? "PAPER_OPEN" : "PENDING";
         }
 
         // Record the user's trade execution
@@ -423,7 +455,7 @@ serve(async (req) => {
           error_message: error_message,
         });
 
-        executions.push({ user_id: user.user_id, status });
+        executions.push({ user_id: user.user_id, status, error_message: error_message || riskValidation?.reason || spreadRejectReason || tierRejectReason });
       }
     }
 

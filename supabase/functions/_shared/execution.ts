@@ -95,41 +95,64 @@ export async function fetchPaperBars(symbol: string, timeframe = '1D', limit = 3
     const metaAccountId = Deno.env.get("META_API_ACCOUNT_ID");
     
     if (metaToken && metaAccountId) {
-      try {
-        let metaTimeframe = '1d';
-        if (timeframe === '1D') metaTimeframe = '1d';
-        else if (timeframe === '1H') metaTimeframe = '1h';
-        else if (timeframe === '15Min') metaTimeframe = '15m';
+      // --- Symbol remapping: translate internal names to broker symbol names ---
+      const META_SYMBOL_MAP: Record<string, string> = {
+        'NAS100': 'US100',   // Exness/MT4 uses US100 for Nasdaq 100
+        'US30': 'US30',      // Confirmed correct
+        'UKOIL': 'UKOIL',    // Confirmed correct
+        'XAGUSD': 'XAGUSD',  // Confirmed correct on most brokers
+        'BTCUSD': 'BTCUSD',  // Confirmed correct
+      };
+      const brokerSymbol = META_SYMBOL_MAP[symbol] ?? symbol;
 
-        const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.new-york.agiliumtrade.ai";
-        const marketDataUrl = baseUrl.replace("mt-client-api-v1", "mt-market-data-client-api-v1");
-        const metaUrl = `${marketDataUrl}/users/current/accounts/${metaAccountId}/historical-market-data/symbols/${symbol}/timeframes/${metaTimeframe}/candles?limit=${limit}`;
-        
-        const metaRes = await fetch(metaUrl, {
-          headers: { 'auth-token': metaToken }
-        });
+      let metaTimeframe = '1d';
+      if (timeframe === '1D') metaTimeframe = '1d';
+      else if (timeframe === '4H') metaTimeframe = '4h';
+      else if (timeframe === '1H') metaTimeframe = '1h';
+      else if (timeframe === '15Min') metaTimeframe = '15m';
 
-        if (metaRes.ok) {
-          const metaCandles = await metaRes.json();
-          const bars: Bar[] = metaCandles.map((c: any) => ({
-            t: new Date(c.time).toISOString(),
-            o: c.open,
-            h: c.high,
-            l: c.low,
-            c: c.close,
-            v: c.tickVolume || c.volume || 0
-          })).sort((a: Bar, b: Bar) => new Date(a.t).getTime() - new Date(b.t).getTime());
-
-          if (bars.length > 0) {
-            console.log(`[Data Fetch] Pulled ${bars.length} bars from MetaTrader Broker Feed for ${symbol}`);
-            return { source: 'MetaAPI', bars };
+      const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.new-york.agiliumtrade.ai";
+      const marketDataUrl = baseUrl.replace("mt-client-api-v1", "mt-market-data-client-api-v1");
+      const metaUrl = `${marketDataUrl}/users/current/accounts/${metaAccountId}/historical-market-data/symbols/${brokerSymbol}/timeframes/${metaTimeframe}/candles?limit=${limit}`;
+      
+      // --- Retry logic: 2 attempts with 500ms backoff ---
+      let lastMetaError: unknown;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          if (attempt > 1) {
+            console.warn(`[Data Fetch] MetaAPI attempt ${attempt} for ${brokerSymbol}...`);
+            await new Promise(r => setTimeout(r, 500));
           }
-        } else {
-          console.warn(`MetaApi returned ${metaRes.status} for ${symbol}. Falling back to Yahoo Finance.`);
+
+          const metaRes = await fetch(metaUrl, {
+            headers: { 'auth-token': metaToken }
+          });
+
+          if (metaRes.ok) {
+            const metaCandles = await metaRes.json();
+            const bars: Bar[] = metaCandles.map((c: any) => ({
+              t: new Date(c.time).toISOString(),
+              o: c.open,
+              h: c.high,
+              l: c.low,
+              c: c.close,
+              v: c.tickVolume || c.volume || 0
+            })).sort((a: Bar, b: Bar) => new Date(a.t).getTime() - new Date(b.t).getTime());
+
+            if (bars.length > 0) {
+              console.log(`[Data Fetch] Pulled ${bars.length} bars from MetaTrader Broker Feed for ${brokerSymbol}`);
+              return { source: 'MetaAPI', bars };
+            }
+          } else {
+            console.warn(`MetaApi returned ${metaRes.status} for ${brokerSymbol} (attempt ${attempt}).`);
+            lastMetaError = `HTTP ${metaRes.status}`;
+          }
+        } catch (err) {
+          console.warn(`MetaApi fetch failed for ${brokerSymbol} (attempt ${attempt}):`, err);
+          lastMetaError = err;
         }
-      } catch (err) {
-        console.warn(`MetaApi fetch failed for ${symbol}:`, err);
       }
+      console.error(`[Data Fetch] MetaAPI exhausted all retries for ${brokerSymbol}. Last error:`, lastMetaError);
     }
 
     // 2. Fallback to Yahoo Finance (ONLY IN DEV MODE)
@@ -223,5 +246,87 @@ export async function fetchPaperBars(symbol: string, timeframe = '1D', limit = 3
   }
   const json = await res.json();
   return { source: 'Alpaca', bars: json.bars ?? [] };
+}
+
+/**
+ * Cancels any pending broker orders (MetaAPI) tied to an invalidated or expired opportunity.
+ */
+export async function cancelBrokerOrdersForOpportunity(supabase: SupabaseClient, opportunityId: string): Promise<void> {
+  // 1. Fetch all OPEN trades for this opportunity that have a broker order ID
+  const { data: activeTrades, error: tradesErr } = await supabase
+    .from("user_trades")
+    .select("id, user_id, meta_api_order_id")
+    .eq("opportunity_id", opportunityId)
+    .eq("status", "OPEN")
+    .not("meta_api_order_id", "is", null);
+
+  if (tradesErr || !activeTrades || activeTrades.length === 0) {
+    return;
+  }
+
+  // 2. Extract unique user IDs to fetch their MetaAPI tokens
+  const userIds = [...new Set(activeTrades.map(t => t.user_id))];
+  const { data: userSettings, error: settingsErr } = await supabase
+    .from("user_risk_settings")
+    .select("user_id, meta_api_token, meta_api_account_id")
+    .in("user_id", userIds);
+
+  if (settingsErr || !userSettings) {
+    return;
+  }
+
+  const settingsMap = new Map(userSettings.map(s => [s.user_id, s]));
+  const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.new-york.agiliumtrade.ai";
+
+  // 3. Loop through and cancel each pending order
+  for (const trade of activeTrades) {
+    const userConfig = settingsMap.get(trade.user_id);
+    if (!userConfig || !userConfig.meta_api_token || !userConfig.meta_api_account_id) {
+      continue;
+    }
+
+    const cancelPayload = {
+      actionType: "ORDER_CANCEL",
+      orderId: trade.meta_api_order_id
+    };
+
+    try {
+      const cancelUrl = `${baseUrl}/users/current/accounts/${userConfig.meta_api_account_id}/trade`;
+      const response = await fetch(cancelUrl, {
+        method: "POST",
+        headers: {
+          "auth-token": userConfig.meta_api_token,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(cancelPayload),
+      });
+
+      if (response.ok) {
+        console.log(`[Broker Sync] Successfully cancelled pending order ${trade.meta_api_order_id} for user ${trade.user_id}`);
+        await supabase.from("user_trades").update({ status: "CANCELLED" }).eq("id", trade.id);
+      } else {
+        const errorText = await response.text();
+        console.error(`[Broker Sync] Failed to cancel order ${trade.meta_api_order_id}: ${errorText}`);
+        
+        // Push to retry queue
+        await supabase.from("meta_api_retry_queue").insert({
+          user_id: trade.user_id,
+          meta_api_account_id: userConfig.meta_api_account_id,
+          request_type: "ORDER_CANCEL",
+          api_payload: cancelPayload,
+          last_error: errorText
+        });
+      }
+    } catch (e: any) {
+      console.error(`[Broker Sync] Exception cancelling order ${trade.meta_api_order_id}: ${e.message}`);
+      await supabase.from("meta_api_retry_queue").insert({
+        user_id: trade.user_id,
+        meta_api_account_id: userConfig.meta_api_account_id,
+        request_type: "ORDER_CANCEL",
+        api_payload: cancelPayload,
+        last_error: e.message
+      });
+    }
+  }
 }
 

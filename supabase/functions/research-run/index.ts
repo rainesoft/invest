@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2.108.2";
-import { fetchPaperBars, Bar, placePaperOrder, makeClientOrderId } from "../_shared/execution.ts";
+import { fetchPaperBars, Bar, placePaperOrder, makeClientOrderId, cancelBrokerOrdersForOpportunity } from "../_shared/execution.ts";
 import { sma, rsi, detectRegime } from "../_shared/strategy.ts";
 import { insertAuditLog } from "../_shared/audit.ts";
 import { isMarketOpen } from "../_shared/market.ts";
@@ -115,22 +115,24 @@ You MUST respond strictly with a raw JSON object matching the exact schema below
 3. STOP LOSS SIZING & VOLATILITY (ATR): The snapshot provides \`safe_long_stop_loss\`, \`safe_short_stop_loss\`, and \`atr_14\`. 
    - TIGHT LOCAL STRUCTURE: You MUST optimize your stop loss for the specific timeframe you are evaluating. For example, a 4H swing trade on Forex typically requires a 30 to 60-pip stop. Do not use massive 100+ pip stop losses unless trading highly volatile exotics or crypto. Place the stop loss tight behind the immediate local structure.
    - MANDATORY ATR LIMIT: Your \`suggested_stop_loss\` MUST be the TIGHTER of either your structural stop, or the volatility threshold \`Entry +/- (1.5 * atr_14)\`. 
-   - MAX STOP LOSS LIMIT: Your calculated stop loss MUST NEVER exceed a distance of \`3.0 * atr_14\` from the suggested entry price. If the required structural stop is too far away, adjust your Entry Price closer to the invalidation point to shrink the risk!
-4. FUNDAMENTAL REALITY CHECK: You MUST heavily weigh the provided \`fundamental_context\`. 
+   - MAX STOP LOSS LIMIT: Your calculated stop loss MUST NEVER exceed a distance of \`2.0 * atr_14\` from the suggested entry price (and strictly \`1.5 * atr_14\` for commodities like XAUUSD, UKOIL). If the required structural stop is too far away, adjust your Entry Price closer to the invalidation point to shrink the risk!
+4. FUNDAMENTAL REALITY CHECK (MACRO CATALYSTS & BREAKOUTS): You MUST heavily weigh the provided \`fundamental_context\`. 
    - Be specific: Do not generically state "there are no geopolitical shocks." Cite specific institutional drivers like Central Bank divergence, upcoming rate decisions, or CPI/NFP data that specifically impacts the asset.
-   - [LIVE BREAKING NEWS]: If the \`fundamental_context\` contains live breaking headlines indicating sudden geopolitical shocks (e.g., airstrikes, war), severe equity sector fatigue (e.g., tech sell-off), or unannounced macroeconomic shifts that oppose the technical trend, you MUST abort the setup and return status: "REJECTED".
-   - [CRITICAL MACRO DIRECTIVE]: If the technical setup is strong (B-Tier or A-Tier) and aligns perfectly with a High-Impact fundamental catalyst in the \`fundamental_context\`, you MUST upgrade your confidence to S-Tier (90+).
-5. COUNTER-TREND MOMENTUM CHECK (MEAN REVERSION): 
-   - Strict Technical Definitions: Price > 50 EMA and > 200 EMA = BULLISH momentum. Price < 50 EMA and < 200 EMA = BEARISH momentum.
-   - DEEP PULLBACK BUYS: If an asset is crashing well below its EMAs (Bearish momentum), do NOT automatically reject long setups! If price is approaching a major higher-timeframe support level or Bollinger Band lower bound, issue a Buy Limit order at that structural floor.
-   - EXHAUSTION SHORTS: If an asset is ripping parabolically well above its EMAs (Bullish momentum), do NOT automatically reject short setups! If price is approaching a major higher-timeframe resistance level or Bollinger Band upper bound, issue a Sell Limit order at that structural ceiling.
+   - MACRO BREAKOUT OPPORTUNISM: If there is an impending High-Impact event (e.g., CPI, NFP, Fed speeches) within the next 12 hours, you MUST NOT use Limit orders that could be slipped during the volatility. You MUST originate a BREAKOUT strategy. Place pending Buy Stop / Sell Stop orders just outside the immediate consolidation zone to trap the impending volatility explosion upon confirmation.
+   - [LIVE BREAKING NEWS]: If the \`fundamental_context\` contains live breaking headlines indicating sudden geopolitical shocks (e.g., airstrikes, war), you MUST evaluate if it creates a massive directional opportunity. Only reject if it completely destroys the mathematical structure of the chart without presenting a new edge.
+   - [CRITICAL MACRO DIRECTIVE]: If the technical setup aligns perfectly with a High-Impact fundamental catalyst in the \`fundamental_context\`, you MUST upgrade your confidence to S-Tier (90+).
+5. RANGING MARKETS & MEAN REVERSION:
+   - If the market is RANGING (price stuck between 50 and 200 EMAs or chopping horizontally), DO NOT default to a C-Tier REJECTED setup. 
+   - You MUST originate a MEAN_REVERSION strategy. Place Limit Orders at the outer boundaries of the range (e.g., Buy Limit at Support/Lower Bollinger Band, Sell Limit at Resistance/Upper Bollinger Band). Ranging markets are highly profitable for mean reversion; do not fear the chop.
 6. INSTITUTIONAL TONE: 
    - Never use apologetic, weak, or observational phrasing regarding missing data. Write with bulletproof brevity. Do NOT repeat your rationale. Combine your thoughts into a single, sharp thesis.
 7. MULTI-TIMEFRAME ALIGNMENT (COUNTER-TREND PULLBACKS): You are provided with the 'htf_trend' (Daily macro trend). You generally want to align with it. HOWEVER, if the 4H setup contradicts the Daily trend, you MAY originate a "Counter-Trend Pullback" trade IF AND ONLY IF you limit the confidence score to B-Tier (80 max) and mandate a tighter structural stop loss (max 1.5 * atr_14).
 8. BOLLINGER BAND EXHAUSTION (LIMIT ORDERS): You are provided with 'bb_upper' and 'bb_lower'. NEVER suggest a Market Entry LONG if the current price is at or above 'bb_upper'. NEVER suggest a Market Entry SHORT if the price is at or below 'bb_lower'. INSTEAD, use the \`execution_trigger\` to prescribe a pending LIMIT ORDER at the 50 EMA or the nearest Support/Resistance level to catch the pullback.
 9. RSI DYNAMICS IN TRENDS: In a strong uptrend (Price > 50 EMA and > 200 EMA), the daily RSI rarely drops all the way to 30. A pullback to the 40-45 range is typically sufficient to reset momentum. Do NOT demand a drop to 30 if the asset is in heavy bullish momentum.
 10. DIRECTIONAL MATH & SUPPORT VALIDATION: You MUST perform basic directional math. If Current Price < Support, the support has been BROKEN and is now Resistance. If Current Price > Resistance, it is now Support. Do not suggest a "pullback to support" if price has already broken below it.
-11. MOMENTUM CONTINUATION ENTRY LOGIC: Never recommend 'immediate market entry' directly underneath a major swing high or resistance. You must either recommend a pullback limit order to a moving average/support, or a pending breakout (Buy Stop/Sell Stop) just beyond the structure. Avoid buying the local top.
+11. EMPTY AIR PROTOCOL & MOMENTUM CONTINUATION: 
+    - If the current price is floating in "empty air" (midway between major support and resistance), DO NOT reject the setup. Instead, originate a deep Limit Order at the nearest major structural floor or ceiling. The market may take days to reach it, but having the pending order published is highly valuable.
+    - Never recommend 'immediate market entry' directly underneath a major swing high or resistance. You must either recommend a pullback limit order to a moving average/support, or a pending breakout (Buy Stop/Sell Stop) just beyond the structure. Avoid buying the local top.
 12. STRICT STRUCTURAL TARGETS & RISK:REWARD OPTIMIZATION: You MUST output a \`suggested_take_profit\` that matches the exact structural target (e.g. major support/resistance) identified in your rationale. 
     - MINIMUM VIABLE R:R: Institutional setups require a MINIMUM Risk:Reward of 1:1.5, ideally 1:2.0 or higher. 
     - ENTRY PRICING TRADEOFF (SCALING IN): If your setup yields a weak R:R (e.g., 1:1.2), you MUST mathematically optimize your \`suggested_entry_price\`. Instead of moving the entire entry, you MUST split your risk by providing the \`scaled_entries\` array. Provide a primary entry price near the current support/resistance (e.g., \`weight: 0.5\`) and a secondary entry deeper into the retracement zone (e.g., \`weight: 0.5\`) to ensure a blended 1:2.0 R:R is achieved.
@@ -140,6 +142,15 @@ You MUST respond strictly with a raw JSON object matching the exact schema below
     - A-Tier (80-89): Pristine technical setup. Price is trending cleanly on the correct side of the 50 & 200 EMAs, pulling back to a clear structural zone with empty air to the Take Profit target.
     - B-Tier (70-79): Decent setup but possesses a minor flaw (e.g., Counter-Trend, forced to use wide ATR stop, or weak fundamentals).
     - C-Tier (<70): Choppy market, price floating in empty air, or poor R:R. (These will be automatically rejected by the execution desk).
+15. COMMODITY GEOPOLITICAL SUPPLY SHOCK OVERRIDE: For commodities (UKOIL, XAUUSD, XAGUSD), technical EMAs are SECONDARY to active supply disruption events. 
+    - If the \`fundamental_context\` headlines reference an active military conflict affecting supply routes (e.g., Strait of Hormuz blockade, pipeline sabotage, OPEC emergency cuts), this is a HIGH-IMPACT MACRO CATALYST that OVERRIDES technical ranging/chop classifications.
+    - In such scenarios, you MUST NOT default to C-Tier simply because the price sits between EMAs or because the market is highly volatile. GEOPOLITICAL VOLATILITY = AGGRESSIVE TRADING OPPORTUNITY. Do not use "messy volatility" as an excuse to reject the trade. 
+    - You must evaluate the geopolitical catalyst as the PRIMARY driver. If it supports a directional bias (e.g., supply disruption = bullish oil), you MUST originate a trade setup with S-Tier confidence (90+) provided the structural R:R is viable. Lean into the asymmetrical upside.
+    - Use pending Limit Orders to catch pullbacks within the geopolitically-driven trend rather than chasing market orders at the top of a spike.
+    - OPEC production decisions are MEDIUM-IMPACT catalysts. They support a directional bias but alone do not warrant S-Tier unless combined with a supply disruption or demand shock.
+16. MAXIMUM ENTRY DISTANCE (EXECUTION PROBABILITY): Your \`suggested_entry_price\` MUST NOT be further than \`2.0 * atr_14\` from the current price. Placing a Buy Limit 10% below current price guarantees zero fills and wastes capital allocation. If your structural level is deeper than 2x ATR from the current price, you MUST use \`scaled_entries\` to split between a near entry (within 1x ATR) and a deep entry (at the structural level).
+17. MANDATORY SCALING IN FOR DEEP RETRACEMENTS: If the optimal structural entry is more than \`1.5 * atr_14\` from the current price, you MUST provide \`scaled_entries\` with at least two entries: (1) a primary entry within 1x ATR of the current price with \`weight: 0.5\`, and (2) a secondary entry at the deep structural level with \`weight: 0.5\`. This ensures partial execution on shallow pullbacks while preserving the mathematical edge of the deeper entry.
+18. NO RETAIL GURU-SPEAK (SYSTEMIC QUANT TONE ONLY): You are an automated algorithmic signal generator, not a retail trading guru. DO NOT advise the user to wait for "candlestick confirmation", "buying volume", or "price action triggers". The execution desk operates fully autonomously using hard LIMIT/STOP orders. Your rationale must focus purely on mathematical edge, structural levels, liquidity sweeps, and macro catalysts. Trade management (trailing stops, breakeven moves) is handled globally by a separate risk microservice—do not invent or suggest trade management rules in your rationale.
 
 Current Market Context:
 ${JSON.stringify(snapshot, null, 2)}`;
@@ -226,6 +237,9 @@ Your job is to determine if the original thesis is still valid given the NEW liv
 [ORIGINAL SIGNAL THESIS]
 Symbol: ${signal.symbol}
 Direction: ${signal.side}
+Entry Plan: ${JSON.stringify(signal.entry_plan_json)}
+Stop Loss Plan: ${JSON.stringify(signal.stop_plan_json)}
+Take Profit Plan: ${JSON.stringify(signal.take_profit_json)}
 Thesis: ${signal.ai_summary}
 
 [NEW LIVE CONTEXT]
@@ -234,8 +248,9 @@ Breaking News & Macro: ${newsContext || "No major macro events."}
 
 [VALIDATION RULES]
 1. MACRO CONTRADICTION: If the new breaking news fundamentally contradicts the original thesis (e.g. a 'risk-off' geopolitical shock occurs but the signal is LONG equities), you MUST reject the signal.
-2. TECHNICAL INVALIDATION: If the current price has crossed the suggested stop loss, the setup is mathematically dead. Reject it.
-3. If the thesis remains completely valid and supported by the new context, keep it valid.
+2. STRUCTURAL DECAY: If the price action has significantly shifted and the original structural rationale no longer makes sense, reject it.
+3. DO NOT HALLUCINATE MATH: The system has ALREADY mathematically verified that the current price has NOT hit the stop loss or take profit. Do NOT reject the setup claiming the stop loss was hit. You must only reject based on fundamental macro shifts or severe structural decay.
+4. If the thesis remains valid and supported by the new context, keep it valid.
 
 You MUST respond strictly with a raw JSON object:
 {
@@ -342,13 +357,13 @@ serve(async (req) => {
         // ==========================================
         // PHASE 1: ACTIVE SIGNAL VALIDATION SWEEP
         // ==========================================
-        console.log(`[Phase 1] Sweeping active PUBLISHED signals for revalidation...`);
+        console.log(`[Phase 1] Sweeping active APPROVED signals for revalidation...`);
         sendEvent({ type: 'progress', message: `[Phase 1] Validating active signals against live market conditions...` });
         
         const { data: activeSignals } = await supabase
           .from("trade_opportunities")
           .select("*")
-          .eq("status", "PUBLISHED");
+          .eq("status", "APPROVED");
 
         if (activeSignals && activeSignals.length > 0) {
           for (const signal of activeSignals) {
@@ -357,6 +372,7 @@ serve(async (req) => {
               const hoursElapsed = (Date.now() - new Date(signal.created_at).getTime()) / (1000 * 60 * 60);
               if (hoursElapsed > 12) {
                 await supabase.from("trade_opportunities").update({ status: "EXPIRED", ai_risks: "Expired: 12h TTL exceeded without execution." }).eq("id", signal.id);
+                await cancelBrokerOrdersForOpportunity(supabase, signal.id);
                 console.log(`[Validation] EXPIRED ${signal.symbol}: 12h TTL expired.`);
                 continue;
               }
@@ -376,6 +392,7 @@ serve(async (req) => {
                 if ((signal.side === 'LONG' && snapshot.current_price <= stopLoss) || 
                     (signal.side === 'SHORT' && snapshot.current_price >= stopLoss)) {
                   await supabase.from("trade_opportunities").update({ status: "LOST", r_multiple: -1, ai_risks: "Technical Invalidation: Stop Loss crossed." }).eq("id", signal.id);
+                  await cancelBrokerOrdersForOpportunity(supabase, signal.id);
                   console.log(`[Validation] LOST ${signal.symbol}: Stop loss crossed by live price.`);
                   continue;
                 }
@@ -392,6 +409,7 @@ serve(async (req) => {
               
               if (!evalResult.is_valid) {
                 await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Invalidated by AI Risk Officer: ${evalResult.rejection_reason}` }).eq("id", signal.id);
+                await cancelBrokerOrdersForOpportunity(supabase, signal.id);
                 console.log(`[Validation] REJECTED ${signal.symbol} by AI: ${evalResult.rejection_reason}`);
               } else {
                 console.log(`[Validation] VALID ${signal.symbol}: Thesis remains intact.`);
@@ -563,7 +581,7 @@ serve(async (req) => {
             sendEvent({ type: 'progress', message: `[AI Memory] Pulling last 5 trades to calibrate bias for ${symbol}...` });
             const { data: pastTrades } = await supabase
               .from("trade_opportunities")
-              .select("status, side, ai_summary, r_multiple")
+              .select("status, side, ai_summary, ai_risks, r_multiple")
               .eq("symbol", symbol)
               .in("status", ["WON", "LOST", "REJECTED"])
               .order("created_at", { ascending: false })
@@ -571,9 +589,13 @@ serve(async (req) => {
 
             let historicalMemory = "";
             if (pastTrades && pastTrades.length > 0) {
-              historicalMemory = pastTrades.map((t, i) => 
-                `Past Decision ${i+1} (${t.side} -> ${t.status}, ${t.r_multiple !== null ? t.r_multiple + 'R' : 'N/A'}): "${t.ai_summary || 'No rationale logged'}"`
-              ).join("\n");
+              historicalMemory = pastTrades.map((t, i) => {
+                let text = `Past Decision ${i+1} (${t.side} -> ${t.status}, ${t.r_multiple !== null ? t.r_multiple + 'R' : 'N/A'}): "${t.ai_summary || 'No rationale logged'}"`;
+                if (t.status === 'REJECTED' && t.ai_risks && t.ai_risks.includes('Invalidated')) {
+                  text += `\n   -> [CRITICAL] REASON FOR INVALIDATION: "${t.ai_risks}" - You must learn from this and avoid similar structural setups.`;
+                }
+                return text;
+              }).join("\n");
             }
 
             // LAYER B: Cognitive Guard (Senior Risk Officer)

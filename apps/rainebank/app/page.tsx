@@ -300,7 +300,7 @@ export default async function LandingPage() {
           <a href="#" style={{ color: 'inherit', textDecoration: 'none' }}>Terms of Service</a>
         </div>
         <div style={{ color: '#4b5563', fontSize: '13px', marginTop: '24px' }}>
-          © {new Date().getFullYear()} RaineBank. Developed by RaineSoft Solutions.
+          © {new Date().getFullYear()} RaineBank. Developed by Rainesoft Solutions.
         </div>
       </footer>
     </div>

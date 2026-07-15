@@ -27,7 +27,8 @@ export async function validateGlobalSignal(
   const { data: activeSignals, error: activeError } = await supabase
     .from("trade_opportunities")
     .select("id, symbol, side, entry_plan_json, stop_plan_json")
-    .in("status", ["APPROVED", "PENDING_APPROVAL"]);
+    .in("status", ["APPROVED", "PENDING_APPROVAL"])
+    .eq("is_archived", false);
 
   if (activeError) {
     return { valid: false, reason: "Risk Check Failed: Could not query active signals" };
@@ -48,12 +49,12 @@ export async function validateGlobalSignal(
         if (entryPrice) {
           const priceDiff = Math.abs(currentSnapshot.current_price - entryPrice);
           const atr = currentSnapshot.atr_14;
-          // If the current price is at least 1 ATR away from the first entry, we consider it "in profit" and allow scaling in
-          if (priceDiff > atr) {
-            console.log(`[Risk Manager] Pyramiding approved for ${symbol}. Current price is > 1 ATR from original entry.`);
+          // If the current price is at least 0.75 ATR away from the first entry, allow scaling in
+          if (priceDiff > atr * 0.75) {
+            console.log(`[Risk Manager] Pyramiding approved for ${symbol}. Current price is > 0.75 ATR from original entry.`);
             // DO NOT return valid yet, we must check correlation limits below
           } else {
-            return { valid: false, reason: `REJECTED: Asset isolation enforced. Active trade for ${symbol} is not far enough in profit (needs >1 ATR) to safely scale in.` };
+            return { valid: false, reason: `REJECTED: Asset isolation enforced. Active trade for ${symbol} is not far enough in profit (needs >0.75 ATR) to safely scale in.` };
           }
         }
       } else {

@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@lib/supabase';
-import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, ShieldAlert } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 type Opportunity = {
@@ -16,6 +17,7 @@ type Opportunity = {
   stop_plan_json: any;
   take_profit_json: any;
   ai_summary: string | null;
+  ai_risks: string | null;
   status: string;
 };
 
@@ -100,7 +102,9 @@ export default function Page() {
   const [opps, setOpps] = useState<Opportunity[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<string | null>(null);
-  const [hideRejected, setHideRejected] = useState(true);
+  const [checkingRisk, setCheckingRisk] = useState<string | null>(null);
+  const [confirmExecuteId, setConfirmExecuteId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'ACTIVE' | 'INVALIDATED' | 'REJECTED'>('ACTIVE');
   const [executedIds, setExecutedIds] = useState<Set<string>>(new Set());
 
   // Pagination State
@@ -118,15 +122,17 @@ export default function Page() {
 
       let query = client
         .from('trade_opportunities')
-        .select('id, symbol, side, timeframe, created_at, entry_plan_json, stop_plan_json, take_profit_json, ai_summary, status', { count: 'exact' })
+        .select('id, symbol, side, timeframe, created_at, entry_plan_json, stop_plan_json, take_profit_json, ai_summary, ai_risks, status', { count: 'exact' })
         .eq('is_archived', false)
         .order('created_at', { ascending: false })
         .range(from, to);
 
-      if (hideRejected) {
+      if (activeTab === 'ACTIVE') {
         query = query.eq('status', 'APPROVED').not('ai_summary', 'ilike', '%C-Tier%');
+      } else if (activeTab === 'INVALIDATED') {
+        query = query.eq('status', 'REJECTED').ilike('ai_risks', '%Invalidated%');
       } else {
-        query = query.in('status', ['APPROVED', 'REJECTED']);
+        query = query.eq('status', 'REJECTED').not('ai_risks', 'ilike', '%Invalidated%');
       }
 
       const { data, count } = await query;
@@ -136,27 +142,52 @@ export default function Page() {
       setTotalPages(count ? Math.ceil(count / pageSize) : 1);
       
       if (data && data.length > 0) {
-        const oppIds = data.map(o => o.id);
+        const oppIds = data.map((o: any) => o.id);
         const { data: userTrades } = await client
           .from('user_trades')
           .select('opportunity_id')
-          .in('opportunity_id', oppIds);
+          .in('opportunity_id', oppIds)
+          .not('status', 'in', '("REJECTED","FAILED","CANCELLED")');
           
         if (userTrades) {
-           setExecutedIds(new Set(userTrades.map(ut => ut.opportunity_id)));
+           setExecutedIds(new Set(userTrades.map((ut: any) => ut.opportunity_id)));
         }
       }
 
       setLoading(false);
     };
     load();
-  }, [client, page, hideRejected]);
+  }, [client, page, activeTab]);
 
 
 
   if (loading && opps.length === 0) {
     return <div style={{ color: '#9ca3af', fontSize: '15px' }}>Loading signals...</div>;
   }
+
+  const preExecuteCheck = async (signal: Opportunity) => {
+    setCheckingRisk(signal.id);
+    try {
+      const { data: activeTrades, error } = await client
+        .from('user_trades')
+        .select('id')
+        .eq('symbol', signal.symbol)
+        .in('status', ['OPEN', 'PENDING']);
+        
+      if (error) throw error;
+      
+      if (activeTrades && activeTrades.length > 0) {
+        setConfirmExecuteId(signal.id);
+      } else {
+        // No active trades, safe to execute directly
+        await handleExecute(signal.id);
+      }
+    } catch (err: any) {
+      toast.error(`Risk Check Failed: ${err.message}`);
+    } finally {
+      setCheckingRisk(null);
+    }
+  };
 
   const handleExecute = async (id: string) => {
     setProcessing(id);
@@ -186,33 +217,26 @@ export default function Page() {
           Published AI Signals
         </h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ color: '#9ca3af', fontSize: '14px', fontWeight: 600 }}>Hide Weak Signals</span>
-          <div
-            onClick={() => {
-              setPage(1);
-              setHideRejected(!hideRejected);
-            }}
-            style={{
-              width: '44px',
-              height: '24px',
-              background: hideRejected ? '#38bdf8' : '#374151',
-              borderRadius: '9999px',
-              position: 'relative',
-              cursor: 'pointer',
-              transition: 'background 0.2s ease-in-out'
-            }}
-          >
-            <div style={{
-              position: 'absolute',
-              top: '2px',
-              left: hideRejected ? '22px' : '2px',
-              width: '20px',
-              height: '20px',
-              background: '#fff',
-              borderRadius: '50%',
-              transition: 'left 0.2s ease-in-out',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-            }} />
+          <div style={{ display: 'flex', background: '#111', padding: '4px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
+            {(['ACTIVE', 'INVALIDATED', 'REJECTED'] as const).map(tab => (
+              <button
+                key={tab}
+                onClick={() => { setPage(1); setActiveTab(tab); }}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: activeTab === tab ? '#262626' : 'transparent',
+                  color: activeTab === tab ? '#fff' : '#9ca3af',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+              >
+                {tab}
+              </button>
+            ))}
           </div>
         </div>
       </div>
@@ -304,6 +328,15 @@ export default function Page() {
                 </div>
               </div>
 
+              {activeTab === 'INVALIDATED' && signal.ai_risks && (
+                <div style={{ background: 'rgba(248,113,113,0.1)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(248,113,113,0.2)', marginBottom: '24px' }}>
+                  <div style={{ fontSize: '12px', color: '#f87171', marginBottom: '8px', fontWeight: 800 }}>REASON FOR INVALIDATION</div>
+                  <p style={{ margin: 0, fontSize: '14px', color: '#fca5a5', lineHeight: 1.5, fontWeight: 500 }}>
+                    {signal.ai_risks}
+                  </p>
+                </div>
+              )}
+
               <div style={{ background: isWarning ? 'rgba(248,113,113,0.05)' : 'rgba(37,99,235,0.05)', padding: '20px', borderRadius: '16px', border: `1px solid ${isWarning ? 'rgba(248,113,113,0.2)' : 'rgba(37,99,235,0.1)'}`, marginBottom: '24px' }}>
                 <div style={{ fontSize: '12px', color: isWarning ? '#f87171' : '#38bdf8', marginBottom: '12px', fontWeight: 700 }}>
                   {isWarning ? 'AI RISK OFFICER WARNING' : 'LLM INSTITUTIONAL RATIONALE'}
@@ -325,8 +358,8 @@ export default function Page() {
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '24px' }}>
                 {signal.status === 'APPROVED' ? (
                   <button 
-                    onClick={() => handleExecute(signal.id)}
-                    disabled={processing === signal.id || isExecuted}
+                    onClick={() => preExecuteCheck(signal)}
+                    disabled={processing === signal.id || checkingRisk === signal.id || isExecuted}
                     style={{
                       background: isExecuted ? '#374151' : (signal.side === 'LONG' ? '#10b981' : '#ef4444'),
                       color: isExecuted ? '#9ca3af' : '#fff',
@@ -335,12 +368,12 @@ export default function Page() {
                       padding: '10px 24px',
                       fontSize: '14px',
                       fontWeight: 700,
-                      cursor: (processing === signal.id || isExecuted) ? 'not-allowed' : 'pointer',
-                      opacity: (processing === signal.id || isExecuted) ? 0.7 : 1,
+                      cursor: (processing === signal.id || checkingRisk === signal.id || isExecuted) ? 'not-allowed' : 'pointer',
+                      opacity: (processing === signal.id || checkingRisk === signal.id || isExecuted) ? 0.7 : 1,
                       transition: 'all 0.2s'
                     }}
                   >
-                    {processing === signal.id ? 'Executing...' : (isExecuted ? 'Executed' : `Execute ${signal.side}`)}
+                    {checkingRisk === signal.id ? 'Checking Ledger...' : processing === signal.id ? 'Executing...' : (isExecuted ? 'Executed' : `Execute ${signal.side}`)}
                   </button>
                 ) : (
                   <div style={{ color: signal.status === 'APPROVED' ? '#10b981' : '#9ca3af', fontSize: '13px', fontWeight: 600 }}>
@@ -388,6 +421,51 @@ export default function Page() {
           </button>
         </div>
       )}
+
+      {/* Manual Execution Warning Modal */}
+      {confirmExecuteId && typeof document !== 'undefined' && createPortal(
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)',
+          display: 'flex', justifyContent: 'center', alignItems: 'center',
+          zIndex: 99999
+        }}>
+          <div style={{
+            background: '#0a0a0a', border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: '16px', padding: '32px', maxWidth: '440px', width: '90%',
+            boxShadow: '0 24px 48px rgba(0,0,0,0.8)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+              <ShieldAlert size={28} color="#eab308" />
+              <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#fff' }}>Manual Execution Warning</h3>
+            </div>
+            <p style={{ color: '#9ca3af', fontSize: '15px', lineHeight: '1.6', marginBottom: '24px' }}>
+              We've checked your ledger, and you <strong>ALREADY</strong> have an active trade open for <strong style={{color: '#fff'}}>{opps.find(o => o.id === confirmExecuteId)?.symbol}</strong>. 
+              <br/><br/>
+              Executing this signal will explicitly bypass the AI's autonomous Asset Isolation guardrails and duplicate your risk exposure on this asset. Are you sure you want to proceed?
+            </p>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button 
+                onClick={() => setConfirmExecuteId(null)}
+                style={{ padding: '10px 16px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: '#fff', cursor: 'pointer', fontWeight: 600 }}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={() => {
+                  handleExecute(confirmExecuteId);
+                  setConfirmExecuteId(null);
+                }}
+                style={{ padding: '10px 16px', borderRadius: '8px', border: 'none', background: '#3b82f6', color: '#fff', cursor: 'pointer', fontWeight: 600 }}
+              >
+                Proceed & Execute
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
     </div>
   );
 }
