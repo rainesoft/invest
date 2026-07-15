@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useTheme } from '@components/ThemeProvider';
 import { Moon, Sun, ShieldAlert, KeyRound, Save, Activity, Info } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -489,12 +490,12 @@ export default function SettingsPage() {
       </div>
 
       {/* Custom Reset Breaker Modal */}
-      {showBreakerModal && (
+      {showBreakerModal && typeof document !== 'undefined' && createPortal(
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
           background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)',
           display: 'flex', justifyContent: 'center', alignItems: 'center',
-          zIndex: 9999
+          zIndex: 99999
         }}>
           <div style={{
             background: 'var(--bg-color)', border: '1px solid var(--border-color)',
@@ -527,7 +528,8 @@ export default function SettingsPage() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>
