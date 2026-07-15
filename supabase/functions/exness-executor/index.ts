@@ -388,7 +388,8 @@ serve(async (req) => {
             } else {
               const responseData = await response.json();
               meta_api_order_id = responseData.orderId || "EXECUTED";
-              status = "OPEN";
+              const isMarketOrder = actionType === "ORDER_TYPE_BUY" || actionType === "ORDER_TYPE_SELL";
+              status = isMarketOrder ? "OPEN" : "PENDING";
             }
           } catch (e: any) {
             error_message = e.message;
@@ -410,7 +411,8 @@ serve(async (req) => {
           }
         } else {
           // Paper trading
-          status = "PAPER_OPEN";
+          const isMarketOrder = actionType === "ORDER_TYPE_BUY" || actionType === "ORDER_TYPE_SELL";
+          status = isMarketOrder ? "PAPER_OPEN" : "PENDING";
         }
 
         // Record the user's trade execution
