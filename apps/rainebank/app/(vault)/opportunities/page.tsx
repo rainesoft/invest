@@ -423,7 +423,7 @@ export default function Page() {
       )}
 
       {/* Manual Execution Warning Modal */}
-      {confirmExecuteId && typeof document !== 'undefined' && createPortal(
+      {(confirmExecuteId && typeof document !== 'undefined') ? (createPortal(
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
           background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)',
@@ -464,7 +464,7 @@ export default function Page() {
           </div>
         </div>,
         document.body
-      )}
+      ) as any) : null}
 
     </div>
   );
