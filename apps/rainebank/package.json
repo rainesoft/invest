@@ -13,7 +13,7 @@
     "@azure/identity": "^3.4.2",
     "@azure/keyvault-secrets": "^4.10.0",
     "@supabase/ssr": "^0.12.0",
-    "@supabase/supabase-js": "2.108.2",
+    "@supabase/supabase-js": "^2.110.6",
     "@unkey/api": "^2.3.5",
     "date-fns": "3.6.0",
     "lucide-react": "0.453.0",
