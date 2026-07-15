@@ -352,6 +352,42 @@ serve(async (req) => {
         if (!newsContext) {
           sendEvent({ type: 'progress', message: `[Macro Data] Fetching global economic calendar...` });
           allEvents = await fetchAllMacroEvents();
+
+          if (allEvents && allEvents.length > 0) {
+            // ==========================================
+            // MACRO EVENT BREAKER (Limit Order Protection)
+            // ==========================================
+            const nowMs = Date.now();
+            const thirtyMins = 30 * 60 * 1000;
+            const imminentHighImpactEvents = allEvents.filter((e: any) => {
+               const eventTime = new Date(e.date).getTime();
+               const timeDiff = eventTime - nowMs;
+               return e.impact === "High" && timeDiff > 0 && timeDiff <= thirtyMins;
+            });
+
+            if (imminentHighImpactEvents.length > 0) {
+               const affectedCurrencies = new Set(imminentHighImpactEvents.map((e: any) => e.currency));
+               console.log(`[Macro Breaker] Imminent High-Impact events detected for: ${Array.from(affectedCurrencies).join(", ")}. Force-expiring soft pending orders.`);
+               sendEvent({ type: 'progress', message: `[Macro Breaker] Imminent High-Impact events detected for ${Array.from(affectedCurrencies).join(", ")}. Force-canceling pending limit orders.` });
+               
+               for (const currency of affectedCurrencies) {
+                  // Find all PENDING user_trades where symbol includes this currency
+                  const { data: pendingTrades } = await supabase.from("user_trades")
+                    .select("id, symbol")
+                    .eq("status", "PENDING")
+                    .like("symbol", `%${currency}%`);
+                    
+                  if (pendingTrades && pendingTrades.length > 0) {
+                    const tradeIds = pendingTrades.map((t: any) => t.id);
+                    await supabase.from("user_trades").update({ 
+                      status: "REJECTED", 
+                      error_message: "Macro Event Breaker: High-Impact news within 30 minutes." 
+                    }).in("id", tradeIds);
+                    console.log(`[Macro Breaker] Canceled ${tradeIds.length} pending orders for ${currency} pairs.`);
+                  }
+               }
+            }
+          }
         }
 
         // ==========================================

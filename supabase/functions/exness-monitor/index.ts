@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
 import { isMarketOpen } from "../_shared/market.ts";
+import { fetchPaperBars } from "../_shared/execution.ts";
 
 const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.london.agiliumtrade.ai";
 
@@ -70,28 +71,98 @@ serve(async (req) => {
 
       console.log(`[Exness Monitor] User ${userId} has ${positions.length} open positions.`);
 
-      // --- 0. Reconcile PENDING → OPEN ---
-      // The broker fills limit orders silently. We need to check if any of our
-      // PENDING trades have been filled by comparing broker position IDs against
-      // the meta_api_order_id stored in user_trades.
-      if (positions.length > 0) {
-        const { data: pendingTrades } = await supabase
-          .from("user_trades")
-          .select("id, symbol, meta_api_order_id")
-          .eq("user_id", userId)
-          .eq("status", "PENDING");
+      // --- 0. Reconcile & Execute PENDING Trades ---
+      const { data: pendingTrades } = await supabase
+        .from("user_trades")
+        .select("id, symbol, side, volume, meta_api_order_id, trade_opportunities(entry_plan_json, stop_plan_json, take_profit_json)")
+        .eq("user_id", userId)
+        .eq("status", "PENDING");
 
-        if (pendingTrades && pendingTrades.length > 0) {
-          // Build a set of broker position IDs (the broker uses the original order ID as position ID)
-          const brokerPositionIds = new Set(positions.map((p: any) => String(p.id)));
+      if (pendingTrades && pendingTrades.length > 0) {
+        const brokerPositionIds = new Set(positions.map((p: any) => String(p.id)));
 
-          for (const trade of pendingTrades) {
-            if (trade.meta_api_order_id && brokerPositionIds.has(String(trade.meta_api_order_id))) {
-              console.log(`[Exness Monitor] Limit order ${trade.meta_api_order_id} (${trade.symbol}) has been FILLED. Promoting to OPEN.`);
-              await supabase
-                .from("user_trades")
-                .update({ status: "OPEN" })
-                .eq("id", trade.id);
+        for (const trade of pendingTrades) {
+          if (trade.meta_api_order_id && brokerPositionIds.has(String(trade.meta_api_order_id))) {
+            console.log(`[Exness Monitor] Limit order ${trade.meta_api_order_id} (${trade.symbol}) has been FILLED on broker. Promoting to OPEN.`);
+            await supabase.from("user_trades").update({ status: "OPEN" }).eq("id", trade.id);
+          } else if (!trade.meta_api_order_id) {
+            // --- Soft Pending Order Validation ---
+            try {
+              const quoteUrl = `${baseUrl}/users/current/accounts/${userAccountId}/symbols/${trade.symbol}/current-quote`;
+              const quoteRes = await fetch(quoteUrl, { headers: { "auth-token": userToken } });
+              if (!quoteRes.ok) continue;
+              const quoteData = await quoteRes.json();
+              
+              const entryPlan = trade.trade_opportunities?.entry_plan_json || {};
+              const entryPrice = entryPlan.price || entryPlan.entry_price || entryPlan.limit_price;
+              if (!entryPrice) continue;
+              
+              let crossed = false;
+              const actionType = trade.side === "LONG" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL";
+
+              if (trade.side === "LONG" && quoteData.ask <= entryPrice) crossed = true;
+              if (trade.side === "SHORT" && quoteData.bid >= entryPrice) crossed = true;
+              
+              if (crossed) {
+                 console.log(`[Exness Monitor] Soft pending order for ${trade.symbol} crossed entry price ${entryPrice}. Validating momentum...`);
+                 // Fetch 1m candles for momentum validation
+                 const { bars } = await fetchPaperBars(trade.symbol, "1m", 3);
+                 let momentumInvalid = false;
+                 
+                 if (bars && bars.length >= 2) {
+                   const lastBar = bars[bars.length - 1];
+                   const prevBar = bars[bars.length - 2];
+                   
+                   // If LONG, reject if massive consecutive red candles
+                   if (trade.side === "LONG" && lastBar.c < lastBar.o && prevBar.c < prevBar.o) {
+                      console.log(`[Exness Monitor] Rejected LONG on ${trade.symbol}: bearish momentum crash detected.`);
+                      momentumInvalid = true;
+                   }
+                   // If SHORT, reject if massive consecutive green candles
+                   if (trade.side === "SHORT" && lastBar.c > lastBar.o && prevBar.c > prevBar.o) {
+                      console.log(`[Exness Monitor] Rejected SHORT on ${trade.symbol}: bullish momentum spike detected.`);
+                      momentumInvalid = true;
+                   }
+                 }
+
+                 if (momentumInvalid) {
+                   await supabase.from("user_trades").update({ 
+                     status: "REJECTED", 
+                     error_message: "Momentum Breaker Tripped: Price crashed through entry zone." 
+                   }).eq("id", trade.id);
+                 } else {
+                   console.log(`[Exness Monitor] Momentum validated. Firing Market Order for ${trade.symbol}.`);
+                   const stopPlan = trade.trade_opportunities?.stop_plan_json || {};
+                   const takeProfitPlan = trade.trade_opportunities?.take_profit_json || {};
+                   const orderPayload = {
+                     actionType: actionType,
+                     symbol: trade.symbol,
+                     volume: trade.volume,
+                     stopLoss: stopPlan.stop || stopPlan.stop_price,
+                     takeProfit: takeProfitPlan.tp || takeProfitPlan.tp_price,
+                   };
+                   
+                   const metaApiUrl = `${baseUrl}/users/current/accounts/${userAccountId}/trade`;
+                   const response = await fetch(metaApiUrl, {
+                     method: "POST",
+                     headers: { "auth-token": userToken, "Content-Type": "application/json" },
+                     body: JSON.stringify(orderPayload),
+                   });
+                   
+                   if (response.ok) {
+                     const responseData = await response.json();
+                     await supabase.from("user_trades").update({ 
+                       status: "OPEN", 
+                       meta_api_order_id: responseData.orderId || "EXECUTED" 
+                     }).eq("id", trade.id);
+                   } else {
+                     const err = await response.text();
+                     await supabase.from("user_trades").update({ status: "FAILED", error_message: err }).eq("id", trade.id);
+                   }
+                 }
+              }
+            } catch (e) {
+              console.error(`[Exness Monitor] Error validating soft pending order ${trade.id}: ${e}`);
             }
           }
         }
