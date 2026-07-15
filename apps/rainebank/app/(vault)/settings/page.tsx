@@ -48,6 +48,7 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [subscription, setSubscription] = useState<any>(null);
+  const [showBreakerModal, setShowBreakerModal] = useState(false);
   
   const [settings, setSettings] = useState({
     portfolio_capital: 10000,
@@ -271,12 +272,7 @@ export default function SettingsPage() {
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                 <input type="number" step="0.01" name="max_drawdown_pct" value={settings.max_drawdown_pct} onChange={handleChange} style={{ flex: 1, padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
                 <button 
-                  onClick={() => {
-                    if (window.confirm("Resetting the Drawdown Breaker will erase your High-Water Mark and immediately resume trading. Are you sure?")) {
-                      setSettings(prev => ({ ...prev, high_water_mark_equity: 0 }));
-                      toast.success("Breaker Reset! Remember to click Save Settings.");
-                    }
-                  }}
+                  onClick={() => setShowBreakerModal(true)}
                   style={{ padding: '12px 16px', background: 'var(--panel-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '14px', fontWeight: 600 }}>
                   Reset Breaker
                 </button>
@@ -491,6 +487,49 @@ export default function SettingsPage() {
 
         </div>
       </div>
+
+      {/* Custom Reset Breaker Modal */}
+      {showBreakerModal && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)',
+          display: 'flex', justifyContent: 'center', alignItems: 'center',
+          zIndex: 9999
+        }}>
+          <div style={{
+            background: 'var(--bg-color)', border: '1px solid var(--border-color)',
+            borderRadius: '16px', padding: '32px', maxWidth: '400px', width: '90%',
+            boxShadow: '0 24px 48px rgba(0,0,0,0.5)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+              <ShieldAlert size={28} color="#ef4444" />
+              <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 700 }}>Reset Drawdown Breaker?</h3>
+            </div>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '15px', lineHeight: '1.6', marginBottom: '24px' }}>
+              Resetting the Drawdown Breaker will erase your High-Water Mark and immediately resume trading. Are you sure you want to do this?
+            </p>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button 
+                onClick={() => setShowBreakerModal(false)}
+                style={{ padding: '10px 16px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', fontWeight: 600 }}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={() => {
+                  setSettings(prev => ({ ...prev, high_water_mark_equity: 0 }));
+                  toast.success("Breaker Reset! Remember to click Save Settings.");
+                  setShowBreakerModal(false);
+                }}
+                style={{ padding: '10px 16px', borderRadius: '8px', border: 'none', background: '#ef4444', color: '#fff', cursor: 'pointer', fontWeight: 600 }}
+              >
+                Yes, Reset Breaker
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
