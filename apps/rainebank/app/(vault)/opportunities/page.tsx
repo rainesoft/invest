@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@lib/supabase';
-import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, ShieldAlert } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 type Opportunity = {
@@ -101,6 +102,7 @@ export default function Page() {
   const [opps, setOpps] = useState<Opportunity[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<string | null>(null);
+  const [confirmExecuteId, setConfirmExecuteId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'ACTIVE' | 'INVALIDATED' | 'REJECTED'>('ACTIVE');
   const [executedIds, setExecutedIds] = useState<Set<string>>(new Set());
 
@@ -331,7 +333,7 @@ export default function Page() {
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '24px' }}>
                 {signal.status === 'APPROVED' ? (
                   <button 
-                    onClick={() => handleExecute(signal.id)}
+                    onClick={() => setConfirmExecuteId(signal.id)}
                     disabled={processing === signal.id || isExecuted}
                     style={{
                       background: isExecuted ? '#374151' : (signal.side === 'LONG' ? '#10b981' : '#ef4444'),
@@ -394,6 +396,51 @@ export default function Page() {
           </button>
         </div>
       )}
+
+      {/* Manual Execution Warning Modal */}
+      {confirmExecuteId && typeof document !== 'undefined' && createPortal(
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)',
+          display: 'flex', justifyContent: 'center', alignItems: 'center',
+          zIndex: 99999
+        }}>
+          <div style={{
+            background: '#0a0a0a', border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: '16px', padding: '32px', maxWidth: '440px', width: '90%',
+            boxShadow: '0 24px 48px rgba(0,0,0,0.8)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+              <ShieldAlert size={28} color="#eab308" />
+              <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#fff' }}>Manual Execution Warning</h3>
+            </div>
+            <p style={{ color: '#9ca3af', fontSize: '15px', lineHeight: '1.6', marginBottom: '24px' }}>
+              You are about to manually execute a <strong style={{color: '#fff'}}>{opps.find(o => o.id === confirmExecuteId)?.symbol}</strong> signal. 
+              <br/><br/>
+              By doing this, you are explicitly bypassing the AI's autonomous Asset Isolation guardrails. Please verify you do not already have an active trade for <strong style={{color: '#fff'}}>{opps.find(o => o.id === confirmExecuteId)?.symbol}</strong> in your ledger, otherwise you will unnecessarily duplicate your risk exposure.
+            </p>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button 
+                onClick={() => setConfirmExecuteId(null)}
+                style={{ padding: '10px 16px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: '#fff', cursor: 'pointer', fontWeight: 600 }}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={() => {
+                  handleExecute(confirmExecuteId);
+                  setConfirmExecuteId(null);
+                }}
+                style={{ padding: '10px 16px', borderRadius: '8px', border: 'none', background: '#3b82f6', color: '#fff', cursor: 'pointer', fontWeight: 600 }}
+              >
+                Proceed & Execute
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
     </div>
   );
 }
