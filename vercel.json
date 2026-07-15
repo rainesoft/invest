@@ -1,4 +1,0 @@
-{
-  "ignoreCommand": "bash -c 'git diff --quiet HEAD^ HEAD -- ./apps/rainebank/ ./package.json ./pnpm-lock.yaml ./vercel.json 2>/dev/null; if [ $? -eq 0 ]; then exit 0; else exit 1; fi'"
-}
-
