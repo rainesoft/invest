@@ -102,6 +102,7 @@ export default function Page() {
   const [opps, setOpps] = useState<Opportunity[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<string | null>(null);
+  const [checkingRisk, setCheckingRisk] = useState<string | null>(null);
   const [confirmExecuteId, setConfirmExecuteId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'ACTIVE' | 'INVALIDATED' | 'REJECTED'>('ACTIVE');
   const [executedIds, setExecutedIds] = useState<Set<string>>(new Set());
@@ -163,6 +164,30 @@ export default function Page() {
   if (loading && opps.length === 0) {
     return <div style={{ color: '#9ca3af', fontSize: '15px' }}>Loading signals...</div>;
   }
+
+  const preExecuteCheck = async (signal: Opportunity) => {
+    setCheckingRisk(signal.id);
+    try {
+      const { data: activeTrades, error } = await client
+        .from('user_trades')
+        .select('id')
+        .eq('symbol', signal.symbol)
+        .in('status', ['OPEN', 'PENDING']);
+        
+      if (error) throw error;
+      
+      if (activeTrades && activeTrades.length > 0) {
+        setConfirmExecuteId(signal.id);
+      } else {
+        // No active trades, safe to execute directly
+        await handleExecute(signal.id);
+      }
+    } catch (err: any) {
+      toast.error(`Risk Check Failed: ${err.message}`);
+    } finally {
+      setCheckingRisk(null);
+    }
+  };
 
   const handleExecute = async (id: string) => {
     setProcessing(id);
@@ -333,8 +358,8 @@ export default function Page() {
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '24px' }}>
                 {signal.status === 'APPROVED' ? (
                   <button 
-                    onClick={() => setConfirmExecuteId(signal.id)}
-                    disabled={processing === signal.id || isExecuted}
+                    onClick={() => preExecuteCheck(signal)}
+                    disabled={processing === signal.id || checkingRisk === signal.id || isExecuted}
                     style={{
                       background: isExecuted ? '#374151' : (signal.side === 'LONG' ? '#10b981' : '#ef4444'),
                       color: isExecuted ? '#9ca3af' : '#fff',
@@ -343,12 +368,12 @@ export default function Page() {
                       padding: '10px 24px',
                       fontSize: '14px',
                       fontWeight: 700,
-                      cursor: (processing === signal.id || isExecuted) ? 'not-allowed' : 'pointer',
-                      opacity: (processing === signal.id || isExecuted) ? 0.7 : 1,
+                      cursor: (processing === signal.id || checkingRisk === signal.id || isExecuted) ? 'not-allowed' : 'pointer',
+                      opacity: (processing === signal.id || checkingRisk === signal.id || isExecuted) ? 0.7 : 1,
                       transition: 'all 0.2s'
                     }}
                   >
-                    {processing === signal.id ? 'Executing...' : (isExecuted ? 'Executed' : `Execute ${signal.side}`)}
+                    {checkingRisk === signal.id ? 'Checking Ledger...' : processing === signal.id ? 'Executing...' : (isExecuted ? 'Executed' : `Execute ${signal.side}`)}
                   </button>
                 ) : (
                   <div style={{ color: signal.status === 'APPROVED' ? '#10b981' : '#9ca3af', fontSize: '13px', fontWeight: 600 }}>
@@ -415,9 +440,9 @@ export default function Page() {
               <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#fff' }}>Manual Execution Warning</h3>
             </div>
             <p style={{ color: '#9ca3af', fontSize: '15px', lineHeight: '1.6', marginBottom: '24px' }}>
-              You are about to manually execute a <strong style={{color: '#fff'}}>{opps.find(o => o.id === confirmExecuteId)?.symbol}</strong> signal. 
+              We've checked your ledger, and you <strong>ALREADY</strong> have an active trade open for <strong style={{color: '#fff'}}>{opps.find(o => o.id === confirmExecuteId)?.symbol}</strong>. 
               <br/><br/>
-              By doing this, you are explicitly bypassing the AI's autonomous Asset Isolation guardrails. Please verify you do not already have an active trade for <strong style={{color: '#fff'}}>{opps.find(o => o.id === confirmExecuteId)?.symbol}</strong> in your ledger, otherwise you will unnecessarily duplicate your risk exposure.
+              Executing this signal will explicitly bypass the AI's autonomous Asset Isolation guardrails and duplicate your risk exposure on this asset. Are you sure you want to proceed?
             </p>
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
               <button 
