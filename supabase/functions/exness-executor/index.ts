@@ -85,7 +85,34 @@ serve(async (req) => {
           status: 500,
         });
       }
-      usersToProcess = users;
+
+      // Extract the signal tier from ai_summary (e.g. "S-Tier", "A-Tier")
+      const signalTier = (() => {
+        const summary = signal.ai_summary || "";
+        const match = summary.match(/^(S|A|B|C)-Tier/m);
+        return match ? match[0] : null;
+      })();
+
+      // Only include users who have the Master Auto-Trade Switch ON
+      // and whose permitted tiers include this signal's tier.
+      usersToProcess = users.filter(u => {
+        if (!u.auto_trade_enabled) {
+          console.log(`[Router] Skipping user ${u.user_id}: Master Auto-Trade Switch is OFF.`);
+          return false;
+        }
+        if (signalTier && u.auto_trade_tiers && Array.isArray(u.auto_trade_tiers)) {
+          if (!u.auto_trade_tiers.includes(signalTier)) {
+            console.log(`[Router] Skipping user ${u.user_id}: Signal tier ${signalTier} not in permitted tiers [${u.auto_trade_tiers.join(', ')}].`);
+            return false;
+          }
+        }
+        return true;
+      });
+
+      if (usersToProcess.length === 0) {
+        return new Response("No users opted in to auto-trade for this signal tier.", { status: 200 });
+      }
+
     }
 
     const entryPlan = signal.entry_plan_json || {};
