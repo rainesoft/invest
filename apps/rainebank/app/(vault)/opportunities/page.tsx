@@ -143,7 +143,8 @@ export default function Page() {
         const { data: userTrades } = await client
           .from('user_trades')
           .select('opportunity_id')
-          .in('opportunity_id', oppIds);
+          .in('opportunity_id', oppIds)
+          .not('status', 'in', '("REJECTED","FAILED","CANCELLED")');
           
         if (userTrades) {
            setExecutedIds(new Set(userTrades.map((ut: any) => ut.opportunity_id)));
