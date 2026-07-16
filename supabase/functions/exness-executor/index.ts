@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
 import { validateUserExposure } from "../../../packages/strategy/riskManager.ts";
+import { insertAuditLog } from "../_shared/audit.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_ROLE_KEY =
@@ -443,7 +444,8 @@ serve(async (req) => {
         }
 
         // Record the user's trade execution
-        await supabase.from("user_trades").insert({
+        // Record the user's trade execution
+        const { error: insertError } = await supabase.from("user_trades").insert({
           user_id: user.user_id,
           opportunity_id: signal.id,
           symbol: signal.symbol,
@@ -454,6 +456,17 @@ serve(async (req) => {
           meta_api_order_id: meta_api_order_id,
           error_message: error_message,
         });
+
+        if (insertError) {
+          console.error(`[Router Error] Failed to insert trade for ${user.user_id}: ${insertError.message}`);
+          await insertAuditLog(supabase, {
+            actor_type: "SYSTEM",
+            action: "TRADE_INSERT_ERROR",
+            entity_type: "trade_opportunities",
+            entity_id: signal.id,
+            payload_json: { reason: "Database constraint or connection error during insertion", meta_api_order_id, error: insertError.message }
+          });
+        }
 
         executions.push({ user_id: user.user_id, status, error_message: error_message || riskValidation?.reason || spreadRejectReason || tierRejectReason });
       }
