@@ -216,48 +216,68 @@ export async function cancelBrokerOrdersForOpportunity(supabase: SupabaseClient,
       continue;
     }
 
-    const cancelPayload = {
-      actionType: "ORDER_CANCEL",
-      orderId: trade.meta_api_order_id
-    };
-
-    try {
-      const cancelUrl = `${baseUrl}/users/current/accounts/${userConfig.meta_api_account_id}/trade`;
-      const response = await fetch(cancelUrl, {
-        method: "POST",
-        headers: {
-          "auth-token": userConfig.meta_api_token,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(cancelPayload),
-      });
-
-      if (response.ok) {
-        console.log(`[Broker Sync] Successfully cancelled pending order ${trade.meta_api_order_id} for user ${trade.user_id}`);
-        await supabase.from("user_trades").update({ status: "CANCELLED" }).eq("id", trade.id);
-      } else {
-        const errorText = await response.text();
-        console.error(`[Broker Sync] Failed to cancel order ${trade.meta_api_order_id}: ${errorText}`);
-        
-        // Push to retry queue
-        await supabase.from("meta_api_retry_queue").insert({
-          user_id: trade.user_id,
-          meta_api_account_id: userConfig.meta_api_account_id,
-          request_type: "ORDER_CANCEL",
-          api_payload: cancelPayload,
-          last_error: errorText
-        });
-      }
-    } catch (e: any) {
-      console.error(`[Broker Sync] Exception cancelling order ${trade.meta_api_order_id}: ${e.message}`);
-      await supabase.from("meta_api_retry_queue").insert({
-        user_id: trade.user_id,
-        meta_api_account_id: userConfig.meta_api_account_id,
-        request_type: "ORDER_CANCEL",
-        api_payload: cancelPayload,
-        last_error: e.message
-      });
+    const success = await cancelMetaApiOrder(supabase, trade.user_id, userConfig.meta_api_account_id, userConfig.meta_api_token, trade.meta_api_order_id);
+    if (success) {
+      await supabase.from("user_trades").update({ status: "CANCELLED" }).eq("id", trade.id);
     }
+  }
+}
+
+/**
+ * Generic utility to cancel a MetaAPI order (attempts ORDER_CANCEL, falls back to POSITION_CLOSE_ID)
+ */
+export async function cancelMetaApiOrder(supabase: SupabaseClient, userId: string, accountId: string, token: string, orderId: string): Promise<boolean> {
+  const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.new-york.agiliumtrade.ai";
+  const url = `${baseUrl}/users/current/accounts/${accountId}/trade`;
+
+  // First try ORDER_CANCEL (for Pending limit/stop orders)
+  const cancelPayload = { actionType: "ORDER_CANCEL", orderId };
+  try {
+    let res = await fetch(url, {
+      method: "POST",
+      headers: { "auth-token": token, "Content-Type": "application/json" },
+      body: JSON.stringify(cancelPayload)
+    });
+
+    if (res.ok) {
+      console.log(`[Broker Sync] Cancelled pending order ${orderId}`);
+      return true;
+    }
+
+    // If it failed, it might be an open position. Try POSITION_CLOSE_ID
+    const closePayload = { actionType: "POSITION_CLOSE_ID", positionId: orderId };
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "auth-token": token, "Content-Type": "application/json" },
+      body: JSON.stringify(closePayload)
+    });
+
+    if (res.ok) {
+      console.log(`[Broker Sync] Closed active position ${orderId}`);
+      return true;
+    }
+
+    const errText = await res.text();
+    console.error(`[Broker Sync] Failed to cancel/close ${orderId}: ${errText}`);
+    
+    await supabase.from("meta_api_retry_queue").insert({
+      user_id: userId,
+      meta_api_account_id: accountId,
+      request_type: "ORDER_CANCEL_FALLBACK_CLOSE",
+      api_payload: closePayload,
+      last_error: errText
+    });
+    return false;
+  } catch (e: any) {
+    console.error(`[Broker Sync] Exception cancelling ${orderId}: ${e.message}`);
+    await supabase.from("meta_api_retry_queue").insert({
+      user_id: userId,
+      meta_api_account_id: accountId,
+      request_type: "ORDER_CANCEL",
+      api_payload: cancelPayload,
+      last_error: e.message
+    });
+    return false;
   }
 }
 
