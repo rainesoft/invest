@@ -86,6 +86,13 @@ ${historicalMemory || "No historical data available for this asset yet."}
 You MUST respond strictly with a raw JSON object matching the exact schema below. Do not include any markdown formatting (like \`\`\`json), wrapper text, HTML tags, or conversational preambles. If you include anything other than raw JSON, the system breaks.
 
 {
+  "technical_audit": {
+    "current_price": number,
+    "ema_50": number,
+    "ema_200": number,
+    "price_position": "ABOVE_BOTH" | "BELOW_BOTH" | "BETWEEN_EMAS",
+    "ltf_bos": "BULLISH" | "BEARISH" | "NONE"
+  },
   "market_structure": "BULLISH_TREND" | "BEARISH_TREND" | "RANGING" | "BREAKOUT",
   "recommended_direction": "LONG" | "SHORT" | "NONE",
   "strategy_applied": "PULLBACK" | "MOMENTUM_CONTINUATION" | "MEAN_REVERSION" | "NONE",
@@ -110,10 +117,14 @@ You MUST respond strictly with a raw JSON object matching the exact schema below
 1. DYNAMIC STRATEGY SELECTION & TREND ALIGNMENT: Identify the market structure accurately. 
    - Strict Trend Definition: If price is below BOTH the 50 EMA and 200 EMA, the market has a BEARISH bias. If price is above BOTH EMAs, it has a BULLISH bias. Do NOT label a market as "NONE" (ranging) if it is trading cleanly on one side of both EMAs.
    - If trending heavily (Price > 50 & 200 EMA), prioritize MOMENTUM_CONTINUATION setups using minor retracements. 
-   - If the market is in a true CHOP or RANGE regime (trend_alignment is CHOP), you MUST prioritize MEAN_REVERSION setups targeting the range boundaries (Buy at Support, Sell at Resistance).
-2. THE 'EMPTY AIR' CHECK: Before suggesting a direction, evaluate the distance to the next major liquidity zone. If the current price is floating in 'empty air' midway between support and resistance, do NOT reject the setup automatically! Instead, originate a pending Limit Order (Buy Limit or Sell Limit) exactly at the nearest major support or resistance level to catch the reversion.
+   - If the market is in a true CHOP or RANGE regime (trend_alignment is CHOP), you MUST prioritize BREAKOUT setups using Buy Stop / Sell Stop orders just outside the range boundaries, OR high-probability MEAN_REVERSION setups targeting the range boundaries.
+2. BREAK OF STRUCTURE (BOS) EXECUTION TIMING: You are provided with the \`ltf_bos\` flag which deterministically tracks 5-bar fractal structure breaks on the execution timeframe.
+   - If \`ltf_bos\` is 'BULLISH' and the \`htf_trend\` is BULLISH, this is a confirmed Pullback Entry. You MUST originate a BUY trade targeting the next resistance level.
+   - If \`ltf_bos\` is 'BEARISH' and the \`htf_trend\` is BEARISH, you MUST originate a SELL trade targeting the next support level.
+   - If \`ltf_bos\` is 'NONE', the structure has not broken yet. Do not guess the reversal. You MUST originate a pending Limit Order at the nearest structural floor/ceiling instead of a Market order.
+3. THE 'EMPTY AIR' CHECK: Before suggesting a direction, evaluate the distance to the next major liquidity zone. If the current price is floating in 'empty air' midway between support and resistance, do NOT reject the setup automatically! Instead, originate a pending Limit Order (Buy Limit or Sell Limit) exactly at the nearest major support or resistance level to catch the reversion.
 3. STOP LOSS SIZING & VOLATILITY (ATR): The snapshot provides \`safe_long_stop_loss\`, \`safe_short_stop_loss\`, and \`atr_14\`. 
-   - TIGHT LOCAL STRUCTURE: You MUST optimize your stop loss for the specific timeframe you are evaluating. For example, a 4H swing trade on Forex typically requires a 30 to 60-pip stop. Do not use massive 100+ pip stop losses unless trading highly volatile exotics or crypto. Place the stop loss tight behind the immediate local structure.
+   - TIGHT LOCAL STRUCTURE: You MUST optimize your stop loss for the specific timeframe you are evaluating (e.g. a \${timeframe} swing trade). Place the stop loss tight behind the immediate local structure.
    - MANDATORY ATR LIMIT: Your \`suggested_stop_loss\` MUST be the TIGHTER of either your structural stop, or the volatility threshold \`Entry +/- (1.5 * atr_14)\`. 
    - MAX STOP LOSS LIMIT: Your calculated stop loss MUST NEVER exceed a distance of \`2.0 * atr_14\` from the suggested entry price (and strictly \`1.5 * atr_14\` for commodities like XAUUSD, UKOIL). If the required structural stop is too far away, adjust your Entry Price closer to the invalidation point to shrink the risk!
 4. FUNDAMENTAL REALITY CHECK (MACRO CATALYSTS & BREAKOUTS): You MUST heavily weigh the provided \`fundamental_context\`. 
@@ -121,12 +132,14 @@ You MUST respond strictly with a raw JSON object matching the exact schema below
    - MACRO BREAKOUT OPPORTUNISM: If there is an impending High-Impact event (e.g., CPI, NFP, Fed speeches) within the next 12 hours, you MUST NOT use Limit orders that could be slipped during the volatility. You MUST originate a BREAKOUT strategy. Place pending Buy Stop / Sell Stop orders just outside the immediate consolidation zone to trap the impending volatility explosion upon confirmation.
    - [LIVE BREAKING NEWS]: If the \`fundamental_context\` contains live breaking headlines indicating sudden geopolitical shocks (e.g., airstrikes, war), you MUST evaluate if it creates a massive directional opportunity. Only reject if it completely destroys the mathematical structure of the chart without presenting a new edge.
    - [CRITICAL MACRO DIRECTIVE]: If the technical setup aligns perfectly with a High-Impact fundamental catalyst in the \`fundamental_context\`, you MUST upgrade your confidence to S-Tier (90+).
-5. RANGING MARKETS & MEAN REVERSION:
-   - If the market is RANGING (price stuck between 50 and 200 EMAs or chopping horizontally), DO NOT default to a C-Tier REJECTED setup. 
-   - You MUST originate a MEAN_REVERSION strategy. Place Limit Orders at the outer boundaries of the range (e.g., Buy Limit at Support/Lower Bollinger Band, Sell Limit at Resistance/Upper Bollinger Band). Ranging markets are highly profitable for mean reversion; do not fear the chop.
+5. RANGING MARKETS & BREAKOUTS (MANDATORY RULE):
+   - If the market is RANGING (price between 50 and 200 EMAs, or EMAs are within 0.1% of each other), a 'recommended_direction' of NONE is STRICTLY FORBIDDEN.
+   - You MUST always identify the nearest Swing High and Swing Low from the bars data. Place a Buy Stop 0.1% above the Swing High and a Sell Stop 0.1% below the Swing Low. The tighter the range, the more explosive the eventual breakout--this is the edge.
+   - If the range is too tight to achieve 1:1.5 R:R on a breakout stop order, you MUST use MEAN_REVERSION instead: Buy Limit at the Swing Low with TP at the Swing High, or Sell Limit at the Swing High with TP at the Swing Low.
+   - The output must ALWAYS have a valid entry price, stop loss, and take profit. A trade with NONE execution_parameters from a RANGING market is a systemic failure.
 6. INSTITUTIONAL TONE: 
    - Never use apologetic, weak, or observational phrasing regarding missing data. Write with bulletproof brevity. Do NOT repeat your rationale. Combine your thoughts into a single, sharp thesis.
-7. MULTI-TIMEFRAME ALIGNMENT (COUNTER-TREND PULLBACKS): You are provided with the 'htf_trend' (Daily macro trend). You generally want to align with it. HOWEVER, if the 4H setup contradicts the Daily trend, you MAY originate a "Counter-Trend Pullback" trade IF AND ONLY IF you limit the confidence score to B-Tier (80 max) and mandate a tighter structural stop loss (max 1.5 * atr_14).
+7. MULTI-TIMEFRAME ALIGNMENT (COUNTER-TREND PULLBACKS): You are provided with the 'htf_trend' (Daily macro trend). You generally want to align with it. HOWEVER, if the \${timeframe} setup contradicts the Daily trend, you MAY originate a "Counter-Trend Pullback" trade IF AND ONLY IF you limit the confidence score to B-Tier (80 max) and mandate a tighter structural stop loss (max 1.5 * atr_14).
 8. BOLLINGER BAND EXHAUSTION (LIMIT ORDERS): You are provided with 'bb_upper' and 'bb_lower'. NEVER suggest a Market Entry LONG if the current price is at or above 'bb_upper'. NEVER suggest a Market Entry SHORT if the price is at or below 'bb_lower'. INSTEAD, use the \`execution_trigger\` to prescribe a pending LIMIT ORDER at the 50 EMA or the nearest Support/Resistance level to catch the pullback.
 9. RSI DYNAMICS IN TRENDS: In a strong uptrend (Price > 50 EMA and > 200 EMA), the daily RSI rarely drops all the way to 30. A pullback to the 40-45 range is typically sufficient to reset momentum. Do NOT demand a drop to 30 if the asset is in heavy bullish momentum.
 10. DIRECTIONAL MATH & SUPPORT VALIDATION: You MUST perform basic directional math. If Current Price < Support, the support has been BROKEN and is now Resistance. If Current Price > Resistance, it is now Support. Do not suggest a "pullback to support" if price has already broken below it.
@@ -134,14 +147,14 @@ You MUST respond strictly with a raw JSON object matching the exact schema below
     - If the current price is floating in "empty air" (midway between major support and resistance), DO NOT reject the setup. Instead, originate a deep Limit Order at the nearest major structural floor or ceiling. The market may take days to reach it, but having the pending order published is highly valuable.
     - Never recommend 'immediate market entry' directly underneath a major swing high or resistance. You must either recommend a pullback limit order to a moving average/support, or a pending breakout (Buy Stop/Sell Stop) just beyond the structure. Avoid buying the local top.
 12. STRICT STRUCTURAL TARGETS & RISK:REWARD OPTIMIZATION: You MUST output a \`suggested_take_profit\` that matches the exact structural target (e.g. major support/resistance) identified in your rationale. 
-    - MINIMUM VIABLE R:R: Institutional setups require a MINIMUM Risk:Reward of 1:1.5, ideally 1:2.0 or higher. 
-    - ENTRY PRICING TRADEOFF (SCALING IN): If your setup yields a weak R:R (e.g., 1:1.2), you MUST mathematically optimize your \`suggested_entry_price\`. Instead of moving the entire entry, you MUST split your risk by providing the \`scaled_entries\` array. Provide a primary entry price near the current support/resistance (e.g., \`weight: 0.5\`) and a secondary entry deeper into the retracement zone (e.g., \`weight: 0.5\`) to ensure a blended 1:2.0 R:R is achieved.
+    - MINIMUM VIABLE R:R: Institutional setups require a MINIMUM Risk:Reward of 1:1.5. If your setup yields an R:R worse than 1:1.5, you MUST mathematically reject the setup by categorizing it as a C-Tier trade with "NONE" for recommended_direction and execution_parameters.
+    - ENTRY PRICING TRADEOFF (SCALING IN): If your setup yields a weak R:R (e.g., 1:1.2), you MUST mathematically optimize your \`suggested_entry_price\`. Instead of moving the entire entry, you MUST split your risk by providing the \`scaled_entries\` array to ensure a blended 1:1.5 R:R is achieved.
 13. FRONT-RUNNING LIMIT ORDERS (ENTRY PRICING): When suggesting a Buy Limit at support or a Sell Limit at resistance, do NOT place the exact entry price at the absolute extreme of the structural level. Markets frequently front-run major levels. You MUST adjust your Limit Order slightly closer to the current price (e.g., front-running the support/resistance by 10-20% of the daily ATR) to ensure the order actually gets filled during a shallow pullback.
 14. CONFIDENCE SCORING HEURISTICS: You must apply the following baseline scoring criteria:
     - S-Tier (90-100): Perfect technical alignment + High-Impact Macro Catalyst supporting the trade.
     - A-Tier (80-89): Pristine technical setup. Price is trending cleanly on the correct side of the 50 & 200 EMAs, pulling back to a clear structural zone with empty air to the Take Profit target.
-    - B-Tier (70-79): Decent setup but possesses a minor flaw (e.g., Counter-Trend, forced to use wide ATR stop, or weak fundamentals).
-    - C-Tier (<70): Choppy market, price floating in empty air, or poor R:R. (These will be automatically rejected by the execution desk).
+    - B-Tier (70-79): Decent setup but possesses a minor flaw (e.g., Counter-Trend, forced to use wide ATR stop, or weak fundamentals). Ranging markets with a valid breakout stop structure ALWAYS qualify for at least B-Tier.
+    - C-Tier (<70): ONLY applicable when: (a) Price is trending strongly but mid-candle with no structural entry level available, OR (b) The asset is halted/suspended. C-Tier is NEVER valid for a ranging market that has identifiable Swing Highs and Swing Lows.
 15. COMMODITY GEOPOLITICAL SUPPLY SHOCK OVERRIDE: For commodities (UKOIL, XAUUSD, XAGUSD), technical EMAs are SECONDARY to active supply disruption events. 
     - If the \`fundamental_context\` headlines reference an active military conflict affecting supply routes (e.g., Strait of Hormuz blockade, pipeline sabotage, OPEC emergency cuts), this is a HIGH-IMPACT MACRO CATALYST that OVERRIDES technical ranging/chop classifications.
     - In such scenarios, you MUST NOT default to C-Tier simply because the price sits between EMAs or because the market is highly volatile. GEOPOLITICAL VOLATILITY = AGGRESSIVE TRADING OPPORTUNITY. Do not use "messy volatility" as an excuse to reject the trade. 
@@ -170,8 +183,20 @@ ${JSON.stringify(snapshot, null, 2)}`;
         schema: {
           type: "object",
           properties: {
+            technical_audit: {
+              type: "object",
+              properties: {
+                current_price: { type: "number" },
+                ema_50: { type: "number" },
+                ema_200: { type: "number" },
+                price_position: { type: "string", enum: ["ABOVE_BOTH", "BELOW_BOTH", "BETWEEN_EMAS"] },
+                ltf_bos: { type: "string", enum: ["BULLISH", "BEARISH", "NONE"] }
+              },
+              required: ["current_price", "ema_50", "ema_200", "price_position", "ltf_bos"],
+              additionalProperties: false
+            },
             market_structure: { type: "string", enum: ["BULLISH_TREND", "BEARISH_TREND", "RANGING", "BREAKOUT"] },
-            recommended_direction: { type: "string", enum: ["LONG", "SHORT", "NONE"] },
+            recommended_direction: { type: "string", enum: ["LONG", "SHORT"] },
             strategy_applied: { type: "string", enum: ["PULLBACK", "MOMENTUM_CONTINUATION", "MEAN_REVERSION", "NONE"] },
             execution_parameters: {
               type: "object",
@@ -198,7 +223,7 @@ ${JSON.stringify(snapshot, null, 2)}`;
               additionalProperties: false
             }
           },
-          required: ["market_structure", "recommended_direction", "strategy_applied", "execution_parameters", "confidence_score", "institutional_rationale"],
+          required: ["technical_audit", "market_structure", "recommended_direction", "strategy_applied", "execution_parameters", "confidence_score", "institutional_rationale"],
           additionalProperties: false
         },
         strict: true
@@ -302,7 +327,7 @@ You MUST respond strictly with a raw JSON object:
 serve(async (req) => {
   const { searchParams } = new URL(req.url);
   const isCron = req.method === "POST";
-  const timeframe = searchParams.get("timeframe") ?? (isCron ? "4H" : "1D");
+  const timeframe = searchParams.get("timeframe") ?? (isCron ? "1H" : "1D");
   const modelId = searchParams.get("model_id") ?? undefined;
   const modelVersion = searchParams.get("model_version") ?? undefined;
   const newsContext = searchParams.get("news") ?? undefined;
@@ -396,6 +421,21 @@ serve(async (req) => {
         console.log(`[Phase 1] Sweeping active APPROVED signals for revalidation...`);
         sendEvent({ type: 'progress', message: `[Phase 1] Validating active signals against live market conditions...` });
         
+        let metaApiFailedAlertSent = false;
+        const sendMetaApiAlert = async () => {
+          if (metaApiFailedAlertSent) return;
+          metaApiFailedAlertSent = true;
+          const botToken = Deno.env.get("TELEGRAM_BOT_TOKEN");
+          const chatId = Deno.env.get("TELEGRAM_CHAT_ID");
+          if (botToken && chatId) {
+            await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ chat_id: chatId, text: `🚨 *CRITICAL DATA FAILURE*\n\nMetaAPI broker feed failed to authenticate or connect.\n\nSignal generation for Forex/Crypto has been aborted to prevent execution misalignment. Please check your broker token.` })
+            }).catch(e => console.error("Failed to send telegram alert:", e));
+          }
+        };
+        
         const { data: activeSignals } = await supabase
           .from("trade_opportunities")
           .select("*")
@@ -452,6 +492,9 @@ serve(async (req) => {
               }
             } catch (err: any) {
                console.error(`[Validation Error] Failed to revalidate ${signal.symbol}:`, err.message);
+               if (err.message === "META_API_FAILURE") {
+                 await sendMetaApiAlert();
+               }
             }
           }
         }
@@ -484,6 +527,9 @@ serve(async (req) => {
               source = result.source;
             } catch (err: any) {
               console.error(`[Data Fetch Error] Failed to fetch data for ${symbol}: ${err.message}`);
+              if (err.message === "META_API_FAILURE") {
+                await sendMetaApiAlert();
+              }
               await insertAuditLog(supabase, {
                 actor_type: "SYSTEM",
                 action: "API_TIMEOUT",
@@ -751,7 +797,7 @@ serve(async (req) => {
             const stopLossPercentage = risk / entry_price;
             let defaultStaticPct = 0.05; // 5% default for macro
             if (timeframe.toLowerCase().includes("min") || timeframe === "1H") {
-              defaultStaticPct = 0.015; // 1.5% max for short intraday
+              defaultStaticPct = 0.025; // 2.5% max for 1H intraday
             } else if (timeframe === "4H") {
               defaultStaticPct = 0.03; // 3% max for 4H swing
             }
@@ -788,6 +834,33 @@ serve(async (req) => {
               return;
             }
             
+            // --- Risk:Reward Check ---
+            const riskPoints = Math.abs(entry_price - stop_loss);
+            const rewardPoints = Math.abs(take_profit - entry_price);
+            const riskRewardRatio = riskPoints > 0 ? (rewardPoints / riskPoints) : 0;
+
+            if (riskRewardRatio < 1.45) {
+              console.log(`[Layer C: Execution Desk] REJECTED ${symbol}: Risk:Reward ratio (${riskRewardRatio.toFixed(2)}) is below the institutional minimum of 1.5.`);
+              sendEvent({ type: 'progress', message: `[Layer C: Execution Desk] REJECTED: Structural mismatch. R:R ratio (${riskRewardRatio.toFixed(2)}) is below minimum of 1.5.` });
+              rejections.push({
+                symbol,
+                reason: `Structural R:R mismatch: Risk:Reward ratio is ${riskRewardRatio.toFixed(2)}, which is below the required 1:1.5 threshold.`,
+                layer: "Execution Desk"
+              });
+              await supabase.from("trade_opportunities").insert({
+                symbol,
+                side: dbSide,
+                timeframe: timeframe.toLowerCase(),
+                status: "REJECTED",
+                ai_summary: institutional_rationale,
+                ai_risks: `Rejected by Execution Desk: R:R ratio ${riskRewardRatio.toFixed(2)} < 1.5`,
+                model_id: modelId,
+                model_version: modelVersion,
+                risk_summary: `RSI ${snapshot.rsi_14}`
+              });
+              return;
+            }
+
             console.log(`[Layer C: Execution Desk] APPROVED ${symbol}: Generating pending opportunity...`);
             sendEvent({ type: 'progress', message: `[Execution] Creating opportunity for ${symbol}...` });
             

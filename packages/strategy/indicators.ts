@@ -11,6 +11,7 @@ export type LogicContext = {
   bb_upper: number | null;
   bb_lower: number | null;
   htf_trend?: 'BULLISH' | 'BEARISH' | 'CHOP';
+  ltf_bos?: 'BULLISH' | 'BEARISH' | 'NONE';
   recent_swing_high: number | null;
   recent_swing_low: number | null;
   safe_long_stop_loss: number | null;
@@ -19,6 +20,33 @@ export type LogicContext = {
   htf_support?: number[];
   htf_resistance?: number[];
 };
+
+export function calculateFractals(high: number[], low: number[]) {
+  const bullish_fractals: { index: number, price: number }[] = [];
+  const bearish_fractals: { index: number, price: number }[] = [];
+
+  for (let i = 2; i < high.length - 2; i++) {
+    if (high[i] > high[i-1] && high[i] > high[i-2] && high[i] > high[i+1] && high[i] > high[i+2]) {
+      bearish_fractals.push({ index: i, price: high[i] });
+    }
+    if (low[i] < low[i-1] && low[i] < low[i-2] && low[i] < low[i+1] && low[i] < low[i+2]) {
+      bullish_fractals.push({ index: i, price: low[i] });
+    }
+  }
+  return { bullish_fractals, bearish_fractals };
+}
+
+export function detectBOS(close: number[], bullish_fractals: { index: number, price: number }[], bearish_fractals: { index: number, price: number }[]) {
+  if (close.length === 0) return 'NONE';
+  const current_price = close[close.length - 1];
+  
+  const last_bearish = bearish_fractals.length > 0 ? bearish_fractals[bearish_fractals.length - 1].price : null;
+  const last_bullish = bullish_fractals.length > 0 ? bullish_fractals[bullish_fractals.length - 1].price : null;
+
+  if (last_bearish !== null && current_price > last_bearish) return 'BULLISH';
+  if (last_bullish !== null && current_price < last_bullish) return 'BEARISH';
+  return 'NONE';
+}
 
 export function calculatePivotPoints(high: number, low: number, close: number) {
   const p = (high + low + close) / 3;
@@ -59,18 +87,18 @@ export function getContextSnapshot(
       trend_alignment: 'CHOP',
       htf_support: [],
       htf_resistance: [],
+      ltf_bos: 'NONE',
     };
   }
 
   const current_price = close[close.length - 1];
   const timestamp = timestamps[timestamps.length - 1] || new Date().toISOString();
 
-  // Calculate recent structural highs and lows (14 bar lookback)
-  const lookback = Math.min(14, high.length);
-  const recentHighs = high.slice(-lookback);
-  const recentLows = low.slice(-lookback);
-  const recent_swing_high = recentHighs.length > 0 ? Math.max(...recentHighs) : null;
-  const recent_swing_low = recentLows.length > 0 ? Math.min(...recentLows) : null;
+  // Calculate recent structural highs and lows using 5-bar fractals
+  const { bullish_fractals, bearish_fractals } = calculateFractals(high, low);
+  const ltf_bos = detectBOS(close, bullish_fractals, bearish_fractals);
+  const recent_swing_high = bearish_fractals.length > 0 ? bearish_fractals[bearish_fractals.length - 1].price : null;
+  const recent_swing_low = bullish_fractals.length > 0 ? bullish_fractals[bullish_fractals.length - 1].price : null;
 
   // Calculate indicators
   const ema50 = EMA.calculate({ period: 50, values: close });
@@ -150,5 +178,6 @@ export function getContextSnapshot(
     safe_long_stop_loss: safe_long_stop_loss ? Number(safe_long_stop_loss.toFixed(2)) : null,
     safe_short_stop_loss: safe_short_stop_loss ? Number(safe_short_stop_loss.toFixed(2)) : null,
     trend_alignment,
+    ltf_bos,
   };
 }
