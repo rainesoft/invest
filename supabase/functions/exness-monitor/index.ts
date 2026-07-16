@@ -250,87 +250,9 @@ serve(async (req) => {
             continue; // Skip trailing stop logic since we initiated a close
           }
 
-        // --- 2. Advanced Trailing Stop Logic ---
-        if (!stopLoss || !takeProfit || !openPrice || !currentPrice) {
-          continue;
-        }
-
-        let shouldTrail = false;
-        let newStopLoss = stopLoss; 
-
-        // Fetch recent bars to compute ATR
-        let currentAtr = 0;
-        try {
-          const { bars } = await fetchPaperBars(symbol, "15m", 30);
-          if (bars && bars.length >= 15) {
-             const high = bars.map((b: any) => b.h);
-             const low = bars.map((b: any) => b.l);
-             const close = bars.map((b: any) => b.c);
-             const atrResult = ATR.calculate({ period: 14, high, low, close });
-             if (atrResult.length > 0) {
-                currentAtr = atrResult[atrResult.length - 1];
-             }
-          }
-        } catch(e) {
-          console.warn(`[Exness Monitor] ATR calculation failed for ${symbol}:`, e);
-        }
-
-        if (currentAtr > 0) {
-          const atrBuffer = currentAtr * 2.0;
-
-          if (type === "POSITION_TYPE_BUY") {
-            const dynamicStop = currentPrice - atrBuffer;
-            // Ratchet Rule: Only tighten the stop loss. Must be > current stopLoss.
-            if (dynamicStop > stopLoss) {
-              newStopLoss = Number(dynamicStop.toFixed(5));
-              shouldTrail = true;
-            }
-          } else if (type === "POSITION_TYPE_SELL") {
-            const dynamicStop = currentPrice + atrBuffer;
-            // Ratchet Rule: Only tighten the stop loss. Must be < current stopLoss.
-            if (dynamicStop < stopLoss) {
-              newStopLoss = Number(dynamicStop.toFixed(5));
-              shouldTrail = true;
-            }
-          }
-        }
-
-        if (shouldTrail) {
-          console.log(`[Exness Monitor] ATR Trailing stop for ${symbol} (${id}). Moving SL from ${stopLoss} -> ${newStopLoss}.`);
-          
-          const modifyUrl = `${baseUrl}/users/current/accounts/${userAccountId}/trade`;
-          const payload = {
-            actionType: "POSITION_MODIFY",
-            positionId: id,
-            stopLoss: newStopLoss,
-            takeProfit: takeProfit // Re-inject TP to satisfy MetaAPI Modification Protocol
-          };
-
-          const modifyResponse = await fetch(modifyUrl, {
-            method: "POST",
-            headers: {
-              "auth-token": userToken,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(payload)
-          });
-
-          if (modifyResponse.ok) {
-            console.log(`[Exness Monitor] Successfully updated stop loss for ${id}`);
-            trails.push({ id, symbol, success: true, newStopLoss });
-          } else {
-            const err = await modifyResponse.text();
-            console.error(`[Exness Monitor] Failed to update SL for ${id}: ${err}`);
-            await supabase.from("meta_api_retry_queue").insert({
-               user_id: userId,
-               meta_api_account_id: userAccountId,
-               request_type: "POSITION_MODIFY",
-               api_payload: payload,
-               last_error: err
-            });
-            trails.push({ id, symbol, success: false, error: err, queued_for_retry: true });
-          }
-        }
+        // --- 2. Native Trailing Stop Delegation ---
+        // Trailing Stops are now handled natively by MetaAPI's servers via the trailingStopLoss parameter 
+        // injected during order creation in exness-executor. We no longer poll to trail stops.
       }
       
       report.push({ user_id: userId, positions_checked: positions.length, trailed: trails });

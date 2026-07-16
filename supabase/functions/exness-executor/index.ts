@@ -417,6 +417,16 @@ serve(async (req) => {
               clientId: tradeId,
             };
 
+            const atrRaw = signal.stop_plan_json?.atr;
+            if (atrRaw && typeof atrRaw === 'number') {
+              orderPayload.trailingStopLoss = {
+                distance: {
+                  distance: Number((atrRaw * 2.0).toFixed(5)),
+                  units: "RELATIVE_PRICE"
+                }
+              };
+            }
+
             try {
               const metaApiUrl = `${baseUrl}/users/current/accounts/${user.meta_api_account_id}/trade`;
               const response = await fetch(metaApiUrl, {
