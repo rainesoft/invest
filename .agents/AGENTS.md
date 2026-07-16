@@ -8,3 +8,9 @@ Never give knee-jerk financial or market assessments based on historical assumpt
 
 ## Security First Principle
 Whenever you identify a potential security vulnerability (e.g., exposing an unauthenticated endpoint, missing validation, hardcoded secrets), you MUST proactively suggest implementing the secure alternative. Never prioritize convenience over security in production systems. Specifically, if you deploy unauthenticated endpoints (like using `--no-verify-jwt` for internal webhooks), you must enforce internal authentication inside the function code (such as verifying Webhook Secrets or manually parsing user JWTs) to prevent spoofed payloads.
+
+### Rule: Git Workflow Protocol
+- **Branching**: NEVER push directly to the `main` or `master` branch. Always checkout a new descriptive branch (e.g., `feat/`, `fix/`, `chore/`) or push to the designated `dev` branch.
+- **Conventional Commits**: All commit messages must strictly follow the Global Standard Conventional Commits specification (e.g., `feat: `, `fix: `, `refactor: `).
+- **Granularity**: Do not lump unrelated changes into a single monolithic commit. Group logically related files together and create unique, atomic commits for each logical change with a descriptive message.
+
