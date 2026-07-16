@@ -74,7 +74,7 @@ serve(async (req) => {
       // --- 0. Reconcile & Execute PENDING Trades ---
       const { data: pendingTrades } = await supabase
         .from("user_trades")
-        .select("id, symbol, side, volume, meta_api_order_id, trade_opportunities(entry_plan_json, stop_plan_json, take_profit_json)")
+        .select("id, symbol, side, volume, meta_api_order_id, created_at, trade_opportunities(entry_plan_json, stop_plan_json, take_profit_json)")
         .eq("user_id", userId)
         .eq("status", "PENDING");
 
@@ -82,6 +82,16 @@ serve(async (req) => {
         const brokerPositionIds = new Set(positions.map((p: any) => String(p.id)));
 
         for (const trade of pendingTrades) {
+          // --- Ghost Trade Pruning (24h TTL) ---
+          const ageMs = Date.now() - new Date(trade.created_at).getTime();
+          if (ageMs > 24 * 60 * 60 * 1000) {
+            console.log(`[Exness Monitor] Ghost Trade pruned: ${trade.symbol} exceeded 24h PENDING TTL.`);
+            await supabase.from("user_trades").update({ status: "CANCELLED", error_message: "Pruned by 24h Ghost TTL" }).eq("id", trade.id);
+            // Optionally insert into audit log, but since this is an Edge Function it might not have the audit helper imported.
+            // We'll rely on the status update for now.
+            continue;
+          }
+
           if (trade.meta_api_order_id && brokerPositionIds.has(String(trade.meta_api_order_id))) {
             console.log(`[Exness Monitor] Limit order ${trade.meta_api_order_id} (${trade.symbol}) has been FILLED on broker. Promoting to OPEN.`);
             await supabase.from("user_trades").update({ status: "OPEN" }).eq("id", trade.id);
