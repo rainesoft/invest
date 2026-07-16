@@ -152,80 +152,11 @@ export async function fetchPaperBars(symbol: string, timeframe = '1D', limit = 3
           lastMetaError = err;
         }
       }
-      console.error(`[Data Fetch] MetaAPI exhausted all retries for ${brokerSymbol}. Last error:`, lastMetaError);
+      throw new Error("META_API_FAILURE");
+    } else {
+      throw new Error("META_API_FAILURE");
     }
-
-    // 2. Fallback to Yahoo Finance (ONLY IN DEV MODE)
-    const isDev = Deno.env.get("ENV") === "development" || Deno.env.get("NODE_ENV") === "development";
-    if (!isDev) {
-      throw new Error(`Data feed failure for ${symbol}. Yahoo Finance fallback is disabled in production to prevent misaligned execution.`);
-    }
-    console.warn(`Falling back to Yahoo Finance for ${symbol} (Development Mode)...`);
-    let yfSymbol = symbol;
-    const isCrypto = symbol.startsWith('BTC') || symbol.startsWith('ETH') || symbol.startsWith('SOL');
-
-    if (symbol === 'UKOIL') {
-      yfSymbol = 'BZ=F'; // Brent Crude Oil Futures as proxy for UKOIL
-    } else if (symbol === 'XAUUSD') {
-      yfSymbol = 'GC=F'; // Gold Futures as proxy for XAUUSD
-    } else if (symbol === 'US30') {
-      yfSymbol = '^DJI'; // Dow Jones Industrial Average
-    } else if (symbol === 'NAS100') {
-      yfSymbol = '^NDX'; // Nasdaq 100
-    } else if (isCrypto && symbol.endsWith('USD')) {
-      // BTCUSD -> BTC-USD
-      yfSymbol = symbol.replace('USD', '') + '-USD';
-    } else if (symbol.includes('/')) {
-      yfSymbol = symbol.replace('/', '') + '=X'; // EUR/USD -> EURUSD=X
-    } else if (symbol.length === 6 && (symbol.endsWith('USD') || symbol.startsWith('USD'))) {
-      yfSymbol = symbol + '=X'; // EURUSD -> EURUSD=X, USDJPY -> USDJPY=X
-    }
-    
-    // Yahoo Finance timeframe mapping
-    let yfInterval = '1d';
-    let yfRange = '2y';
-    if (timeframe === '1D') { yfInterval = '1d'; yfRange = '2y'; }
-    if (timeframe === '1H') { yfInterval = '60m'; yfRange = '60d'; }
-    if (timeframe === '15Min') { yfInterval = '15m'; yfRange = '60d'; }
-
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yfSymbol}?interval=${yfInterval}&range=${yfRange}`;
-    
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0'
-      }
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Yahoo Finance data error ${res.status}: ${text}`);
-    }
-
-    const data = await res.json();
-    const result = data.chart?.result?.[0];
-    if (!result) return { source: 'Yahoo Finance', bars: [] };
-
-    const timestamps = result.timestamp || [];
-    const quote = result.indicators.quote[0];
-    
-    const bars: Bar[] = [];
-    for (let i = 0; i < timestamps.length; i++) {
-      if (quote.open[i] === null) continue;
-      
-      const t = new Date(timestamps[i] * 1000).toISOString();
-      bars.push({
-        t: t,
-        o: quote.open[i],
-        h: quote.high[i],
-        l: quote.low[i],
-        c: quote.close[i],
-        v: quote.volume[i] || 0
-      });
-    }
-    
-    return { source: 'Yahoo Finance', bars: bars.slice(-limit) };
   }
-
   // Fallback to original Alpaca fetcher for US Stocks
   const base = 'https://data.alpaca.markets/v2';
   const key = Deno.env.get('BROKER_KEY') || Deno.env.get('APCA_API_KEY_ID') || '';
