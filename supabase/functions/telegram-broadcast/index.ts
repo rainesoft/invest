@@ -98,9 +98,9 @@ serve(async (req) => {
       const orderType  = record.entry_plan_json?.order_type ?? "Limit";
 
       // Extract tier and R:R from ai_summary
-      const tierMatch = (record.ai_summary || "").match(/\[(S|A|B|C)-Tier\]/);
+      const tierMatch = (record.ai_summary || "").match(/(S|A|B|C)-Tier/);
       const rrMatch   = (record.ai_summary || "").match(/1:([0-9.]+)\s*Risk:Reward/);
-      const tier      = tierMatch ? escapeMd(tierMatch[0]) : "—";
+      const tier      = tierMatch ? escapeMd(tierMatch[1] + "-Tier") : "—";
       const rr        = rrMatch   ? escapeMd(`1:${rrMatch[1]}`) : "—";
 
       const sideEmoji = record.side === "LONG" ? "🟢" : "🔴";

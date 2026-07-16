@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { usePaystackPayment } from 'react-paystack';
 import { useRouter } from 'next/navigation';
 import { CreditCard, Loader2 } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 interface CheckoutButtonProps {
   email: string;
@@ -19,6 +20,7 @@ export default function CheckoutButton({
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [exchangeRate, setExchangeRate] = useState<number | null>(null);
+  const [coupon, setCoupon] = useState('');
 
   // Fetch the live USD -> GHS exchange rate on mount
   useEffect(() => {
@@ -65,9 +67,37 @@ export default function CheckoutButton({
     },
   };
 
-  const handleCheckout = () => {
+  const handleCheckout = async () => {
     if (!exchangeRate) return; // Prevent checkout until rate loads
     setLoading(true);
+
+    if (coupon.trim().toUpperCase() === 'MYTRADEBUDDY') {
+      try {
+        const res = await fetch('/api/coupon', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ couponCode: coupon.trim() })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          toast.success("Coupon Applied! 3 Months Free.");
+          setTimeout(() => {
+            router.refresh();
+            setLoading(false);
+          }, 1500);
+          return;
+        } else {
+          toast.error(data.error || "Invalid Coupon");
+          setLoading(false);
+          return;
+        }
+      } catch (err) {
+        toast.error("Failed to verify coupon");
+        setLoading(false);
+        return;
+      }
+    }
+
     console.log("PAYSTACK CONFIG DEBUG:", config);
     if (!config.publicKey) {
       alert("Missing Paystack Public Key! Did you restart the server?");
@@ -93,44 +123,62 @@ export default function CheckoutButton({
   };
 
   return (
-    <button
-      onClick={handleCheckout}
-      disabled={loading}
-      style={{
-        width: '100%',
-        padding: '0.875rem',
-        backgroundColor: '#10b981',
-        color: '#000',
-        border: 'none',
-        borderRadius: '8px',
-        fontSize: '1rem',
-        fontWeight: 600,
-        cursor: loading ? 'not-allowed' : 'pointer',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: '0.5rem',
-        transition: 'background-color 0.2s',
-        opacity: loading ? 0.7 : 1,
-      }}
-      onMouseOver={(e) => {
-        if (!loading) e.currentTarget.style.backgroundColor = '#0ea5e9';
-      }}
-      onMouseOut={(e) => {
-        if (!loading) e.currentTarget.style.backgroundColor = '#10b981';
-      }}
-    >
-      {loading ? (
-        <>
-          <Loader2 className="animate-spin" size={20} />
-          Processing Upgrade...
-        </>
-      ) : (
-        <>
-          <CreditCard size={18} />
-          Upgrade to Alpha
-        </>
-      )}
-    </button>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', width: '100%' }}>
+      <input 
+        type="text" 
+        placeholder="Coupon Code (Optional)" 
+        value={coupon}
+        onChange={(e) => setCoupon(e.target.value)}
+        style={{
+          width: '100%',
+          padding: '0.75rem',
+          backgroundColor: 'var(--bg-secondary)',
+          border: '1px solid var(--border-color)',
+          borderRadius: '8px',
+          color: 'var(--text-primary)',
+          fontSize: '0.9rem',
+          outline: 'none'
+        }}
+      />
+      <button
+        onClick={handleCheckout}
+        disabled={loading}
+        style={{
+          width: '100%',
+          padding: '0.875rem',
+          backgroundColor: '#10b981',
+          color: '#000',
+          border: 'none',
+          borderRadius: '8px',
+          fontSize: '1rem',
+          fontWeight: 600,
+          cursor: loading ? 'not-allowed' : 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '0.5rem',
+          transition: 'background-color 0.2s',
+          opacity: loading ? 0.7 : 1,
+        }}
+        onMouseOver={(e) => {
+          if (!loading) e.currentTarget.style.backgroundColor = '#0ea5e9';
+        }}
+        onMouseOut={(e) => {
+          if (!loading) e.currentTarget.style.backgroundColor = '#10b981';
+        }}
+      >
+        {loading ? (
+          <>
+            <Loader2 className="animate-spin" size={20} />
+            Processing Upgrade...
+          </>
+        ) : (
+          <>
+            <CreditCard size={18} />
+            Upgrade to Alpha
+          </>
+        )}
+      </button>
+    </div>
   );
 }

@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
 import { insertAuditLog } from "../_shared/audit.ts";
+import { cancelMetaApiOrder } from "../_shared/execution.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -75,48 +76,7 @@ serve(async (req) => {
            continue;
         }
 
-        const metaApiUrl = `${META_API_BASE_URL}/users/current/accounts/${userRisk.meta_api_account_id}/trade`;
-        
-        let success = false;
-        let errorMessage = "";
-
-        // First attempt: Try to cancel it as a Pending Order
-        const cancelPayload = {
-          actionType: "ORDER_TYPE_CANCEL_ORDER",
-          orderId: trade.meta_api_order_id
-        };
-
-        let res = await fetch(metaApiUrl, {
-          method: "POST",
-          headers: { "auth-token": userRisk.meta_api_token, "Content-Type": "application/json" },
-          body: JSON.stringify(cancelPayload),
-        });
-
-        if (res.ok) {
-          success = true;
-          console.log(`[Auto-Eject] Cancelled pending order ${trade.meta_api_order_id} on Exness.`);
-        } else {
-          // Second attempt: Try to close position.
-          const closePayload = {
-            actionType: "ORDER_TYPE_CLOSE_POSITION",
-            positionId: trade.meta_api_order_id
-          };
-          
-          res = await fetch(metaApiUrl, {
-            method: "POST",
-            headers: { "auth-token": userRisk.meta_api_token, "Content-Type": "application/json" },
-            body: JSON.stringify(closePayload),
-          });
-
-          if (res2.ok) {
-             success = true;
-             console.log(`[Auto-Eject] Closed live position ${trade.meta_api_order_id} on Exness.`);
-          } else {
-             console.error(`[Auto-Eject] Both CANCEL and CLOSE attempts failed for trade ${trade.id}.`);
-             await supabase.from("user_trades").update({ status: "AUTO_EJECT_FAILED", error_message: res2.statusText }).eq("id", trade.id);
-             executions.push({ trade_id: trade.id, status: "FAILED", type: "LIVE" });
-          }
-        }
+        const success = await cancelMetaApiOrder(supabase, trade.user_id, userRisk.meta_api_account_id, userRisk.meta_api_token, trade.meta_api_order_id);
 
         // Finalize locally if successful
         if (success) {
@@ -130,6 +90,10 @@ serve(async (req) => {
              entity_id: trade.id,
              payload_json: { reason: "Signal rejected by AI Risk Officer", type: "LIVE", meta_api_order_id: trade.meta_api_order_id }
            });
+        } else {
+           console.error(`[Auto-Eject] Failed to cancel trade ${trade.id}.`);
+           await supabase.from("user_trades").update({ status: "AUTO_EJECT_FAILED", error_message: "Failed to cancel via MetaAPI" }).eq("id", trade.id);
+           executions.push({ trade_id: trade.id, status: "FAILED", type: "LIVE" });
         }
 
       } catch (e: any) {

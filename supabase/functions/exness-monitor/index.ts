@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
 import { isMarketOpen } from "../_shared/market.ts";
 import { fetchPaperBars } from "../_shared/execution.ts";
+import { ATR } from "npm:technicalindicators@3.1.0";
 
 const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.london.agiliumtrade.ai";
 
@@ -74,7 +75,7 @@ serve(async (req) => {
       // --- 0. Reconcile & Execute PENDING Trades ---
       const { data: pendingTrades } = await supabase
         .from("user_trades")
-        .select("id, symbol, side, volume, meta_api_order_id, trade_opportunities(entry_plan_json, stop_plan_json, take_profit_json)")
+        .select("id, symbol, side, volume, meta_api_order_id, created_at, trade_opportunities(entry_plan_json, stop_plan_json, take_profit_json)")
         .eq("user_id", userId)
         .eq("status", "PENDING");
 
@@ -82,6 +83,16 @@ serve(async (req) => {
         const brokerPositionIds = new Set(positions.map((p: any) => String(p.id)));
 
         for (const trade of pendingTrades) {
+          // --- Ghost Trade Pruning (24h TTL) ---
+          const ageMs = Date.now() - new Date(trade.created_at).getTime();
+          if (ageMs > 24 * 60 * 60 * 1000) {
+            console.log(`[Exness Monitor] Ghost Trade pruned: ${trade.symbol} exceeded 24h PENDING TTL.`);
+            await supabase.from("user_trades").update({ status: "CANCELLED", error_message: "Pruned by 24h Ghost TTL" }).eq("id", trade.id);
+            // Optionally insert into audit log, but since this is an Edge Function it might not have the audit helper imported.
+            // We'll rely on the status update for now.
+            continue;
+          }
+
           if (trade.meta_api_order_id && brokerPositionIds.has(String(trade.meta_api_order_id))) {
             console.log(`[Exness Monitor] Limit order ${trade.meta_api_order_id} (${trade.symbol}) has been FILLED on broker. Promoting to OPEN.`);
             await supabase.from("user_trades").update({ status: "OPEN" }).eq("id", trade.id);
@@ -140,6 +151,7 @@ serve(async (req) => {
                      volume: trade.volume,
                      stopLoss: stopPlan.stop || stopPlan.stop_price,
                      takeProfit: takeProfitPlan.tp || takeProfitPlan.tp_price,
+                     clientId: trade.id,
                    };
                    
                    const metaApiUrl = `${baseUrl}/users/current/accounts/${userAccountId}/trade`;
@@ -238,67 +250,9 @@ serve(async (req) => {
             continue; // Skip trailing stop logic since we initiated a close
           }
 
-        // --- 2. Advanced Trailing Stop Logic ---
-        if (!stopLoss || !takeProfit || !openPrice || !currentPrice) {
-          continue;
-        }
-
-        let shouldTrail = false;
-        let newStopLoss = openPrice; // Trail to exactly breakeven
-
-        if (type === "POSITION_TYPE_BUY") {
-          if (stopLoss < openPrice) {
-            const initialRisk = openPrice - stopLoss;
-            const currentProfit = currentPrice - openPrice;
-            if (currentProfit > 0 && currentProfit >= initialRisk) {
-              shouldTrail = true;
-            }
-          }
-        } else if (type === "POSITION_TYPE_SELL") {
-          if (stopLoss > openPrice) {
-            const initialRisk = stopLoss - openPrice;
-            const currentProfit = openPrice - currentPrice;
-            if (currentProfit > 0 && currentProfit >= initialRisk) {
-              shouldTrail = true;
-            }
-          }
-        }
-
-        if (shouldTrail) {
-          console.log(`[Exness Monitor] Trailing stop for ${symbol} (${id}). Moving SL from ${stopLoss} -> ${newStopLoss} (Breakeven).`);
-          
-          const modifyUrl = `${baseUrl}/users/current/accounts/${userAccountId}/trade`;
-          const payload = {
-            actionType: "POSITION_MODIFY",
-            positionId: id,
-            stopLoss: newStopLoss
-          };
-
-          const modifyResponse = await fetch(modifyUrl, {
-            method: "POST",
-            headers: {
-              "auth-token": userToken,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(payload)
-          });
-
-          if (modifyResponse.ok) {
-            console.log(`[Exness Monitor] Successfully updated stop loss for ${id}`);
-            trails.push({ id, symbol, success: true, newStopLoss });
-          } else {
-            const err = await modifyResponse.text();
-            console.error(`[Exness Monitor] Failed to update SL for ${id}: ${err}`);
-            await supabase.from("meta_api_retry_queue").insert({
-               user_id: userId,
-               meta_api_account_id: userAccountId,
-               request_type: "POSITION_MODIFY",
-               api_payload: payload,
-               last_error: err
-            });
-            trails.push({ id, symbol, success: false, error: err, queued_for_retry: true });
-          }
-        }
+        // --- 2. Native Trailing Stop Delegation ---
+        // Trailing Stops are now handled natively by MetaAPI's servers via the trailingStopLoss parameter 
+        // injected during order creation in exness-executor. We no longer poll to trail stops.
       }
       
       report.push({ user_id: userId, positions_checked: positions.length, trailed: trails });

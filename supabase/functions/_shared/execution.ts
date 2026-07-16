@@ -152,80 +152,11 @@ export async function fetchPaperBars(symbol: string, timeframe = '1D', limit = 3
           lastMetaError = err;
         }
       }
-      console.error(`[Data Fetch] MetaAPI exhausted all retries for ${brokerSymbol}. Last error:`, lastMetaError);
+      throw new Error("META_API_FAILURE");
+    } else {
+      throw new Error("META_API_FAILURE");
     }
-
-    // 2. Fallback to Yahoo Finance (ONLY IN DEV MODE)
-    const isDev = Deno.env.get("ENV") === "development" || Deno.env.get("NODE_ENV") === "development";
-    if (!isDev) {
-      throw new Error(`Data feed failure for ${symbol}. Yahoo Finance fallback is disabled in production to prevent misaligned execution.`);
-    }
-    console.warn(`Falling back to Yahoo Finance for ${symbol} (Development Mode)...`);
-    let yfSymbol = symbol;
-    const isCrypto = symbol.startsWith('BTC') || symbol.startsWith('ETH') || symbol.startsWith('SOL');
-
-    if (symbol === 'UKOIL') {
-      yfSymbol = 'BZ=F'; // Brent Crude Oil Futures as proxy for UKOIL
-    } else if (symbol === 'XAUUSD') {
-      yfSymbol = 'GC=F'; // Gold Futures as proxy for XAUUSD
-    } else if (symbol === 'US30') {
-      yfSymbol = '^DJI'; // Dow Jones Industrial Average
-    } else if (symbol === 'NAS100') {
-      yfSymbol = '^NDX'; // Nasdaq 100
-    } else if (isCrypto && symbol.endsWith('USD')) {
-      // BTCUSD -> BTC-USD
-      yfSymbol = symbol.replace('USD', '') + '-USD';
-    } else if (symbol.includes('/')) {
-      yfSymbol = symbol.replace('/', '') + '=X'; // EUR/USD -> EURUSD=X
-    } else if (symbol.length === 6 && (symbol.endsWith('USD') || symbol.startsWith('USD'))) {
-      yfSymbol = symbol + '=X'; // EURUSD -> EURUSD=X, USDJPY -> USDJPY=X
-    }
-    
-    // Yahoo Finance timeframe mapping
-    let yfInterval = '1d';
-    let yfRange = '2y';
-    if (timeframe === '1D') { yfInterval = '1d'; yfRange = '2y'; }
-    if (timeframe === '1H') { yfInterval = '60m'; yfRange = '60d'; }
-    if (timeframe === '15Min') { yfInterval = '15m'; yfRange = '60d'; }
-
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yfSymbol}?interval=${yfInterval}&range=${yfRange}`;
-    
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0'
-      }
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Yahoo Finance data error ${res.status}: ${text}`);
-    }
-
-    const data = await res.json();
-    const result = data.chart?.result?.[0];
-    if (!result) return { source: 'Yahoo Finance', bars: [] };
-
-    const timestamps = result.timestamp || [];
-    const quote = result.indicators.quote[0];
-    
-    const bars: Bar[] = [];
-    for (let i = 0; i < timestamps.length; i++) {
-      if (quote.open[i] === null) continue;
-      
-      const t = new Date(timestamps[i] * 1000).toISOString();
-      bars.push({
-        t: t,
-        o: quote.open[i],
-        h: quote.high[i],
-        l: quote.low[i],
-        c: quote.close[i],
-        v: quote.volume[i] || 0
-      });
-    }
-    
-    return { source: 'Yahoo Finance', bars: bars.slice(-limit) };
   }
-
   // Fallback to original Alpaca fetcher for US Stocks
   const base = 'https://data.alpaca.markets/v2';
   const key = Deno.env.get('BROKER_KEY') || Deno.env.get('APCA_API_KEY_ID') || '';
@@ -285,48 +216,68 @@ export async function cancelBrokerOrdersForOpportunity(supabase: SupabaseClient,
       continue;
     }
 
-    const cancelPayload = {
-      actionType: "ORDER_CANCEL",
-      orderId: trade.meta_api_order_id
-    };
-
-    try {
-      const cancelUrl = `${baseUrl}/users/current/accounts/${userConfig.meta_api_account_id}/trade`;
-      const response = await fetch(cancelUrl, {
-        method: "POST",
-        headers: {
-          "auth-token": userConfig.meta_api_token,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(cancelPayload),
-      });
-
-      if (response.ok) {
-        console.log(`[Broker Sync] Successfully cancelled pending order ${trade.meta_api_order_id} for user ${trade.user_id}`);
-        await supabase.from("user_trades").update({ status: "CANCELLED" }).eq("id", trade.id);
-      } else {
-        const errorText = await response.text();
-        console.error(`[Broker Sync] Failed to cancel order ${trade.meta_api_order_id}: ${errorText}`);
-        
-        // Push to retry queue
-        await supabase.from("meta_api_retry_queue").insert({
-          user_id: trade.user_id,
-          meta_api_account_id: userConfig.meta_api_account_id,
-          request_type: "ORDER_CANCEL",
-          api_payload: cancelPayload,
-          last_error: errorText
-        });
-      }
-    } catch (e: any) {
-      console.error(`[Broker Sync] Exception cancelling order ${trade.meta_api_order_id}: ${e.message}`);
-      await supabase.from("meta_api_retry_queue").insert({
-        user_id: trade.user_id,
-        meta_api_account_id: userConfig.meta_api_account_id,
-        request_type: "ORDER_CANCEL",
-        api_payload: cancelPayload,
-        last_error: e.message
-      });
+    const success = await cancelMetaApiOrder(supabase, trade.user_id, userConfig.meta_api_account_id, userConfig.meta_api_token, trade.meta_api_order_id);
+    if (success) {
+      await supabase.from("user_trades").update({ status: "CANCELLED" }).eq("id", trade.id);
     }
+  }
+}
+
+/**
+ * Generic utility to cancel a MetaAPI order (attempts ORDER_CANCEL, falls back to POSITION_CLOSE_ID)
+ */
+export async function cancelMetaApiOrder(supabase: SupabaseClient, userId: string, accountId: string, token: string, orderId: string): Promise<boolean> {
+  const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.new-york.agiliumtrade.ai";
+  const url = `${baseUrl}/users/current/accounts/${accountId}/trade`;
+
+  // First try ORDER_CANCEL (for Pending limit/stop orders)
+  const cancelPayload = { actionType: "ORDER_CANCEL", orderId };
+  try {
+    let res = await fetch(url, {
+      method: "POST",
+      headers: { "auth-token": token, "Content-Type": "application/json" },
+      body: JSON.stringify(cancelPayload)
+    });
+
+    if (res.ok) {
+      console.log(`[Broker Sync] Cancelled pending order ${orderId}`);
+      return true;
+    }
+
+    // If it failed, it might be an open position. Try POSITION_CLOSE_ID
+    const closePayload = { actionType: "POSITION_CLOSE_ID", positionId: orderId };
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "auth-token": token, "Content-Type": "application/json" },
+      body: JSON.stringify(closePayload)
+    });
+
+    if (res.ok) {
+      console.log(`[Broker Sync] Closed active position ${orderId}`);
+      return true;
+    }
+
+    const errText = await res.text();
+    console.error(`[Broker Sync] Failed to cancel/close ${orderId}: ${errText}`);
+    
+    await supabase.from("meta_api_retry_queue").insert({
+      user_id: userId,
+      meta_api_account_id: accountId,
+      request_type: "ORDER_CANCEL_FALLBACK_CLOSE",
+      api_payload: closePayload,
+      last_error: errText
+    });
+    return false;
+  } catch (e: any) {
+    console.error(`[Broker Sync] Exception cancelling ${orderId}: ${e.message}`);
+    await supabase.from("meta_api_retry_queue").insert({
+      user_id: userId,
+      meta_api_account_id: accountId,
+      request_type: "ORDER_CANCEL",
+      api_payload: cancelPayload,
+      last_error: e.message
+    });
+    return false;
   }
 }
 

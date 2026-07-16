@@ -8,3 +8,24 @@ Never give knee-jerk financial or market assessments based on historical assumpt
 
 ## Security First Principle
 Whenever you identify a potential security vulnerability (e.g., exposing an unauthenticated endpoint, missing validation, hardcoded secrets), you MUST proactively suggest implementing the secure alternative. Never prioritize convenience over security in production systems. Specifically, if you deploy unauthenticated endpoints (like using `--no-verify-jwt` for internal webhooks), you must enforce internal authentication inside the function code (such as verifying Webhook Secrets or manually parsing user JWTs) to prevent spoofed payloads.
+
+### Rule: Git Workflow Protocol
+- **Branching**: NEVER push directly to the `main` or `master` branch. Always checkout a new descriptive branch (e.g., `feat/`, `fix/`, `chore/`) or push to the designated `dev` branch.
+- **Conventional Commits**: All commit messages must strictly follow the Global Standard Conventional Commits specification (e.g., `feat: `, `fix: `, `refactor: `).
+- **Granularity**: Do not lump unrelated changes into a single monolithic commit. Group logically related files together and create unique, atomic commits for each logical change with a descriptive message.
+
+- **Merging & Primary Workspace**: After creating, committing, and pushing a feature branch, you MUST always merge that branch back into the `dev` branch. The `dev` branch is the primary working branch—ensure you return to it and continue all subsequent work from there.
+
+
+## Rule: Resource-Efficient System Design
+When designing solutions, monitoring state, or handling edge cases, you MUST prioritize native, low-overhead mechanics over custom polling loops or background daemons.
+- **API Costs:** Never propose high-frequency polling scripts if a system is subject to API quotas (e.g., MetaAPI).
+- **Native Delegation:** Offload logic to native handlers wherever possible (e.g., use MetaTrader's native Take Profit/Stop Loss parameters instead of monitoring prices manually; use Database Webhooks instead of polling tables).
+- **System Stability:** Avoid solutions that rely on transient environments (like chat-bound scripts) for mission-critical operations.
+
+
+## Rule: MetaAPI Modification Protocol
+When using MetaAPI's `POSITION_MODIFY` or `ORDER_MODIFY` endpoints to adjust an existing trade, you MUST always fetch and explicitly re-inject all existing protective parameters (like `stopLoss` or `takeProfit`) into the payload, even if you are not changing them.
+
+MetaAPI treats omitted parameters as explicit deletion commands. Failing to re-include a Stop Loss when modifying a Take Profit will erase the Stop Loss on the broker, exposing the user to infinite risk.
+
