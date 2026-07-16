@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
 import { isMarketOpen } from "../_shared/market.ts";
 import { fetchPaperBars } from "../_shared/execution.ts";
+import { ATR } from "npm:technicalindicators@3.1.0";
 
 const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.london.agiliumtrade.ai";
 
@@ -150,6 +151,7 @@ serve(async (req) => {
                      volume: trade.volume,
                      stopLoss: stopPlan.stop || stopPlan.stop_price,
                      takeProfit: takeProfitPlan.tp || takeProfitPlan.tp_price,
+                     clientId: trade.id,
                    };
                    
                    const metaApiUrl = `${baseUrl}/users/current/accounts/${userAccountId}/trade`;
@@ -254,34 +256,54 @@ serve(async (req) => {
         }
 
         let shouldTrail = false;
-        let newStopLoss = openPrice; // Trail to exactly breakeven
+        let newStopLoss = stopLoss; 
 
-        if (type === "POSITION_TYPE_BUY") {
-          if (stopLoss < openPrice) {
-            const initialRisk = openPrice - stopLoss;
-            const currentProfit = currentPrice - openPrice;
-            if (currentProfit > 0 && currentProfit >= initialRisk) {
+        // Fetch recent bars to compute ATR
+        let currentAtr = 0;
+        try {
+          const { bars } = await fetchPaperBars(symbol, "15m", 30);
+          if (bars && bars.length >= 15) {
+             const high = bars.map((b: any) => b.h);
+             const low = bars.map((b: any) => b.l);
+             const close = bars.map((b: any) => b.c);
+             const atrResult = ATR.calculate({ period: 14, high, low, close });
+             if (atrResult.length > 0) {
+                currentAtr = atrResult[atrResult.length - 1];
+             }
+          }
+        } catch(e) {
+          console.warn(`[Exness Monitor] ATR calculation failed for ${symbol}:`, e);
+        }
+
+        if (currentAtr > 0) {
+          const atrBuffer = currentAtr * 2.0;
+
+          if (type === "POSITION_TYPE_BUY") {
+            const dynamicStop = currentPrice - atrBuffer;
+            // Ratchet Rule: Only tighten the stop loss. Must be > current stopLoss.
+            if (dynamicStop > stopLoss) {
+              newStopLoss = Number(dynamicStop.toFixed(5));
               shouldTrail = true;
             }
-          }
-        } else if (type === "POSITION_TYPE_SELL") {
-          if (stopLoss > openPrice) {
-            const initialRisk = stopLoss - openPrice;
-            const currentProfit = openPrice - currentPrice;
-            if (currentProfit > 0 && currentProfit >= initialRisk) {
+          } else if (type === "POSITION_TYPE_SELL") {
+            const dynamicStop = currentPrice + atrBuffer;
+            // Ratchet Rule: Only tighten the stop loss. Must be < current stopLoss.
+            if (dynamicStop < stopLoss) {
+              newStopLoss = Number(dynamicStop.toFixed(5));
               shouldTrail = true;
             }
           }
         }
 
         if (shouldTrail) {
-          console.log(`[Exness Monitor] Trailing stop for ${symbol} (${id}). Moving SL from ${stopLoss} -> ${newStopLoss} (Breakeven).`);
+          console.log(`[Exness Monitor] ATR Trailing stop for ${symbol} (${id}). Moving SL from ${stopLoss} -> ${newStopLoss}.`);
           
           const modifyUrl = `${baseUrl}/users/current/accounts/${userAccountId}/trade`;
           const payload = {
             actionType: "POSITION_MODIFY",
             positionId: id,
-            stopLoss: newStopLoss
+            stopLoss: newStopLoss,
+            takeProfit: takeProfit // Re-inject TP to satisfy MetaAPI Modification Protocol
           };
 
           const modifyResponse = await fetch(modifyUrl, {
