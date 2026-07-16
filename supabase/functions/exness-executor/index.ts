@@ -114,8 +114,8 @@ serve(async (req) => {
       // Extract the signal tier from ai_summary (e.g. "S-Tier", "A-Tier")
       const signalTier = (() => {
         const summary = signal.ai_summary || "";
-        const match = summary.match(/^(S|A|B|C)-Tier/m);
-        return match ? match[0] : null;
+        const match = summary.match(/(S|A|B|C)-Tier/m);
+        return match ? `${match[1]}-Tier` : null;
       })();
 
       // Only include users who have the Master Auto-Trade Switch ON
