@@ -98,7 +98,7 @@ serve(async (req) => {
           const closePrice = closingDeal.price;
           const closedAt = closingDeal.time;
           
-          const finalStatus = profitUsd > 0 ? "CLOSED_WON" : "CLOSED_LOST";
+          const finalStatus = profitUsd > 0 ? "WON" : "LOST";
 
           console.log(`[History Sync] Trade ${trade.meta_api_order_id} resolved as ${finalStatus} with $${profitUsd} profit.`);
 
