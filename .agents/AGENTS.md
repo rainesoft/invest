@@ -14,3 +14,5 @@ Whenever you identify a potential security vulnerability (e.g., exposing an unau
 - **Conventional Commits**: All commit messages must strictly follow the Global Standard Conventional Commits specification (e.g., `feat: `, `fix: `, `refactor: `).
 - **Granularity**: Do not lump unrelated changes into a single monolithic commit. Group logically related files together and create unique, atomic commits for each logical change with a descriptive message.
 
+- **Merging & Primary Workspace**: After creating, committing, and pushing a feature branch, you MUST always merge that branch back into the `dev` branch. The `dev` branch is the primary working branch—ensure you return to it and continue all subsequent work from there.
+
