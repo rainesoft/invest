@@ -392,6 +392,8 @@ serve(async (req) => {
         let status = "PENDING";
         let error_message = null;
         let meta_api_order_id = null;
+        
+        const tradeId = crypto.randomUUID();
 
         const isMarketOrder = actionType === "ORDER_TYPE_BUY" || actionType === "ORDER_TYPE_SELL";
 
@@ -412,6 +414,7 @@ serve(async (req) => {
               volume: volume,
               stopLoss: stopLoss,
               takeProfit: takeProfit,
+              clientId: tradeId,
             };
 
             try {
@@ -446,6 +449,7 @@ serve(async (req) => {
         // Record the user's trade execution
         // Record the user's trade execution
         const { error: insertError } = await supabase.from("user_trades").insert({
+          id: tradeId,
           user_id: user.user_id,
           opportunity_id: signal.id,
           symbol: signal.symbol,
