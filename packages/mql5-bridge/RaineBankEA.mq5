@@ -76,16 +76,16 @@ void OnTimer()
    PushMarketData();
    MonitorPositions();
    
-   string cookie=NULL;
-   string headers = "x-vps-secret: " + InpVPSSecret + "\r\n";
-   char post[], result[];
-   int res;
-   
    string pollUrl = InpSupabaseURL + "/functions/v1/vps-poll?user_id=" + InpUserID;
    
    // WebRequest to poll for trades
    ResetLastError();
-   res = WebRequest("GET", pollUrl, cookie, NULL, 500, post, 0, result, headers);
+   string req_headers = "x-vps-secret: " + InpVPSSecret + "\r\n";
+   string res_headers;
+   char post[], result[];
+   int res;
+   
+   res = WebRequest("GET", pollUrl, req_headers, 500, post, result, res_headers);
    
    if(res == 200)
      {
@@ -209,8 +209,9 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
    string cbUrl = InpSupabaseURL + "/functions/v1/vps-callback?trade_id=" + id + "&status=" + statusStr + "&ticket=" + ticketStr + "&error=" + errorStr;
    
    char post[], resData[];
-   string headers = "x-vps-secret: " + InpVPSSecret + "\r\n";
-   int res = WebRequest("GET", cbUrl, NULL, NULL, 3000, post, 0, resData, headers);
+   string req_headers = "x-vps-secret: " + InpVPSSecret + "\r\n";
+   string res_headers;
+   int res = WebRequest("GET", cbUrl, req_headers, 3000, post, resData, res_headers);
    if(res != 200)
      {
       Print("Failed to send callback. HTTP: ", res);
@@ -251,8 +252,9 @@ void PushMarketData()
          
          ArrayResize(post, ArraySize(post)-1); // Remove null terminator
          
-         string headers = "Content-Type: application/json\r\nx-vps-secret: " + InpVPSSecret + "\r\n";
-         int res = WebRequest("POST", url, headers, 3000, post, result, headers);
+         string req_headers = "Content-Type: application/json\r\nx-vps-secret: " + InpVPSSecret + "\r\n";
+         string res_headers;
+         int res = WebRequest("POST", url, req_headers, 3000, post, result, res_headers);
          if(res == 200) Print("Data successfully pushed to Supabase.");
          else Print("Failed to push data: HTTP ", res);
         }
@@ -299,8 +301,9 @@ void MonitorPositions()
                          "&close_reason=" + reason;
                          
             char post[], result[]; 
-            string headers = "x-vps-secret: " + InpVPSSecret + "\r\n";
-            int res = WebRequest("GET", url, NULL, NULL, 3000, post, 0, result, headers);
+            string req_headers = "x-vps-secret: " + InpVPSSecret + "\r\n";
+            string res_headers;
+            int res = WebRequest("GET", url, req_headers, 3000, post, result, res_headers);
             if(res == 200)
               {
                Print("Successfully synced history for closed ticket: ", ticket, " Profit: ", profit);
