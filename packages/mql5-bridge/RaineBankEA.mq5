@@ -10,6 +10,8 @@
 input string InpSupabaseURL = "https://ktezlusdkqlfdwqrldtn.supabase.co"; // Supabase Project URL
 input string InpUserID = ""; // Your User ID
 
+long activeTickets[];
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
@@ -21,9 +23,29 @@ int OnInit()
       return(INIT_PARAMETERS_INCORRECT);
      }
      
+   RecoverActiveTickets();
    EventSetTimer(1);
    Print("RaineBank VPS Bridge initialized. Polling every 1 second.");
    return(INIT_SUCCEEDED);
+  }
+
+//+------------------------------------------------------------------+
+//| Recover Active Tickets on Startup                                |
+//+------------------------------------------------------------------+
+void RecoverActiveTickets()
+  {
+   ArrayResize(activeTickets, 0);
+   for(int i=0; i<PositionsTotal(); i++)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionGetString(POSITION_COMMENT) == "RaineBank AI" || PositionGetInteger(POSITION_MAGIC) == 410673)
+        {
+         int size = ArraySize(activeTickets);
+         ArrayResize(activeTickets, size+1);
+         activeTickets[size] = ticket;
+        }
+     }
+   Print("Recovered ", ArraySize(activeTickets), " active positions.");
   }
 
 //+------------------------------------------------------------------+
@@ -43,6 +65,7 @@ datetime lastBarTime = 0;
 void OnTimer()
   {
    PushMarketData();
+   MonitorPositions();
    
    string cookie=NULL, headers;
    char post[], result[];
@@ -157,6 +180,10 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
       statusStr = "OPEN";
       ticketStr = IntegerToString(result.order);
       Print("Trade successfully executed. Ticket: ", result.order);
+      
+      int size = ArraySize(activeTickets);
+      ArrayResize(activeTickets, size+1);
+      activeTickets[size] = result.order;
      }
    else
      {
@@ -224,6 +251,54 @@ void PushMarketData()
    else if(lastBarTime == 0)
      {
       lastBarTime = currentBarTime; // Initialize
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Monitor Active Positions for Closures                            |
+//+------------------------------------------------------------------+
+void MonitorPositions()
+  {
+   for(int i=ArraySize(activeTickets)-1; i>=0; i--)
+     {
+      long ticket = activeTickets[i];
+      if(!PositionSelectByTicket(ticket))
+        {
+         // Position is no longer open! Check history.
+         if(HistorySelectByPosition(ticket))
+           {
+            int deals = HistoryDealsTotal();
+            double profit = 0;
+            double closePrice = 0;
+            string reason = "VPS_CLOSED";
+            
+            for(int d=0; d<deals; d++)
+              {
+               ulong dealTicket = HistoryDealGetTicket(d);
+               if(HistoryDealGetInteger(dealTicket, DEAL_ENTRY) == DEAL_ENTRY_OUT)
+                 {
+                  profit += HistoryDealGetDouble(dealTicket, DEAL_PROFIT) + HistoryDealGetDouble(dealTicket, DEAL_SWAP) + HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+                  closePrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+                 }
+              }
+            
+            // Push History
+            string url = InpSupabaseURL + "/functions/v1/vps-history?ticket=" + IntegerToString(ticket) + 
+                         "&profit=" + DoubleToString(profit, 2) + 
+                         "&close_price=" + DoubleToString(closePrice, 5) + 
+                         "&close_reason=" + reason;
+                         
+            char post[], result[]; string headers;
+            int res = WebRequest("GET", url, NULL, NULL, 3000, post, 0, result, headers);
+            if(res == 200)
+              {
+               Print("Successfully synced history for closed ticket: ", ticket, " Profit: ", profit);
+              }
+           }
+           
+         // Remove from array
+         ArrayRemove(activeTickets, i, 1);
+        }
      }
   }
 //+------------------------------------------------------------------+
