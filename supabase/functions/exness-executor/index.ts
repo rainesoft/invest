@@ -398,11 +398,29 @@ serve(async (req) => {
         const nowMs = Date.now();
         const vpsHeartbeatMs = user.vps_last_heartbeat ? new Date(user.vps_last_heartbeat).getTime() : 0;
         const isVpsAlive = (nowMs - vpsHeartbeatMs) < 60000; // 60 seconds
+        
+        if (user.active_broker === 'MT5_VPS' && !isVpsAlive) {
+            console.log(`[Router] User ${user.user_id} rejected: VPS is offline. Pausing execution to prevent unintended MetaAPI routing.`);
+            await supabase.from("user_trades").insert({
+              user_id: user.user_id,
+              opportunity_id: signal.id,
+              symbol: signal.symbol,
+              side: signal.side,
+              volume: volume,
+              risk_amount: userRiskAmount,
+              status: "REJECTED",
+              error_message: "VPS is offline. Execution paused.",
+            });
+            executions.push({ user_id: user.user_id, status: "REJECTED", error_message: "VPS is offline" });
+            continue;
+        }
+
         const routeToVps = user.active_broker === 'MT5_VPS' && isVpsAlive;
+        const routeToMetaApi = user.active_broker === 'METAAPI' && user.meta_api_token && user.meta_api_account_id;
 
         if (
           user.is_live_execution_enabled &&
-          (routeToVps || (user.meta_api_token && user.meta_api_account_id))
+          (routeToVps || routeToMetaApi)
         ) {
           if (!isMarketOrder) {
             // Soft Pending Order: Do NOT send limit/stop orders to the broker.

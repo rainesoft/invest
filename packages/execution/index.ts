@@ -342,6 +342,12 @@ export async function syncBrokerPosition(
   settings: any
 ): Promise<{ isOpen: boolean; pl: number; positionId?: string }> {
   try {
+    if (settings.active_broker === 'MT5_VPS') {
+      // VPS entirely manages physical execution and closures locally.
+      // We assume it's open until the VPS specifically fires a vps-history or vps-callback.
+      return { isOpen: true, pl: 0 };
+    }
+    
     if (settings.active_broker === 'METAAPI') {
       const res = await metaApiFetch(`/positions`, { method: 'GET' }, settings.meta_api_token, settings.meta_api_account_id);
       const position = (res || []).find((p: any) => p.symbol === symbol);
@@ -378,6 +384,11 @@ export async function updateBrokerStopLoss(
   positionId?: string
 ): Promise<boolean> {
   try {
+    if (settings.active_broker === 'MT5_VPS') {
+      console.log(`[MT5_VPS] Mathematical trailing stop updated to ${newStop} for ${symbol} in DB. VPS EA manages physical stop locally.`);
+      return false; 
+    }
+    
     if (settings.active_broker === 'METAAPI' && positionId) {
       await metaApiFetch('/trade', {
         method: 'POST',

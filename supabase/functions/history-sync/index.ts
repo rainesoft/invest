@@ -39,7 +39,7 @@ serve(async (req) => {
     const userIds = [...new Set(openTrades.map(t => t.user_id))];
     const { data: userSettings, error: settingsError } = await supabase
       .from("user_risk_settings")
-      .select("user_id, meta_api_token, meta_api_account_id")
+      .select("user_id, meta_api_token, meta_api_account_id, active_broker")
       .in("user_id", userIds);
 
     if (settingsError || !userSettings) {
@@ -55,7 +55,7 @@ serve(async (req) => {
     const userGroups = new Map();
     for (const t of openTrades) {
       const u = settingsMap.get(t.user_id);
-      if (!u || !u.meta_api_token || !u.meta_api_account_id) continue;
+      if (!u || u.active_broker === 'MT5_VPS' || !u.meta_api_token || !u.meta_api_account_id) continue;
 
       if (!userGroups.has(u.meta_api_account_id)) {
         userGroups.set(u.meta_api_account_id, {
