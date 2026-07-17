@@ -392,8 +392,7 @@ serve(async (req) => {
         let status = "PENDING";
         let error_message = null;
         let meta_api_order_id = null;
-        
-        const tradeId = crypto.randomUUID();
+
 
         const isMarketOrder = actionType === "ORDER_TYPE_BUY" || actionType === "ORDER_TYPE_SELL";
 
@@ -407,57 +406,134 @@ serve(async (req) => {
             // We will hold them internally and monitor price action before converting to a Market Order.
             status = "PENDING";
           } else {
-            // Hard Market Order: Execute immediately
-            const orderPayload: any = {
-              actionType: actionType,
+            // Hard Market Order: Execute as TWO legs (Partial Profit Taking)
+            // Leg A: QUICK_EXIT — 50% volume at 1:1 R:R to bank guaranteed profit
+            // Leg B: RUNNER    — 50% volume at original AI target, protected by trailing stop
+
+            const halfVolume = Math.max(0.01, Math.round((volume / 2) * 100) / 100);
+            const riskDistance = Math.abs(entryPrice - stopLoss);
+            const quickExitTP = signal.side === "LONG"
+              ? Number((entryPrice + riskDistance).toFixed(5))
+              : Number((entryPrice - riskDistance).toFixed(5));
+
+            const tradeIdA = crypto.randomUUID(); // QUICK_EXIT
+            const tradeIdB = crypto.randomUUID(); // RUNNER
+
+            const metaApiUrl = `${baseUrl}/users/current/accounts/${user.meta_api_account_id}/trade`;
+
+            // --- Leg A: QUICK_EXIT ---
+            const payloadA: any = {
+              actionType,
               symbol: signal.symbol,
-              volume: volume,
-              stopLoss: stopLoss,
-              takeProfit: takeProfit,
-              clientId: tradeId,
+              volume: halfVolume,
+              stopLoss,
+              takeProfit: quickExitTP,
+              clientId: tradeIdA,
+              // No trailing stop on quick exit — must close cleanly at 1:1
+            };
+
+            let statusA = "FAILED";
+            let orderIdA: string | null = null;
+            let errorA: string | null = null;
+
+            try {
+              const resA = await fetch(metaApiUrl, {
+                method: "POST",
+                headers: { "auth-token": user.meta_api_token, "Content-Type": "application/json" },
+                body: JSON.stringify(payloadA),
+              });
+              if (!resA.ok) {
+                errorA = await resA.text();
+              } else {
+                const dataA = await resA.json();
+                orderIdA = dataA.orderId || "EXECUTED";
+                statusA = "OPEN";
+              }
+            } catch (e: any) { errorA = e.message; }
+
+            const { error: insertErrorA } = await supabase.from("user_trades").insert({
+              id: tradeIdA,
+              user_id: user.user_id,
+              opportunity_id: signal.id,
+              symbol: signal.symbol,
+              side: signal.side,
+              volume: halfVolume,
+              risk_amount: userRiskAmount / 2,
+              status: statusA,
+              meta_api_order_id: orderIdA,
+              error_message: errorA,
+              trade_type: "QUICK_EXIT",
+            });
+
+            // --- Leg B: RUNNER ---
+            const payloadB: any = {
+              actionType,
+              symbol: signal.symbol,
+              volume: halfVolume,
+              stopLoss,
+              takeProfit,
+              clientId: tradeIdB,
             };
 
             const atrRaw = signal.stop_plan_json?.atr;
-            if (user.sync_trailing_stops && atrRaw && typeof atrRaw === 'number') {
-              orderPayload.trailingStopLoss = {
-                distance: {
-                  distance: Number((atrRaw * 2.0).toFixed(5)),
-                  units: "RELATIVE_PRICE"
-                }
+            if (user.sync_trailing_stops && atrRaw && typeof atrRaw === "number") {
+              payloadB.trailingStopLoss = {
+                distance: { distance: Number((atrRaw * 2.0).toFixed(5)), units: "RELATIVE_PRICE" },
               };
             }
 
-            try {
-              const metaApiUrl = `${baseUrl}/users/current/accounts/${user.meta_api_account_id}/trade`;
-              const response = await fetch(metaApiUrl, {
-                method: "POST",
-                headers: {
-                  "auth-token": user.meta_api_token,
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify(orderPayload),
-              });
+            let statusB = "FAILED";
+            let orderIdB: string | null = null;
+            let errorB: string | null = null;
 
-              if (!response.ok) {
-                error_message = await response.text();
-                status = "FAILED";
+            try {
+              const resB = await fetch(metaApiUrl, {
+                method: "POST",
+                headers: { "auth-token": user.meta_api_token, "Content-Type": "application/json" },
+                body: JSON.stringify(payloadB),
+              });
+              if (!resB.ok) {
+                errorB = await resB.text();
               } else {
-                const responseData = await response.json();
-                meta_api_order_id = responseData.orderId || "EXECUTED";
-                status = "OPEN";
+                const dataB = await resB.json();
+                orderIdB = dataB.orderId || "EXECUTED";
+                statusB = "OPEN";
               }
-            } catch (e: any) {
-              error_message = e.message;
-              status = "FAILED";
+            } catch (e: any) { errorB = e.message; }
+
+            const { error: insertErrorB } = await supabase.from("user_trades").insert({
+              id: tradeIdB,
+              user_id: user.user_id,
+              opportunity_id: signal.id,
+              symbol: signal.symbol,
+              side: signal.side,
+              volume: halfVolume,
+              risk_amount: userRiskAmount / 2,
+              status: statusB,
+              meta_api_order_id: orderIdB,
+              error_message: errorB,
+              trade_type: "RUNNER",
+            });
+
+            // Overall status for the executions summary
+            status = statusA === "OPEN" || statusB === "OPEN" ? "OPEN" : "FAILED";
+            meta_api_order_id = orderIdA || orderIdB;
+            
+            let finalErrorMsg = errorA && errorB ? `QE: ${errorA} | Runner: ${errorB}` : (errorA || errorB);
+            if (insertErrorA || insertErrorB) {
+              finalErrorMsg = `DB Insert Error: A:${insertErrorA?.message} B:${insertErrorB?.message}`;
             }
+
+            executions.push({ user_id: user.user_id, status, quick_exit_id: orderIdA, runner_id: orderIdB, error_message: finalErrorMsg });
+            continue; // Skip the single-leg insert below
           }
         } else {
           // Paper trading
           status = isMarketOrder ? "PAPER_OPEN" : "PENDING";
         }
 
-        // Record the user's trade execution
-        // Record the user's trade execution
+        // Record single-leg trade (paper trades, pending soft orders, and rejected trades)
+        const tradeId = crypto.randomUUID();
         const { error: insertError } = await supabase.from("user_trades").insert({
           id: tradeId,
           user_id: user.user_id,
@@ -469,6 +545,7 @@ serve(async (req) => {
           status: status,
           meta_api_order_id: meta_api_order_id,
           error_message: error_message,
+          trade_type: "STANDARD",
         });
 
         if (insertError) {
@@ -483,6 +560,7 @@ serve(async (req) => {
         }
 
         executions.push({ user_id: user.user_id, status, error_message: error_message || riskValidation?.reason || spreadRejectReason || tierRejectReason });
+
       }
     }
 
