@@ -15,6 +15,9 @@ async function hashBar(b: any) {
 serve(async (req) => {
   try {
     if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
+    if (req.headers.get("x-vps-secret") !== Deno.env.get("VPS_SECRET_KEY")) {
+      return new Response("Unauthorized", { status: 401 });
+    }
 
     const payload = await req.json();
     const { user_id, symbol, timeframe, bars } = payload;

@@ -3,6 +3,9 @@ import { createClient } from "npm:@supabase/supabase-js@2.108.2";
 
 serve(async (req) => {
   try {
+    if (req.headers.get("x-vps-secret") !== Deno.env.get("VPS_SECRET_KEY")) {
+      return new Response("Unauthorized", { status: 401 });
+    }
     const url = new URL(req.url);
     const tradeId = url.searchParams.get("trade_id");
     const status = url.searchParams.get("status");
