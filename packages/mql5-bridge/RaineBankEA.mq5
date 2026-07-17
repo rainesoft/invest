@@ -7,8 +7,11 @@
 #property link      "https://www.rainebank.com/"
 #property version   "1.00"
 
-input string InpSupabaseURL = "https://ktezlusdkqlfdwqrldtn.supabase.co"; // Supabase Project URL
-input string InpUserID = ""; // Your User ID
+// --- HARDCODED MASTER NODE CONFIGURATION ---
+string InpSupabaseURL = "https://ktezlusdkqlfdwqrldtn.supabase.co"; 
+string InpUserID = "00ebf71d-8ad4-4072-9bb8-6149f55594b1"; 
+string InpVPSSecret = "f4751d7f27496451f31eafbd3c937ab8036ce26ef30415b3"; 
+// -----------------------------------------
 
 long activeTickets[];
 
@@ -20,6 +23,12 @@ int OnInit()
    if(InpUserID == "")
      {
       Print("Error: UserID is empty! Please configure it in EA Settings.");
+      return(INIT_PARAMETERS_INCORRECT);
+     }
+     
+   if(InpVPSSecret == "")
+     {
+      Print("Error: VPS Secret is empty! Please configure it in EA Settings.");
       return(INIT_PARAMETERS_INCORRECT);
      }
      
@@ -67,7 +76,8 @@ void OnTimer()
    PushMarketData();
    MonitorPositions();
    
-   string cookie=NULL, headers;
+   string cookie=NULL;
+   string headers = "x-vps-secret: " + InpVPSSecret + "\r\n";
    char post[], result[];
    int res;
    
@@ -199,7 +209,7 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
    string cbUrl = InpSupabaseURL + "/functions/v1/vps-callback?trade_id=" + id + "&status=" + statusStr + "&ticket=" + ticketStr + "&error=" + errorStr;
    
    char post[], resData[];
-   string headers;
+   string headers = "x-vps-secret: " + InpVPSSecret + "\r\n";
    int res = WebRequest("GET", cbUrl, NULL, NULL, 3000, post, 0, resData, headers);
    if(res != 200)
      {
@@ -241,7 +251,7 @@ void PushMarketData()
          
          ArrayResize(post, ArraySize(post)-1); // Remove null terminator
          
-         string headers = "Content-Type: application/json\r\n";
+         string headers = "Content-Type: application/json\r\nx-vps-secret: " + InpVPSSecret + "\r\n";
          int res = WebRequest("POST", url, headers, 3000, post, result, headers);
          if(res == 200) Print("Data successfully pushed to Supabase.");
          else Print("Failed to push data: HTTP ", res);
@@ -288,7 +298,8 @@ void MonitorPositions()
                          "&close_price=" + DoubleToString(closePrice, 5) + 
                          "&close_reason=" + reason;
                          
-            char post[], result[]; string headers;
+            char post[], result[]; 
+            string headers = "x-vps-secret: " + InpVPSSecret + "\r\n";
             int res = WebRequest("GET", url, NULL, NULL, 3000, post, 0, result, headers);
             if(res == 200)
               {
