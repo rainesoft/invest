@@ -124,10 +124,13 @@ ${historicalMemory || "No historical data available for this asset yet."}
    - TIGHT LOCAL STRUCTURE: You MUST optimize your stop loss for the specific timeframe you are evaluating. Place the stop loss tight behind the immediate local structure.
    - MANDATORY ATR PADDING: Your \`suggested_stop_loss\` MUST be mathematically padded by exactly \`1.0 * atr_14\` beyond the structural invalidation point (e.g. if shorting from resistance at 100 with an ATR of 2, set stop loss to 102) to avoid liquidity sweeps!
    - MAX STOP LOSS LIMIT: Your calculated stop loss MUST NEVER exceed a distance of \`2.0 * atr_14\` from the suggested entry price.
-4. STRICT R:R (RISK TO REWARD) ENFORCEMENT: 
-   - Your Take Profit MUST yield a minimum of 1:1.5 Risk/Reward based on your Entry and Stop Loss. 
-   - Before outputting your JSON, mathematically verify that \`abs(Entry - TP) / abs(Entry - SL) >= 1.5\`.
-   - If the market structure does not allow for a 1:1.5 ratio, you MUST set \`recommended_direction\` to "NONE". Do not force trades that fail the 1:1.5 math!
+4. CONFIDENCE-WEIGHTED R:R (RISK TO REWARD) ENFORCEMENT: 
+   - The required Risk/Reward ratio depends on your generated \`confidence_score\`:
+     * S-Tier (90-100 confidence): Minimum 1:1.2 R:R
+     * A-Tier (80-89 confidence): Minimum 1:1.3 R:R
+     * B-Tier (70-79 confidence): Minimum 1:1.5 R:R
+   - Before outputting your JSON, mathematically verify that \`abs(Entry - TP) / abs(Entry - SL)\` meets the required threshold for your confidence tier.
+   - If the market structure does not allow for the required R:R ratio, you MUST set \`recommended_direction\` to "NONE". Do not force trades that fail the math!
 5. RANGING MARKETS & BREAKOUTS (MANDATORY RULE):
    - If the market is RANGING (price between 50 and 200 EMAs), a 'recommended_direction' of NONE is STRICTLY FORBIDDEN unless R:R fails.
    - You MUST always identify the nearest Swing High and Swing Low from the bars data. Place a Buy Stop 0.1% above the Swing High and a Sell Stop 0.1% below the Swing Low. The tighter the range, the more explosive the eventual breakout.
@@ -190,10 +193,14 @@ ${JSON.stringify(snapshot, null, 2)}`;
       const reward = Math.abs(entry - tp);
       const rr = risk > 0 ? reward / risk : 0;
       
-      if (rr < 1.45) { // Adding small epsilon tolerance
-        console.warn(`[Validation] Attempt ${attempt} failed R:R math (R:R=${rr.toFixed(2)}). Retrying...`);
+      let requiredRR = 1.5;
+      if (data.confidence_score >= 90) requiredRR = 1.2;
+      else if (data.confidence_score >= 80) requiredRR = 1.3;
+      
+      if (rr < requiredRR - 0.05) { // Adding small epsilon tolerance
+        console.warn(`[Validation] Attempt ${attempt} failed R:R math (R:R=${rr.toFixed(2)}, Required=${requiredRR}). Retrying...`);
         messages.push({ role: "assistant", content });
-        messages.push({ role: "user", content: `Your suggested trade yields a Risk/Reward ratio of 1:${rr.toFixed(2)}. The absolute minimum is 1:1.5. You MUST either tighten your stop loss, extend your take profit target based on deeper structure, or change recommended_direction to "NONE".` });
+        messages.push({ role: "user", content: `Your suggested trade yields a Risk/Reward ratio of 1:${rr.toFixed(2)}, but your confidence score of ${data.confidence_score} requires a minimum R:R of 1:${requiredRR}. You MUST either tighten your stop loss, extend your take profit target, or change recommended_direction to "NONE".` });
         continue;
       }
     }
@@ -827,13 +834,17 @@ serve(async (req) => {
             const riskPoints = Math.abs(entry_price - stop_loss);
             const rewardPoints = Math.abs(take_profit - entry_price);
             const riskRewardRatio = riskPoints > 0 ? (rewardPoints / riskPoints) : 0;
+            
+            let deskRequiredRR = 1.5;
+            if (confidence_score >= 90) deskRequiredRR = 1.2;
+            else if (confidence_score >= 80) deskRequiredRR = 1.3;
 
-            if (riskRewardRatio < 1.45) {
-              console.log(`[Layer C: Execution Desk] REJECTED ${symbol}: Risk:Reward ratio (${riskRewardRatio.toFixed(2)}) is below the institutional minimum of 1.5.`);
-              sendEvent({ type: 'progress', message: `[Layer C: Execution Desk] REJECTED: Structural mismatch. R:R ratio (${riskRewardRatio.toFixed(2)}) is below minimum of 1.5.` });
+            if (riskRewardRatio < deskRequiredRR - 0.05) {
+              console.log(`[Layer C: Execution Desk] REJECTED ${symbol}: Risk:Reward ratio (${riskRewardRatio.toFixed(2)}) is below the institutional minimum of ${deskRequiredRR} for Tier score ${confidence_score}.`);
+              sendEvent({ type: 'progress', message: `[Layer C: Execution Desk] REJECTED: Structural mismatch. R:R ratio (${riskRewardRatio.toFixed(2)}) is below minimum of ${deskRequiredRR}.` });
               rejections.push({
                 symbol,
-                reason: `Structural R:R mismatch: Risk:Reward ratio is ${riskRewardRatio.toFixed(2)}, which is below the required 1:1.5 threshold.`,
+                reason: `Structural R:R mismatch: Risk:Reward ratio is ${riskRewardRatio.toFixed(2)}, which is below the required 1:${deskRequiredRR} threshold for a ${confidence_score} confidence score.`,
                 layer: "Execution Desk"
               });
               await supabase.from("trade_opportunities").insert({
@@ -842,7 +853,7 @@ serve(async (req) => {
                 timeframe: timeframe.toLowerCase(),
                 status: "REJECTED",
                 ai_summary: institutional_rationale,
-                ai_risks: `Rejected by Execution Desk: R:R ratio ${riskRewardRatio.toFixed(2)} < 1.5`,
+                ai_risks: `Rejected by Execution Desk: R:R ratio ${riskRewardRatio.toFixed(2)} < ${deskRequiredRR}`,
                 model_id: modelId,
                 model_version: modelVersion,
                 risk_summary: `RSI ${snapshot.rsi_14}`
