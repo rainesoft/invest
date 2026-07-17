@@ -393,13 +393,16 @@ serve(async (req) => {
         let error_message = null;
         let meta_api_order_id = null;
 
-
         const isMarketOrder = actionType === "ORDER_TYPE_BUY" || actionType === "ORDER_TYPE_SELL";
+
+        const nowMs = Date.now();
+        const vpsHeartbeatMs = user.vps_last_heartbeat ? new Date(user.vps_last_heartbeat).getTime() : 0;
+        const isVpsAlive = (nowMs - vpsHeartbeatMs) < 60000; // 60 seconds
+        const routeToVps = user.active_broker === 'MT5_VPS' && isVpsAlive;
 
         if (
           user.is_live_execution_enabled &&
-          user.meta_api_token &&
-          user.meta_api_account_id
+          (routeToVps || (user.meta_api_token && user.meta_api_account_id))
         ) {
           if (!isMarketOrder) {
             // Soft Pending Order: Do NOT send limit/stop orders to the broker.
@@ -437,17 +440,22 @@ serve(async (req) => {
             let errorA: string | null = null;
 
             try {
-              const resA = await fetch(metaApiUrl, {
-                method: "POST",
-                headers: { "auth-token": user.meta_api_token, "Content-Type": "application/json" },
-                body: JSON.stringify(payloadA),
-              });
-              if (!resA.ok) {
-                errorA = await resA.text();
+              if (routeToVps) {
+                statusA = "VPS_PENDING";
+                orderIdA = tradeIdA;
               } else {
-                const dataA = await resA.json();
-                orderIdA = dataA.orderId || "EXECUTED";
-                statusA = "OPEN";
+                const resA = await fetch(metaApiUrl, {
+                  method: "POST",
+                  headers: { "auth-token": user.meta_api_token, "Content-Type": "application/json" },
+                  body: JSON.stringify(payloadA),
+                });
+                if (!resA.ok) {
+                  errorA = await resA.text();
+                } else {
+                  const dataA = await resA.json();
+                  orderIdA = dataA.orderId || "EXECUTED";
+                  statusA = "OPEN";
+                }
               }
             } catch (e: any) { errorA = e.message; }
 
@@ -487,17 +495,22 @@ serve(async (req) => {
             let errorB: string | null = null;
 
             try {
-              const resB = await fetch(metaApiUrl, {
-                method: "POST",
-                headers: { "auth-token": user.meta_api_token, "Content-Type": "application/json" },
-                body: JSON.stringify(payloadB),
-              });
-              if (!resB.ok) {
-                errorB = await resB.text();
+              if (routeToVps) {
+                statusB = "VPS_PENDING";
+                orderIdB = tradeIdB;
               } else {
-                const dataB = await resB.json();
-                orderIdB = dataB.orderId || "EXECUTED";
-                statusB = "OPEN";
+                const resB = await fetch(metaApiUrl, {
+                  method: "POST",
+                  headers: { "auth-token": user.meta_api_token, "Content-Type": "application/json" },
+                  body: JSON.stringify(payloadB),
+                });
+                if (!resB.ok) {
+                  errorB = await resB.text();
+                } else {
+                  const dataB = await resB.json();
+                  orderIdB = dataB.orderId || "EXECUTED";
+                  statusB = "OPEN";
+                }
               }
             } catch (e: any) { errorB = e.message; }
 
@@ -552,17 +565,22 @@ serve(async (req) => {
             let errorMsgSingle: string | null = null;
 
             try {
-              const res = await fetch(metaApiUrl, {
-                method: "POST",
-                headers: { "auth-token": user.meta_api_token, "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-              });
-              if (!res.ok) {
-                errorMsgSingle = await res.text();
+              if (routeToVps) {
+                statusSingle = "VPS_PENDING";
+                orderIdSingle = tradeId;
               } else {
-                const data = await res.json();
-                orderIdSingle = data.orderId || "EXECUTED";
-                statusSingle = "OPEN";
+                const res = await fetch(metaApiUrl, {
+                  method: "POST",
+                  headers: { "auth-token": user.meta_api_token, "Content-Type": "application/json" },
+                  body: JSON.stringify(payload),
+                });
+                if (!res.ok) {
+                  errorMsgSingle = await res.text();
+                } else {
+                  const data = await res.json();
+                  orderIdSingle = data.orderId || "EXECUTED";
+                  statusSingle = "OPEN";
+                }
               }
             } catch (e: any) { errorMsgSingle = e.message; }
 

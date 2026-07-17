@@ -30,7 +30,9 @@ serve(async (req) => {
           meta_api_token,
           meta_api_account_id,
           sync_trailing_stops,
-          is_live_execution_enabled
+          is_live_execution_enabled,
+          vps_last_heartbeat,
+          active_broker
         )
       `)
       .eq("status", "PENDING");
@@ -124,27 +126,38 @@ serve(async (req) => {
           }
 
           if (trade.user_risk_settings?.is_live_execution_enabled) {
-            try {
-              const metaApiUrl = `${baseUrl}/users/current/accounts/${trade.user_risk_settings.meta_api_account_id}/trade`;
-              const res = await fetch(metaApiUrl, {
-                method: "POST",
-                headers: { 
-                  "auth-token": trade.user_risk_settings.meta_api_token, 
-                  "Content-Type": "application/json" 
-                },
-                body: JSON.stringify(payload),
-              });
-              
-              if (!res.ok) {
-                const errorText = await res.text();
-                await supabase.from("user_trades").update({ status: "FAILED", error_message: errorText }).eq("id", trade.id);
-              } else {
-                const data = await res.json();
-                await supabase.from("user_trades").update({ status: "OPEN", meta_api_order_id: data.orderId || "EXECUTED" }).eq("id", trade.id);
-                executedCount++;
+            const nowMs = Date.now();
+            // We need to fetch vps_last_heartbeat and active_broker. Let's assume we added them to the query!
+            const vpsHeartbeatMs = trade.user_risk_settings?.vps_last_heartbeat ? new Date(trade.user_risk_settings.vps_last_heartbeat).getTime() : 0;
+            const isVpsAlive = (nowMs - vpsHeartbeatMs) < 60000;
+            const routeToVps = trade.user_risk_settings?.active_broker === 'MT5_VPS' && isVpsAlive;
+
+            if (routeToVps) {
+               await supabase.from("user_trades").update({ status: "VPS_PENDING" }).eq("id", trade.id);
+               executedCount++;
+            } else {
+              try {
+                const metaApiUrl = `${baseUrl}/users/current/accounts/${trade.user_risk_settings.meta_api_account_id}/trade`;
+                const res = await fetch(metaApiUrl, {
+                  method: "POST",
+                  headers: { 
+                    "auth-token": trade.user_risk_settings.meta_api_token, 
+                    "Content-Type": "application/json" 
+                  },
+                  body: JSON.stringify(payload),
+                });
+                
+                if (!res.ok) {
+                  const errorText = await res.text();
+                  await supabase.from("user_trades").update({ status: "FAILED", error_message: errorText }).eq("id", trade.id);
+                } else {
+                  const data = await res.json();
+                  await supabase.from("user_trades").update({ status: "OPEN", meta_api_order_id: data.orderId || "EXECUTED" }).eq("id", trade.id);
+                  executedCount++;
+                }
+              } catch (e: any) {
+                await supabase.from("user_trades").update({ status: "FAILED", error_message: e.message }).eq("id", trade.id);
               }
-            } catch (e: any) {
-              await supabase.from("user_trades").update({ status: "FAILED", error_message: e.message }).eq("id", trade.id);
             }
           } else {
              // Paper Trading execution
