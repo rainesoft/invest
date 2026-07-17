@@ -86,78 +86,41 @@ export interface Bar {
 }
 
 export async function fetchPaperBars(symbol: string, timeframe = '1D', limit = 300): Promise<{source: string, bars: Bar[]}> {
-  // Route Crypto/Forex/Commodity/Indices pairs away from Alpaca US Stocks
+  // Route Crypto/Forex/Commodity/Indices pairs to the local VPS Bridge database
   const isForexOrCrypto = symbol === 'XAUUSD' || symbol === 'UKOIL' || symbol === 'US30' || symbol === 'NAS100' || symbol.includes('USD') || symbol.includes('/');
   
   if (isForexOrCrypto) {
-    // 1. Try MetaTrader (MetaApi) First if configured
-    const metaToken = Deno.env.get("META_API_TOKEN");
-    const metaAccountId = Deno.env.get("META_API_ACCOUNT_ID");
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!supabaseUrl || !supabaseKey) throw new Error("Missing Supabase credentials for VPS Market Feed");
     
-    if (metaToken && metaAccountId) {
-      // --- Symbol remapping: translate internal names to broker symbol names ---
-      const META_SYMBOL_MAP: Record<string, string> = {
-        'NAS100': 'US100',   // Exness/MT4 uses US100 for Nasdaq 100
-        'US30': 'US30',      // Confirmed correct
-        'UKOIL': 'UKOIL',    // Confirmed correct
-        'XAGUSD': 'XAGUSD',  // Confirmed correct on most brokers
-        'BTCUSD': 'BTCUSD',  // Confirmed correct
-      };
-      const brokerSymbol = META_SYMBOL_MAP[symbol] ?? symbol;
-
-      let metaTimeframe = '1d';
-      if (timeframe === '1D') metaTimeframe = '1d';
-      else if (timeframe === '4H') metaTimeframe = '4h';
-      else if (timeframe === '1H') metaTimeframe = '1h';
-      else if (timeframe === '15Min') metaTimeframe = '15m';
-
-      const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.new-york.agiliumtrade.ai";
-      const marketDataUrl = baseUrl.replace("mt-client-api-v1", "mt-market-data-client-api-v1");
-      const metaUrl = `${marketDataUrl}/users/current/accounts/${metaAccountId}/historical-market-data/symbols/${brokerSymbol}/timeframes/${metaTimeframe}/candles?limit=${limit}`;
+    const supabase = createClient(supabaseUrl, supabaseKey);
+    
+    const { data: dbBars, error } = await supabase
+      .from('market_data_pti')
+      .select('ts, o, h, l, c, v')
+      .eq('symbol', symbol)
+      .eq('timeframe', timeframe.toLowerCase())
+      .order('ts', { ascending: false })
+      .limit(limit);
       
-      // --- Retry logic: 2 attempts with 500ms backoff ---
-      let lastMetaError: unknown;
-      for (let attempt = 1; attempt <= 2; attempt++) {
-        try {
-          if (attempt > 1) {
-            console.warn(`[Data Fetch] MetaAPI attempt ${attempt} for ${brokerSymbol}...`);
-            await new Promise(r => setTimeout(r, 500));
-          }
-
-          const metaRes = await fetch(metaUrl, {
-            headers: { 'auth-token': metaToken }
-          });
-
-          if (metaRes.ok) {
-            const metaCandles = await metaRes.json();
-            const bars: Bar[] = metaCandles.map((c: any) => ({
-              t: new Date(c.time).toISOString(),
-              o: c.open,
-              h: c.high,
-              l: c.low,
-              c: c.close,
-              v: c.tickVolume || c.volume || 0
-            })).sort((a: Bar, b: Bar) => new Date(a.t).getTime() - new Date(b.t).getTime());
-
-            if (bars.length > 0) {
-              console.log(`[Data Fetch] Pulled ${bars.length} bars from MetaTrader Broker Feed for ${brokerSymbol}`);
-              return { source: 'MetaAPI', bars };
-            }
-          } else {
-            console.warn(`MetaApi returned ${metaRes.status} for ${brokerSymbol} (attempt ${attempt}).`);
-            lastMetaError = `HTTP ${metaRes.status}`;
-          }
-        } catch (err) {
-          console.warn(`MetaApi fetch failed for ${brokerSymbol} (attempt ${attempt}):`, err);
-          lastMetaError = err;
-        }
-      }
-      throw new Error("META_API_FAILURE");
-    } else {
-      throw new Error("META_API_FAILURE");
+    if (error || !dbBars || dbBars.length === 0) {
+      console.warn(`[Data Fetch] No data found in market_data_pti for ${symbol} ${timeframe}`);
+      throw new Error(`NO_VPS_DATA_FOR_${symbol}`);
     }
+    
+    const bars: Bar[] = dbBars.map((b: any) => ({
+      t: b.ts,
+      o: b.o,
+      h: b.h,
+      l: b.l,
+      c: b.c,
+      v: b.v
+    })).reverse(); // Reverse to chronological order for indicators
+    
+    console.log(`[Data Fetch] Pulled ${bars.length} bars from VPS Bridge Feed (market_data_pti) for ${symbol}`);
+    return { source: 'VPS_Bridge', bars };
   }
-  // Fallback to original Alpaca fetcher for US Stocks
   const base = 'https://data.alpaca.markets/v2';
   const key = Deno.env.get('BROKER_KEY') || Deno.env.get('APCA_API_KEY_ID') || '';
   const secret = Deno.env.get('BROKER_SECRET') || Deno.env.get('APCA_API_SECRET_KEY') || '';
