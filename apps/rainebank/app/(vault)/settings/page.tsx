@@ -69,7 +69,8 @@ export default function SettingsPage() {
     sync_trailing_stops: false,
     auto_trade_tiers: [] as string[],
     telegram_bot_token: '',
-    telegram_chat_id: ''
+    telegram_chat_id: '',
+    use_partial_profit_taking: true
   });
 
   useEffect(() => {
@@ -95,7 +96,8 @@ export default function SettingsPage() {
             sync_trailing_stops: data.settings.sync_trailing_stops || false,
             auto_trade_tiers: data.settings.auto_trade_tiers || [],
             telegram_bot_token: data.settings.telegram_bot_token || '',
-            telegram_chat_id: data.settings.telegram_chat_id || ''
+            telegram_chat_id: data.settings.telegram_chat_id || '',
+            use_partial_profit_taking: data.settings.use_partial_profit_taking !== false
           });
         }
         setLoading(false);
@@ -394,6 +396,19 @@ export default function SettingsPage() {
                   <input type="checkbox" name="sync_trailing_stops" checked={settings.sync_trailing_stops} onChange={handleChange} style={{ opacity: 0, width: 0, height: 0 }} />
                   <span style={{ position: 'absolute', cursor: 'pointer', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: settings.sync_trailing_stops ? '#10b981' : '#4b5563', transition: '.4s', borderRadius: '24px' }}>
                     <span style={{ position: 'absolute', content: '""', height: '18px', width: '18px', left: '3px', bottom: '3px', backgroundColor: 'white', transition: '.4s', borderRadius: '50%', transform: settings.sync_trailing_stops ? 'translateX(24px)' : 'translateX(0)' }}></span>
+                  </span>
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <div>
+                  <h3 style={{ margin: '0 0 4px 0', fontSize: '15px' }}>Partial Profit Taking</h3>
+                  <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)' }}>Automatically split market orders into two legs (Quick Exit + Runner) to secure profits early.</p>
+                </div>
+                <label style={{ position: 'relative', display: 'inline-block', width: '48px', height: '24px' }}>
+                  <input type="checkbox" name="use_partial_profit_taking" checked={settings.use_partial_profit_taking} onChange={handleChange} style={{ opacity: 0, width: 0, height: 0 }} />
+                  <span style={{ position: 'absolute', cursor: 'pointer', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: settings.use_partial_profit_taking ? '#10b981' : '#4b5563', transition: '.4s', borderRadius: '24px' }}>
+                    <span style={{ position: 'absolute', content: '""', height: '18px', width: '18px', left: '3px', bottom: '3px', backgroundColor: 'white', transition: '.4s', borderRadius: '50%', transform: settings.use_partial_profit_taking ? 'translateX(24px)' : 'translateX(0)' }}></span>
                   </span>
                 </label>
               </div>

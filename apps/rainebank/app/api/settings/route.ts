@@ -69,6 +69,7 @@ export async function POST(request: Request) {
     if ('auto_trade_tiers' in body) updates.auto_trade_tiers = Array.isArray(body.auto_trade_tiers) ? body.auto_trade_tiers : [];
     if ('telegram_bot_token' in body) updates.telegram_bot_token = body.telegram_bot_token;
     if ('telegram_chat_id' in body) updates.telegram_chat_id = telegram_chat_id;
+    if ('use_partial_profit_taking' in body) updates.use_partial_profit_taking = Boolean(body.use_partial_profit_taking);
 
     const { data, error } = await supabase
       .from('user_risk_settings')

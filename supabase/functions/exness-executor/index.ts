@@ -405,7 +405,7 @@ serve(async (req) => {
             // Soft Pending Order: Do NOT send limit/stop orders to the broker.
             // We will hold them internally and monitor price action before converting to a Market Order.
             status = "PENDING";
-          } else {
+          } else if (user.use_partial_profit_taking !== false) {
             // Hard Market Order: Execute as TWO legs (Partial Profit Taking)
             // Leg A: QUICK_EXIT — 50% volume at 1:1 R:R to bank guaranteed profit
             // Leg B: RUNNER    — 50% volume at original AI target, protected by trailing stop
@@ -526,6 +526,62 @@ serve(async (req) => {
 
             executions.push({ user_id: user.user_id, status, quick_exit_id: orderIdA, runner_id: orderIdB, error_message: finalErrorMsg });
             continue; // Skip the single-leg insert below
+          } else {
+            // SINGLE LEG EXECUTION (Standard)
+            const tradeId = crypto.randomUUID();
+            const metaApiUrl = `${baseUrl}/users/current/accounts/${user.meta_api_account_id}/trade`;
+            
+            const payload: any = {
+              actionType,
+              symbol: signal.symbol,
+              volume: volume,
+              stopLoss,
+              takeProfit,
+              clientId: tradeId,
+            };
+
+            const atrRaw = signal.stop_plan_json?.atr;
+            if (user.sync_trailing_stops && atrRaw && typeof atrRaw === "number") {
+              payload.trailingStopLoss = {
+                distance: { distance: Number((atrRaw * 2.0).toFixed(5)), units: "RELATIVE_PRICE" },
+              };
+            }
+
+            let statusSingle = "FAILED";
+            let orderIdSingle: string | null = null;
+            let errorMsgSingle: string | null = null;
+
+            try {
+              const res = await fetch(metaApiUrl, {
+                method: "POST",
+                headers: { "auth-token": user.meta_api_token, "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+              });
+              if (!res.ok) {
+                errorMsgSingle = await res.text();
+              } else {
+                const data = await res.json();
+                orderIdSingle = data.orderId || "EXECUTED";
+                statusSingle = "OPEN";
+              }
+            } catch (e: any) { errorMsgSingle = e.message; }
+
+            const { error: insertError } = await supabase.from("user_trades").insert({
+              id: tradeId,
+              user_id: user.user_id,
+              opportunity_id: signal.id,
+              symbol: signal.symbol,
+              side: signal.side,
+              volume: volume,
+              risk_amount: userRiskAmount,
+              status: statusSingle,
+              meta_api_order_id: orderIdSingle,
+              error_message: errorMsgSingle,
+              trade_type: "STANDARD",
+            });
+
+            executions.push({ user_id: user.user_id, status: statusSingle, meta_api_order_id: orderIdSingle, error_message: errorMsgSingle || insertError?.message });
+            continue; // Skip the paper trade single-leg insert below
           }
         } else {
           // Paper trading
