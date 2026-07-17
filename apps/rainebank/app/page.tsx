@@ -9,10 +9,10 @@ export const dynamic = 'force-dynamic';
 
 function parseAnalysisText(text: string | null) {
   if (!text) return { tier: null, structure: null, strategy: null, content: '' };
-  
+
   // Try to match the exact pattern: [Tier] [Structure -> Strategy]
   const match = text.match(/^\[(.*?-Tier)\] \[(.*?) -> (.*?)\]/);
-  
+
   if (!match) {
     // If exact pattern fails, maybe there's just a Tier at the start
     const fallbackMatch = text.match(/^\[(.*?-Tier)\]/);
@@ -82,7 +82,7 @@ export default async function LandingPage() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
-  
+
   // Fetch the latest A-Tier trade opportunity for the live showcase
   let { data: latestSignals } = await supabaseAdmin
     .from('trade_opportunities')
@@ -112,8 +112,8 @@ export default async function LandingPage() {
     ai_summary: 'The AI Risk Officer is currently scanning the global markets for high-probability setups. Check back shortly.'
   };
 
-  const statusColor = signal.status === 'APPROVED' ? '#4ade80' : 
-                      signal.status === 'REJECTED' ? '#ef4444' : '#38bdf8';
+  const statusColor = signal.status === 'APPROVED' ? '#4ade80' :
+    signal.status === 'REJECTED' ? '#ef4444' : '#38bdf8';
 
   return (
     <div style={{
@@ -152,11 +152,11 @@ export default async function LandingPage() {
               fontSize: 'clamp(48px, 6vw, 72px)', lineHeight: 1.05, fontWeight: 800, marginBottom: '24px',
               color: '#fff', letterSpacing: '-1.5px'
             }}>
-              A super-smart AI that <br />
-              <span style={{ color: '#9ca3af' }}>grows your money.</span>
+              A super-smart AI that
+              <span style={{ color: '#9ca3af' }}> grows your money.</span>
             </h1>
             <p style={{ fontSize: '18px', color: '#9ca3af', lineHeight: 1.6, marginBottom: '40px', maxWidth: '550px' }}>
-              Deposit funds and let our AI trade the global markets for you. 
+              Deposit funds and let our AI trade the global markets for you.
               It automatically finds safe trades, manages the risk, and grows your account while you sleep. We only make money when you make money, so our goals are exactly the same as yours.
             </p>
             <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
