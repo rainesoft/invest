@@ -52,7 +52,7 @@ serve(async (req) => {
       // Check if user has any OPEN or PENDING trades (a pending limit order might have filled and closed rapidly)
       const { data: openTrades, error: openTradesError } = await supabase
         .from("user_trades")
-        .select("id, symbol, meta_api_order_id, status")
+        .select("id, symbol, meta_api_order_id, status, trade_type, opportunity_id")
         .eq("user_id", userId)
         .in("status", ["OPEN", "PENDING"]);
 
@@ -113,6 +113,63 @@ serve(async (req) => {
             .eq("id", trade.id);
 
           resolvedTrades.push({ id: trade.id, finalStatus, profitUsd });
+
+          // --- Breakeven Trigger ---
+          // When a QUICK_EXIT leg closes in profit, automatically move the companion RUNNER
+          // leg's stop loss to breakeven so it can never close at a loss.
+          if (finalStatus === "WON" && trade.trade_type === "QUICK_EXIT") {
+            console.log(`[History Sync] QUICK_EXIT WON for ${trade.symbol}. Triggering breakeven on companion RUNNER...`);
+
+            const { data: runnerTrade } = await supabase
+              .from("user_trades")
+              .select("id, meta_api_order_id")
+              .eq("user_id", userId)
+              .eq("opportunity_id", trade.opportunity_id)
+              .eq("trade_type", "RUNNER")
+              .eq("status", "OPEN")
+              .single();
+
+            if (runnerTrade?.meta_api_order_id) {
+              try {
+                // Fetch the live position to get openPrice and current takeProfit
+                const posUrl = `${baseUrl}/users/current/accounts/${userAccountId}/positions/${runnerTrade.meta_api_order_id}`;
+                const posRes = await fetch(posUrl, { headers: { "auth-token": userToken } });
+
+                if (posRes.ok) {
+                  const pos = await posRes.json();
+                  const breakevenSL = Number(pos.openPrice);
+                  const existingTP = Number(pos.takeProfit);
+
+                  const modifyUrl = `${baseUrl}/users/current/accounts/${userAccountId}/trade`;
+                  const modifyPayload = {
+                    actionType: "POSITION_MODIFY",
+                    positionId: runnerTrade.meta_api_order_id,
+                    stopLoss: breakevenSL,   // Breakeven
+                    takeProfit: existingTP,   // Re-inject per MetaAPI Modification Protocol
+                  };
+
+                  const modifyRes = await fetch(modifyUrl, {
+                    method: "POST",
+                    headers: { "auth-token": userToken, "Content-Type": "application/json" },
+                    body: JSON.stringify(modifyPayload),
+                  });
+
+                  if (modifyRes.ok) {
+                    console.log(`[History Sync] Breakeven set on RUNNER ${runnerTrade.meta_api_order_id} at ${breakevenSL}.`);
+                  } else {
+                    const err = await modifyRes.text();
+                    console.error(`[History Sync] Failed to set breakeven on RUNNER: ${err}`);
+                  }
+                } else {
+                  console.error(`[History Sync] Could not fetch live position for RUNNER ${runnerTrade.meta_api_order_id}`);
+                }
+              } catch (e) {
+                console.error(`[History Sync] Breakeven trigger exception:`, e);
+              }
+            } else {
+              console.log(`[History Sync] No open RUNNER found for opportunity ${trade.opportunity_id}. May have already closed.`);
+            }
+          }
         }
       }
       
