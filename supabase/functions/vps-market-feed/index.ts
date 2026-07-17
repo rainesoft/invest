@@ -33,13 +33,16 @@ serve(async (req) => {
     // 2. Save Bars to market_data_pti
     const tfLower = timeframe.toLowerCase();
     for (const b of bars) {
-      const hash = await hashBar(b);
+      // MQL5 sends time in seconds. Convert to ISO string for Postgres timestamptz.
+      const isoTime = typeof b.t === 'number' ? new Date(b.t * 1000).toISOString() : new Date(b.t).toISOString();
+      
+      const hash = await hashBar({ ...b, t: isoTime });
       const { data: existing } = await supabase
         .from("market_data_pti")
         .select("hash, revision")
         .eq("symbol", symbol)
         .eq("timeframe", tfLower)
-        .eq("ts", b.t)
+        .eq("ts", isoTime)
         .order("revision", { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -47,10 +50,10 @@ serve(async (req) => {
       if (existing && existing.hash === hash) continue;
 
       const revision = existing ? existing.revision + 1 : 0;
-      await supabase.from("market_data_pti").insert({
+      const { error: insertErr } = await supabase.from("market_data_pti").insert({
         symbol,
         timeframe: tfLower,
-        ts: b.t,
+        ts: isoTime,
         o: b.o,
         h: b.h,
         l: b.l,
@@ -59,6 +62,10 @@ serve(async (req) => {
         revision,
         hash,
       });
+      
+      if (insertErr) {
+        throw new Error(`DB Insert Error: ${insertErr.message}`);
+      }
     }
 
     // 3. Trigger research-run asynchronously so we don't block the MQL5 EA
