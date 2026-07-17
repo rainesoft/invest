@@ -29,3 +29,6 @@ When using MetaAPI's `POSITION_MODIFY` or `ORDER_MODIFY` endpoints to adjust an 
 
 MetaAPI treats omitted parameters as explicit deletion commands. Failing to re-include a Stop Loss when modifying a Take Profit will erase the Stop Loss on the broker, exposing the user to infinite risk.
 
+## Rule: Temporary Files and Diagnostics
+All temporary execution files, one-off Node scripts, and diagnostic database migrations MUST be saved in the `<appDataDir>/brain/<conversation-id>/scratch/` directory. 
+NEVER create temporary diagnostic files inside the project's source tree (e.g., `supabase/migrations/` or project roots) to prevent accidental commits and workspace pollution. If a diagnostic database migration is required, apply it from the scratch directory.

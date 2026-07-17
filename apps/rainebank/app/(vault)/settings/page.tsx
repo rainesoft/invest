@@ -304,43 +304,14 @@ export default function SettingsPage() {
           <div style={{ background: 'var(--input-bg)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
             <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '18px', margin: '0 0 24px 0' }}>
               <KeyRound size={20} color="var(--accent)" />
-              Broker Connection
+              AI Deployment Status
             </h2>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               
-              <div>
-                <label style={{ display: 'block', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>Active Broker</label>
-                <select name="active_broker" value={settings.active_broker} onChange={handleChange} style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}>
-                  <option value="ALPACA" style={{ color: '#000' }}>Alpaca (Equities / Crypto)</option>
-                  <option value="METAAPI" style={{ color: '#000' }}>MetaAPI (MT4 / MT5 / Forex)</option>
-                </select>
-              </div>
-
-              {settings.active_broker === 'METAAPI' && (
-                <>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>MetaApi Token</label>
-                    <input type="password" name="meta_api_token" value={settings.meta_api_token} onChange={handleChange} placeholder="Enter your secret token" style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
-                  </div>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>Account ID</label>
-                    <input type="text" name="meta_api_account_id" value={settings.meta_api_account_id} onChange={handleChange} placeholder="MT4/MT5 Account ID from MetaApi" style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
-                  </div>
-                </>
-              )}
-
-              {settings.active_broker === 'ALPACA' && (
-                <>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>Alpaca Key</label>
-                    <input type="text" name="alpaca_key" value={settings.alpaca_key} onChange={handleChange} placeholder="APCA-API-KEY-ID" style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
-                  </div>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>Alpaca Secret</label>
-                    <input type="password" name="alpaca_secret" value={settings.alpaca_secret} onChange={handleChange} placeholder="APCA-API-SECRET-KEY" style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
-                  </div>
-                </>
-              )}
+              <p style={{ fontSize: '14px', color: 'var(--text-secondary)', lineHeight: '1.5' }}>
+                Toggle Live Execution below to allow the Rainebank Institutional AI to trade your Wallet balance. 
+                Profits will be automatically credited to your wallet in real-time.
+              </p>
               
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px', background: 'rgba(37, 99, 235, 0.1)', borderRadius: '8px', border: '1px solid rgba(37, 99, 235, 0.2)', marginTop: '8px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
