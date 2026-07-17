@@ -280,6 +280,23 @@ export async function fetchPaperBars(
     if (supabase) {
       const { data } = await supabase.from('user_risk_settings').select('*').limit(1).single();
       if (data) settings = data;
+      
+      // Zero-MetaAPI Cache Check: Check if VPS pushed fresh data for this timeframe
+      const { data: cachedBars } = await supabase
+        .from('market_data_pti')
+        .select('*')
+        .eq('symbol', symbol)
+        .eq('timeframe', timeframe.toLowerCase())
+        .order('ts', { ascending: false })
+        .limit(limit);
+        
+      // If we have cached bars that are recent (e.g., within 24h depending on timeframe, but we trust the EA push)
+      if (cachedBars && cachedBars.length > 0) {
+        // Reverse because we want oldest first for the indicator logic
+        return cachedBars.reverse().map((b: any) => ({
+          t: b.ts, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v
+        }));
+      }
     }
 
     if (settings.active_broker === 'METAAPI') {

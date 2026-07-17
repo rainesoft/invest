@@ -35,11 +35,15 @@ void OnDeinit(const int reason)
    Print("RaineBank VPS Bridge stopped.");
   }
 
+datetime lastBarTime = 0;
+
 //+------------------------------------------------------------------+
 //| Expert timer function                                            |
 //+------------------------------------------------------------------+
 void OnTimer()
   {
+   PushMarketData();
+   
    string cookie=NULL, headers;
    char post[], result[];
    int res;
@@ -173,6 +177,53 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
    if(res != 200)
      {
       Print("Failed to send callback. HTTP: ", res);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Push Market Data to VPS Feed                                     |
+//+------------------------------------------------------------------+
+void PushMarketData()
+  {
+   datetime currentBarTime = iTime(Symbol(), PERIOD_M30, 0);
+   if(currentBarTime != lastBarTime && lastBarTime != 0)
+     {
+      Print("New M30 candle opened. Pushing data to VPS-Feed...");
+      MqlRates rates[];
+      ArraySetAsSeries(rates, true);
+      // Fetch the last 100 closed candles (start from index 1, to get closed candles only, or start from 0 if you want current open)
+      // Actually, we want the closed candles. CopyRates(..., 0, 100, rates) includes the current open candle at index 0.
+      if(CopyRates(Symbol(), PERIOD_M30, 0, 100, rates) > 0)
+        {
+         string json = "{\"user_id\":\"" + InpUserID + "\",\"symbol\":\"" + Symbol() + "\",\"timeframe\":\"30m\",\"bars\":[";
+         for(int i=0; i<ArraySize(rates); i++)
+           {
+            json += "{\"t\":" + IntegerToString(rates[i].time) + 
+                    ",\"o\":" + DoubleToString(rates[i].open, 5) + 
+                    ",\"h\":" + DoubleToString(rates[i].high, 5) + 
+                    ",\"l\":" + DoubleToString(rates[i].low, 5) + 
+                    ",\"c\":" + DoubleToString(rates[i].close, 5) + 
+                    ",\"v\":" + IntegerToString(rates[i].tick_volume) + "}";
+            if(i < ArraySize(rates)-1) json += ",";
+           }
+         json += "]}";
+         
+         string url = InpSupabaseURL + "/functions/v1/vps-market-feed";
+         char post[], result[];
+         StringToCharArray(json, post);
+         
+         ArrayResize(post, ArraySize(post)-1); // Remove null terminator
+         
+         string headers = "Content-Type: application/json\r\n";
+         int res = WebRequest("POST", url, headers, 3000, post, result, headers);
+         if(res == 200) Print("Data successfully pushed to Supabase.");
+         else Print("Failed to push data: HTTP ", res);
+        }
+      lastBarTime = currentBarTime;
+     }
+   else if(lastBarTime == 0)
+     {
+      lastBarTime = currentBarTime; // Initialize
      }
   }
 //+------------------------------------------------------------------+
