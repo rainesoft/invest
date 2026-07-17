@@ -218,9 +218,9 @@ void PushMarketData()
       Print("New M30 candle opened. Pushing data to VPS-Feed...");
       MqlRates rates[];
       ArraySetAsSeries(rates, true);
-      // Fetch the last 100 closed candles (start from index 1, to get closed candles only, or start from 0 if you want current open)
-      // Actually, we want the closed candles. CopyRates(..., 0, 100, rates) includes the current open candle at index 0.
-      if(CopyRates(Symbol(), PERIOD_M30, 0, 100, rates) > 0)
+      // Fetch the last 300 closed candles to ensure we have enough data to calculate the 200 EMA
+      // Actually, we want the closed candles. CopyRates(..., 0, 300, rates) includes the current open candle at index 0.
+      if(CopyRates(Symbol(), PERIOD_M30, 0, 300, rates) > 0)
         {
          string json = "{\"user_id\":\"" + InpUserID + "\",\"symbol\":\"" + Symbol() + "\",\"timeframe\":\"30m\",\"bars\":[";
          for(int i=0; i<ArraySize(rates); i++)
