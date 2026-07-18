@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Wallet, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, Landmark } from 'lucide-react';
+import { Wallet, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, Landmark, Info } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -85,7 +85,7 @@ export default function WalletPage() {
   const handleWithdraw = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!withdrawWalletId) return toast.error('Please select a wallet');
-    
+
     setIsWithdrawing(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -93,7 +93,7 @@ export default function WalletPage() {
 
       const selectedWallet = wallets.find(w => w.id === withdrawWalletId);
       if (!selectedWallet) throw new Error('Invalid wallet');
-      
+
       if (parseFloat(withdrawAmount) > selectedWallet.balance) {
         throw new Error('Insufficient funds. You cannot withdraw more than your wallet balance.');
       }
@@ -104,8 +104,8 @@ export default function WalletPage() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.access_token}`
         },
-        body: JSON.stringify({ 
-          amount: parseFloat(withdrawAmount), 
+        body: JSON.stringify({
+          amount: parseFloat(withdrawAmount),
           currency: selectedWallet.currency,
           walletId: withdrawWalletId,
           destination: { recipient_code: recipientCode }
@@ -113,11 +113,11 @@ export default function WalletPage() {
       });
 
       const data = await res.json();
-      
+
       if (!res.ok) {
         throw new Error(data.error || 'Failed to request withdrawal');
       }
-      
+
       toast.success(data.message || 'Withdrawal initiated successfully!');
       setWithdrawAmount('');
       setRecipientCode('');
@@ -165,6 +165,27 @@ export default function WalletPage() {
         </button>
       </div>
 
+      {/* Processing Notice Banner */}
+      <div style={{
+        background: 'rgba(56, 189, 248, 0.1)',
+        border: '1px solid rgba(56, 189, 248, 0.2)',
+        borderRadius: '16px',
+        padding: '20px',
+        marginBottom: '32px',
+        display: 'flex',
+        gap: '16px',
+        alignItems: 'flex-start'
+      }}>
+        <Info size={24} color="#38bdf8" style={{ flexShrink: 0, marginTop: '2px' }} />
+        <div>
+          <h4 style={{ color: '#fff', fontSize: '16px', fontWeight: 600, margin: '0 0 8px 0' }}>Processing Times</h4>
+          <p style={{ color: '#9ca3af', fontSize: '14px', margin: 0, lineHeight: '1.5' }}>
+            Deposits and withdrawals may take up to <strong>3 business days</strong> to process. This is because funds are routed between your wallet and the broker.
+            Your <strong>Ledger Balance</strong> includes pending transfers, while your <strong>Available Balance</strong> shows cleared funds actively deployed in the Virtual PAMM.
+          </p>
+        </div>
+      </div>
+
       {/* Balances Grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px', marginBottom: '40px' }}>
         {wallets.length === 0 ? (
@@ -184,9 +205,22 @@ export default function WalletPage() {
               <div style={{ position: 'absolute', top: '-10px', right: '-10px', opacity: 0.05, transform: 'rotate(15deg)' }}>
                 <Wallet size={120} />
               </div>
-              <div style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '12px', fontWeight: 600 }}>{w.currency} BALANCE</div>
-              <div style={{ fontSize: '48px', fontWeight: 800, color: '#fff', letterSpacing: '-1px' }}>
-                {w.currency === 'USD' ? '$' : w.currency === 'NGN' ? '₦' : '₵'}{Number(w.balance).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div>
+                  <div style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '4px', fontWeight: 600, textTransform: 'uppercase' }}>Available Balance</div>
+                  <div style={{ fontSize: '40px', fontWeight: 800, color: '#fff', letterSpacing: '-1px', lineHeight: 1 }}>
+                    {w.currency === 'USD' ? '$' : w.currency === 'NGN' ? '₦' : '₵'}{Number(w.balance).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#38bdf8', marginTop: '6px', fontWeight: 500 }}>Active in PAMM Vault</div>
+                </div>
+
+                <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '16px' }}>
+                  <div style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '4px', fontWeight: 600, textTransform: 'uppercase' }}>Ledger Balance</div>
+                  <div style={{ fontSize: '24px', fontWeight: 600, color: '#e5e7eb', letterSpacing: '-0.5px', lineHeight: 1 }}>
+                    {w.currency === 'USD' ? '$' : w.currency === 'NGN' ? '₦' : '₵'}{Number(w.ledger_balance !== undefined ? w.ledger_balance : w.balance).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '6px' }}>Total including pending bank transfers</div>
+                </div>
               </div>
             </div>
           ))
