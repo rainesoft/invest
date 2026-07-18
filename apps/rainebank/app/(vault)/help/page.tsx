@@ -51,6 +51,11 @@ export default function HelpPage() {
             </ul>
           </div>
         </div>
+
+        {/* Step 3 */}
+        <div style={{ display: 'flex', gap: '20px', marginBottom: '32px' }}>
+          <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontWeight: 'bold', color: 'white' }}>3</div>
+          <div>
             <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '12px' }}>Get your Personal Chat ID</h3>
             <ol style={{ lineHeight: '1.8', color: 'var(--text-secondary)' }}>
               <li>Navigate to your Raine <strong>Settings</strong> page.</li>
