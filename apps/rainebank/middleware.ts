@@ -74,7 +74,9 @@ export async function middleware(request: NextRequest) {
     await supabase.auth.signOut();
   }
 
-  const isProtectedRoute = request.nextUrl.pathname.startsWith('/dashboard');
+  const isProtectedRoute = request.nextUrl.pathname.startsWith('/dashboard') || 
+                           request.nextUrl.pathname.startsWith('/wallet') || 
+                           request.nextUrl.pathname.startsWith('/settings');
   console.log('[Middleware] Path:', request.nextUrl.pathname, 'Protected:', isProtectedRoute);
 
   if (isProtectedRoute && !data.user) {

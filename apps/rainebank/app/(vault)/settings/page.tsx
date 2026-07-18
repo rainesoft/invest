@@ -2,8 +2,9 @@
 
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { supabase } from '@lib/supabase';
 import { useTheme } from '@components/ThemeProvider';
-import { Moon, Sun, ShieldAlert, KeyRound, Save, Activity, Info } from 'lucide-react';
+import { Moon, Sun, ShieldAlert, KeyRound, Save, Activity, Info, Lock } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const HintTooltip = ({ text }: { text: string }) => {
@@ -50,6 +51,11 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [subscription, setSubscription] = useState<any>(null);
   const [showBreakerModal, setShowBreakerModal] = useState(false);
+
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
   const [settings, setSettings] = useState({
     portfolio_capital: 10000,
@@ -202,6 +208,45 @@ export default function SettingsPage() {
       toast.error('An error occurred while saving.');
     }
     setSaving(false);
+  };
+
+  const handlePasswordChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword !== confirmPassword) {
+      toast.error('New passwords do not match.');
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast.error('Password must be at least 8 characters.');
+      return;
+    }
+    setIsChangingPassword(true);
+    try {
+      // Re-authenticate with current password first
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.email) throw new Error('Not authenticated');
+
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: user.email,
+        password: currentPassword
+      });
+      if (signInError) {
+        toast.error('Current password is incorrect.');
+        return;
+      }
+
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+
+      toast.success('Password updated successfully!');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update password.');
+    } finally {
+      setIsChangingPassword(false);
+    }
   };
 
   if (loading) {
@@ -386,6 +431,66 @@ export default function SettingsPage() {
                 </button>
               )}
             </div>
+          </div>
+
+          {/* Security */}
+          <div style={{ background: 'var(--input-bg)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: 600, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Lock size={20} color="var(--text-secondary)" />
+              Security
+            </h2>
+            <form onSubmit={handlePasswordChange} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '6px', fontWeight: 600 }}>CURRENT PASSWORD</label>
+                <input
+                  type="password"
+                  value={currentPassword}
+                  onChange={e => setCurrentPassword(e.target.value)}
+                  required
+                  placeholder="Enter current password"
+                  style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)', outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '6px', fontWeight: 600 }}>NEW PASSWORD</label>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={e => setNewPassword(e.target.value)}
+                  required
+                  minLength={8}
+                  placeholder="Min. 8 characters"
+                  style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)', outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '6px', fontWeight: 600 }}>CONFIRM NEW PASSWORD</label>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={e => setConfirmPassword(e.target.value)}
+                  required
+                  placeholder="Repeat new password"
+                  style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)', outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={isChangingPassword}
+                style={{
+                  marginTop: '4px',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                  width: '100%', padding: '12px',
+                  background: isChangingPassword ? 'var(--border-color)' : 'var(--accent)',
+                  color: '#fff', border: 'none', borderRadius: '8px',
+                  fontWeight: 600, cursor: isChangingPassword ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.2s', opacity: isChangingPassword ? 0.7 : 1
+                }}
+              >
+                <KeyRound size={16} />
+                {isChangingPassword ? 'Updating...' : 'Update Password'}
+              </button>
+            </form>
           </div>
 
         </div>

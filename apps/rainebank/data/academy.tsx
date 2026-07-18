@@ -79,7 +79,7 @@ export const ACADEMY_POSTS: Post[] = [
         </p>
         <h3 style={{ fontSize: '20px', fontWeight: 600, margin: '8px 0 0 0', color: 'var(--text-primary)' }}>Step 3: Enable WebRequests</h3>
         <p style={{ fontSize: '16px', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
-          To allow MT5 to send messages to Telegram, go to Tools -> Options -> Expert Advisors. Check "Allow WebRequests for listed URL" and add `https://api.telegram.org` to the list. You're done!
+          To allow MT5 to send messages to Telegram, go to Tools -&gt; Options -&gt; Expert Advisors. Check "Allow WebRequests for listed URL" and add `https://api.telegram.org` to the list. You're done!
         </p>
       </div>
     )

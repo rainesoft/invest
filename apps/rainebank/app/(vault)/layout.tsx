@@ -1,4 +1,3 @@
-import LogoutButton from '@components/LogoutButton';
 import { ThemeProvider } from '@components/ThemeProvider';
 import VaultNavbar from '@components/VaultNavbar';
 import { supabaseServer } from '@lib/supabase-server';
@@ -14,7 +13,7 @@ export default async function VaultLayout({ children }: { children: React.ReactN
         {/* Floating Header */}
         <VaultNavbar isAdmin={isAdmin} />
 
-        <main style={{ flex: 1, padding: '24px', zIndex: 10, display: 'flex', justifyContent: 'center' }}>
+        <main className="vault-main" style={{ flex: 1, zIndex: 10, display: 'flex', justifyContent: 'center' }}>
           <div style={{ width: '100%', maxWidth: '1200px' }}>
             {children}
           </div>

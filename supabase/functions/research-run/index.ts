@@ -89,7 +89,7 @@ const TradeEvaluationSchema = z.object({
   })
 });
 
-async function evaluateOpportunity(symbol: string, snapshot: LogicContext, timeframe: string, historicalMemory: string) {
+async function evaluateOpportunity(symbol: string, snapshot: LogicContext & { agent_context?: any[] }, timeframe: string, historicalMemory: string) {
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
   const azureKey = Deno.env.get("AZURE_OPENAI_API_KEY");
   
@@ -124,8 +124,8 @@ ${historicalMemory || "No historical data available for this asset yet."}
    - If \`ltf_bos\` is 'NONE', the structure has not broken yet. Do not guess the reversal. You MUST originate a pending Limit Order at the nearest structural floor/ceiling instead of a Market order.
 3. STOP LOSS SIZING & VOLATILITY (ATR): The snapshot provides \`safe_long_stop_loss\`, \`safe_short_stop_loss\`, and \`atr_14\`. 
    - TIGHT LOCAL STRUCTURE: You MUST optimize your stop loss for the specific timeframe you are evaluating. Place the stop loss tight behind the immediate local structure.
-   - MANDATORY ATR PADDING: Your \`suggested_stop_loss\` MUST be mathematically padded by exactly \`1.0 * atr_14\` beyond the structural invalidation point (e.g. if shorting from resistance at 100 with an ATR of 2, set stop loss to 102) to avoid liquidity sweeps!
-   - MAX STOP LOSS LIMIT: Your calculated stop loss MUST NEVER exceed a distance of \`2.0 * atr_14\` from the suggested entry price.
+   - MANDATORY ATR PADDING: Your \`suggested_stop_loss\` MUST be mathematically padded by exactly \`1.0 * atr_14\` beyond the structural invalidation point (for Crypto pairs like BTCUSD, use \`2.0 * atr_14\`) to avoid liquidity sweeps!
+   - MAX STOP LOSS LIMIT: Your calculated stop loss MUST NEVER exceed a distance of \`2.0 * atr_14\` from the suggested entry price (or \`3.0 * atr_14\` for Crypto assets).
 4. CONFIDENCE-WEIGHTED R:R (RISK TO REWARD) ENFORCEMENT: 
    - The required Risk/Reward ratio depends on your generated \`confidence_score\`:
      * S-Tier (90-100 confidence): Minimum 1:1.0 R:R
@@ -143,6 +143,13 @@ ${historicalMemory || "No historical data available for this asset yet."}
 7. MULTI-TIMEFRAME CONFLUENCE (MTFA): You are provided with the HTF (Higher Timeframe) trend. 
    - You MUST align your direction with the HTF trend. If HTF is BEARISH, you only look for SHORT entries on the LTF.
    - Counter-trend trades are only allowed if the setup is A-Tier and R:R > 1.2.
+8. SWING TRADER FIBONACCI CONFLUENCE (CRITICAL — READ CAREFULLY):
+   The snapshot may include an \`agent_context\` array from longer-timeframe specialist agents.
+   This is pre-computed institutional analysis — treat it as senior analyst guidance.
+   - DIRECTION ALIGNMENT: If \`agent_context\` contains a SWING_TRADER entry and its \`macro_bias\` matches your intended trade direction → add +5 to your confidence_score before outputting.
+   - FIBONACCI LEVEL ALIGNMENT: If your \`suggested_entry_price\` is within 0.3% of any price in \`agent_context[].key_levels.fib_levels\` → add +8 to your confidence_score. This is multi-timeframe Fibonacci confluence — the highest-quality signal in institutional trading.
+   - COUNTER-TREND PENALTY: If you are trading LONG but the SWING_TRADER macro_bias is BEARISH, or trading SHORT but macro_bias is BULLISH → subtract 10 from your confidence_score and require minimum A-Tier (80) confidence to proceed.
+   - INVALIDATION AWARENESS: If the \`invalidation_price\` field is set and your proposed stop loss is BEYOND it in the wrong direction, you must acknowledge this structural conflict in your thought_process.
 
 [REQUIRED OUTPUT FORMAT]
 You must output a single, valid JSON object matching the exact schema below. You MUST use the \`thought_process\` key FIRST to calculate your math and R:R before defining the trade parameters. If you don't calculate the R:R in text first, the numbers will be invalid.
@@ -654,9 +661,29 @@ serve(async (req) => {
               fundamental_context = generateMacroContext(symbol, allEvents, headlines);
             }
 
+            // Fetch swing/positional agent context from market_context table
+            let agent_context: any[] = [];
+            try {
+              const { data: ctxRows } = await supabase
+                .from('market_context')
+                .select('agent_persona, macro_bias, key_levels, invalidation_price, narrative')
+                .eq('symbol', symbol)
+                .gt('expires_at', new Date().toISOString())
+                .order('created_at', { ascending: false })
+                .limit(5);
+              if (ctxRows && ctxRows.length > 0) {
+                agent_context = ctxRows;
+                console.log(`[Market Context] Loaded ${ctxRows.length} agent context entries for ${symbol}`);
+                sendEvent({ type: 'progress', message: `[Market Context] Swing Trader Fib levels loaded for ${symbol}: ${ctxRows.map(c => c.agent_persona + ' → ' + c.macro_bias).join(', ')}` });
+              }
+            } catch (ctxErr: any) {
+              console.warn(`[Market Context] Failed to load agent context for ${symbol}: ${ctxErr.message}`);
+            }
+
             const snapshot = {
               ...rawSnapshot,
-              fundamental_context
+              fundamental_context,
+              agent_context: agent_context.length > 0 ? agent_context : undefined
             };
 
             // PRE-EVALUATION ASSET ISOLATION (with candle-duration caching)

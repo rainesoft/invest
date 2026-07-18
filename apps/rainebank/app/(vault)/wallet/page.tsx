@@ -1,13 +1,44 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@lib/supabase';
 import { Wallet, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, Landmark, Info } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const InfoTooltip = ({ text }: { text: string }) => {
+  const [show, setShow] = useState(false);
+  return (
+    <div
+      style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'help', marginLeft: 'auto' }}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      <Info size={16} color="#9ca3af" />
+      {show && (
+        <div style={{
+          position: 'absolute',
+          bottom: '100%',
+          right: 0,
+          marginBottom: '8px',
+          padding: '10px 14px',
+          background: '#1f2937',
+          color: '#f9fafb',
+          fontSize: '13px',
+          borderRadius: '8px',
+          width: '240px',
+          pointerEvents: 'none',
+          zIndex: 9999,
+          textAlign: 'left',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+          border: '1px solid rgba(255,255,255,0.1)',
+          lineHeight: '1.5'
+        }}>
+          {text}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export default function WalletPage() {
   const [wallets, setWallets] = useState<any[]>([]);
@@ -20,16 +51,23 @@ export default function WalletPage() {
   const [withdrawWalletId, setWithdrawWalletId] = useState('');
   const [recipientCode, setRecipientCode] = useState('');
   const [isWithdrawing, setIsWithdrawing] = useState(false);
+  const [debugInfo, setDebugInfo] = useState<string[]>([]);
 
   useEffect(() => {
     fetchWallets();
   }, []);
 
   const fetchWallets = async () => {
+    const logs: string[] = [];
     setLoading(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      logs.push(`Session: ${session ? `✅ user=${session.user.id.slice(0, 8)}...` : `❌ null (sessionError=${JSON.stringify(sessionError)})`}`);
+      if (!session) {
+        setDebugInfo(logs);
+        setLoading(false);
+        return;
+      }
 
       const { data, error } = await supabase
         .from('wallets')
@@ -38,14 +76,45 @@ export default function WalletPage() {
         .eq('is_platform', false)
         .order('currency', { ascending: true });
 
-      if (data) {
-        setWallets(data);
-        if (data.length > 0) {
-          setWithdrawWalletId(prev => prev || data[0].id);
+      logs.push(`Wallets query: rows=${data?.length ?? 'null'}, error=${error ? JSON.stringify(error) : 'none'}`);
+      setDebugInfo([...logs]);
+
+      if (error) {
+        toast.error('Could not load wallets.');
+        return;
+      }
+
+      if (!data || data.length === 0) {
+        setWallets([]);
+        return;
+      }
+
+      setWallets(data.map((w: any) => ({ ...w, locked_balance: 0, unlocked_balance: Number(w.balance) })));
+      if (data.length > 0) setWithdrawWalletId(prev => prev || data[0].id);
+
+      try {
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const { data: deposits } = await supabase
+          .from('deposit_requests')
+          .select('wallet_id, amount')
+          .eq('user_id', session.user.id)
+          .in('status', ['DEPOSITED', 'CLEARED'])
+          .gte('created_at', thirtyDaysAgo.toISOString());
+        if (deposits && deposits.length > 0) {
+          setWallets(data.map((w: any) => {
+            const lockedSum = deposits.filter((d: any) => d.wallet_id === w.id).reduce((sum: number, d: any) => sum + Number(d.amount), 0);
+            return { ...w, locked_balance: Math.min(Number(w.balance), lockedSum), unlocked_balance: Math.max(0, Number(w.balance) - lockedSum) };
+          }));
         }
+      } catch (enrichErr) {
+        logs.push(`Lock enrichment: ⚠️ ${enrichErr}`);
+        setDebugInfo([...logs]);
       }
     } catch (err) {
-      console.error('Failed to fetch wallets:', err);
+      logs.push(`Unexpected error: ❌ ${err}`);
+      setDebugInfo([...logs]);
+      toast.error('An unexpected error occurred.');
     } finally {
       setLoading(false);
     }
@@ -94,8 +163,8 @@ export default function WalletPage() {
       const selectedWallet = wallets.find(w => w.id === withdrawWalletId);
       if (!selectedWallet) throw new Error('Invalid wallet');
 
-      if (parseFloat(withdrawAmount) > selectedWallet.balance) {
-        throw new Error('Insufficient funds. You cannot withdraw more than your wallet balance.');
+      if (parseFloat(withdrawAmount) > (selectedWallet.unlocked_balance ?? selectedWallet.balance)) {
+        throw new Error(`Insufficient unlocked funds. You have $${selectedWallet.locked_balance || 0} locked.`);
       }
 
       const res = await fetch('/api/wallet/withdraw', {
@@ -118,7 +187,12 @@ export default function WalletPage() {
         throw new Error(data.error || 'Failed to request withdrawal');
       }
 
-      toast.success(data.message || 'Withdrawal initiated successfully!');
+      if (data.scheduled_for) {
+        const dateStr = new Date(data.scheduled_for).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        toast.success(`Withdrawal scheduled successfully for ${dateStr}!`);
+      } else {
+        toast.success(data.message || 'Withdrawal initiated successfully!');
+      }
       setWithdrawAmount('');
       setRecipientCode('');
       fetchWallets(); // refresh balances
@@ -165,26 +239,7 @@ export default function WalletPage() {
         </button>
       </div>
 
-      {/* Processing Notice Banner */}
-      <div style={{
-        background: 'rgba(56, 189, 248, 0.1)',
-        border: '1px solid rgba(56, 189, 248, 0.2)',
-        borderRadius: '16px',
-        padding: '20px',
-        marginBottom: '32px',
-        display: 'flex',
-        gap: '16px',
-        alignItems: 'flex-start'
-      }}>
-        <Info size={24} color="#38bdf8" style={{ flexShrink: 0, marginTop: '2px' }} />
-        <div>
-          <h4 style={{ color: '#fff', fontSize: '16px', fontWeight: 600, margin: '0 0 8px 0' }}>Processing Times</h4>
-          <p style={{ color: '#9ca3af', fontSize: '14px', margin: 0, lineHeight: '1.5' }}>
-            Deposits and withdrawals may take up to <strong>3 business days</strong> to process. This is because funds are routed between your wallet and the broker.
-            Your <strong>Ledger Balance</strong> includes pending transfers, while your <strong>Available Balance</strong> shows cleared funds actively deployed in the Virtual PAMM.
-          </p>
-        </div>
-      </div>
+
 
       {/* Balances Grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px', marginBottom: '40px' }}>
@@ -206,20 +261,21 @@ export default function WalletPage() {
                 <Wallet size={120} />
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div>
-                  <div style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '4px', fontWeight: 600, textTransform: 'uppercase' }}>Available Balance</div>
-                  <div style={{ fontSize: '40px', fontWeight: 800, color: '#fff', letterSpacing: '-1px', lineHeight: 1 }}>
-                    {w.currency === 'USD' ? '$' : w.currency === 'NGN' ? '₦' : '₵'}{Number(w.balance).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                  <div>
+                    <div style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '4px', fontWeight: 600, textTransform: 'uppercase' }}>Ledger Balance</div>
+                    <div style={{ fontSize: '32px', fontWeight: 800, color: '#fff', letterSpacing: '-1px', lineHeight: 1 }}>
+                      {w.currency === 'USD' ? '$' : w.currency === 'NGN' ? '₦' : '₵'}{Number(w.balance).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#38bdf8', marginTop: '6px', fontWeight: 500 }}>Total institutional capital</div>
                   </div>
-                  <div style={{ fontSize: '12px', color: '#38bdf8', marginTop: '6px', fontWeight: 500 }}>Active in PAMM Vault</div>
-                </div>
-
-                <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '16px' }}>
-                  <div style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '4px', fontWeight: 600, textTransform: 'uppercase' }}>Ledger Balance</div>
-                  <div style={{ fontSize: '24px', fontWeight: 600, color: '#e5e7eb', letterSpacing: '-0.5px', lineHeight: 1 }}>
-                    {w.currency === 'USD' ? '$' : w.currency === 'NGN' ? '₦' : '₵'}{Number(w.ledger_balance !== undefined ? w.ledger_balance : w.balance).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  <div>
+                    <div style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '4px', fontWeight: 600, textTransform: 'uppercase' }}>Available Balance</div>
+                    <div style={{ fontSize: '32px', fontWeight: 800, color: '#4ade80', letterSpacing: '-1px', lineHeight: 1 }}>
+                      {w.currency === 'USD' ? '$' : w.currency === 'NGN' ? '₦' : '₵'}{Number(w.unlocked_balance !== undefined ? w.unlocked_balance : w.balance).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '6px', fontWeight: 500 }}>Cleared for withdrawal</div>
                   </div>
-                  <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '6px' }}>Total including pending bank transfers</div>
                 </div>
               </div>
             </div>
@@ -234,6 +290,7 @@ export default function WalletPage() {
           <h3 style={{ fontSize: '20px', fontWeight: 700, color: '#fff', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <ArrowDownToLine size={20} color="#4ade80" />
             Deposit Capital
+            <InfoTooltip text="Deposits take 3–5 business days to clear as funds are routed through our master broker account. All new deposits are subject to a 30-day lockup before they can be withdrawn." />
           </h3>
           <form onSubmit={handleDeposit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div>
@@ -287,6 +344,7 @@ export default function WalletPage() {
           <h3 style={{ fontSize: '20px', fontWeight: 700, color: '#fff', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <ArrowUpFromLine size={20} color="#f87171" />
             Request Withdrawal
+            <InfoTooltip text="Withdrawals are processed in batches on the 1st and 15th of every month. Only your Unlocked Balance (deposits older than 30 days) can be withdrawn." />
           </h3>
           <form onSubmit={handleWithdraw} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div>
@@ -307,7 +365,7 @@ export default function WalletPage() {
                 type="number"
                 min="1"
                 step="0.01"
-                max={wallets.find(w => w.id === withdrawWalletId)?.balance || 0}
+                max={wallets.find(w => w.id === withdrawWalletId)?.unlocked_balance || 0}
                 required
                 value={withdrawAmount}
                 onChange={e => setWithdrawAmount(e.target.value)}

@@ -41,39 +41,22 @@ export async function POST(req: Request) {
 
     if (rpcError) {
       console.error('Withdrawal RPC Error:', rpcError);
-      return NextResponse.json({ error: 'Insufficient funds or invalid wallet' }, { status: 400 });
+      return NextResponse.json({ error: rpcError.message || 'Insufficient funds or invalid wallet' }, { status: 400 });
     }
 
-    // 2. Initialize Paystack Transfer
-    // (Assuming recipient is already created or destination contains recipient_code)
-    const response = await fetch('https://api.paystack.co/transfer', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        source: 'balance',
-        amount: Math.round(amount * 100),
-        reference: reference,
-        recipient: destination.recipient_code, // Must be passed by frontend
-        reason: 'Rainebank Trading Withdrawal'
-      })
-    });
+    // 2. Fetch the scheduled processing date
+    const { data: requestRecord } = await supabase
+      .from('withdrawal_requests')
+      .select('scheduled_for')
+      .eq('id', withdrawalId)
+      .single();
 
-    const data = await response.json();
-    
-    if (!data.status) {
-      // If the API call fails immediately, reverse the withdrawal hold
-      await supabase.rpc('reverse_withdrawal', { p_reference: reference });
-      return NextResponse.json({ error: data.message }, { status: 400 });
-    }
-
-    // The transfer is now pending. The webhook will mark it COMPLETED or FAILED.
+    // The transfer is now queued and scheduled for the 1st or 15th.
     return NextResponse.json({ 
-      status: 'PROCESSING',
+      status: 'SCHEDULED',
       reference: reference,
-      message: 'Withdrawal is being processed'
+      scheduled_for: requestRecord?.scheduled_for,
+      message: 'Withdrawal request queued successfully'
     });
     
   } catch (error: any) {

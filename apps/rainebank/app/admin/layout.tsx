@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { supabaseServer } from '@lib/supabase-server';
 import { ThemeProvider } from '@components/ThemeProvider';
 import VaultNavbar from '@components/VaultNavbar';
+import AdminNav from '@components/AdminNav';
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const supabase = supabaseServer();
@@ -33,6 +34,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
               <h1 style={{ color: '#fff', fontSize: '24px', margin: '0 0 8px 0' }}>Admin Dashboard</h1>
               <p style={{ color: '#9ca3af', margin: 0 }}>Review and manage pending operations.</p>
             </div>
+            <AdminNav />
             {children}
           </div>
         </main>
