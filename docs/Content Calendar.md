@@ -1,4 +1,4 @@
-# Rainebank Academy: 6-Month Content Calendar
+# Alpha Academy: 6-Month Content Calendar
 *Journey from Beginner to Algorithmic Trader using Rainebank.*
 
 This calendar outlines the overarching curriculum for the rest of the year. Since you plan to log on and generate a new post daily, this calendar groups the daily posts into thematic weekly sprints that progressively build on each other.
