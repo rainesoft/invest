@@ -7,21 +7,16 @@ serve(async (req) => {
       return new Response("Unauthorized", { status: 401 });
     }
     const url = new URL(req.url);
-    const userId = url.searchParams.get("user_id");
-
-    if (!userId) {
-      return new Response("Missing user_id", { status: 400 });
-    }
 
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
     );
 
-    // 1. Update heartbeat
-    await supabase.from("user_risk_settings").update({ vps_last_heartbeat: new Date().toISOString() }).eq("user_id", userId);
+    // 1. Update heartbeat for all users (since it's a single-bot central architecture)
+    await supabase.from("user_risk_settings").update({ vps_last_heartbeat: new Date().toISOString() }).neq("user_id", "00000000-0000-0000-0000-000000000000");
 
-    // 2. Fetch pending trades
+    // 2. Fetch all pending trades globally
     const { data: pendingTrades, error: fetchError } = await supabase
       .from("user_trades")
       .select(`
@@ -32,8 +27,7 @@ serve(async (req) => {
           take_profit_json
         )
       `)
-      .eq("status", "VPS_PENDING")
-      .eq("user_id", userId);
+      .eq("status", "VPS_PENDING");
 
     if (fetchError) throw fetchError;
 

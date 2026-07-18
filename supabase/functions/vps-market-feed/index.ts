@@ -20,9 +20,9 @@ serve(async (req) => {
     }
 
     const payload = await req.json();
-    const { user_id, symbol, timeframe, bars } = payload;
+    const { symbol, timeframe, bars } = payload;
 
-    if (!user_id || !symbol || !timeframe || !bars || !Array.isArray(bars)) {
+    if (!symbol || !timeframe || !bars || !Array.isArray(bars)) {
       return new Response("Invalid payload", { status: 400 });
     }
 
@@ -30,8 +30,8 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // 1. Update VPS Heartbeat
-    await supabase.from("user_risk_settings").update({ vps_last_heartbeat: new Date().toISOString() }).eq("user_id", user_id);
+    // 1. Update VPS Heartbeat for all users (since it's a single-bot central architecture)
+    await supabase.from("user_risk_settings").update({ vps_last_heartbeat: new Date().toISOString() }).neq("user_id", "00000000-0000-0000-0000-000000000000");
 
     // 2. Save Bars to market_data_pti
     const tfLower = timeframe.toLowerCase();

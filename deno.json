@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "lib": ["deno.window"],
+    "strict": true
+  },
+  "imports": {
+    "technicalindicators": "npm:technicalindicators@3.1.0",
+    "@supabase/supabase-js": "npm:@supabase/supabase-js@2.108.2",
+    "@azure/identity": "npm:@azure/identity@3.4.0",
+    "@azure/keyvault-secrets": "npm:@azure/keyvault-secrets@4.7.0",
+    "openai": "npm:openai",
+    "zod": "npm:zod"
+  }
+}

@@ -377,7 +377,7 @@ verify_jwt = false
 [functions.process-retries]
 enabled = true
 verify_jwt = false
-import_map = "./functions/process-retries/deno.json"
+
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
 entrypoint = "./functions/process-retries/index.ts"
@@ -392,7 +392,7 @@ verify_jwt = false
 [functions.process-recurring-billing]
 enabled = true
 verify_jwt = false
-import_map = "./functions/process-recurring-billing/deno.json"
+
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
 entrypoint = "./functions/process-recurring-billing/index.ts"
@@ -403,7 +403,7 @@ entrypoint = "./functions/process-recurring-billing/index.ts"
 [functions.auto-eject]
 enabled = true
 verify_jwt = false
-import_map = "./functions/auto-eject/deno.json"
+
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
 entrypoint = "./functions/auto-eject/index.ts"
@@ -414,7 +414,7 @@ entrypoint = "./functions/auto-eject/index.ts"
 [functions.dump-signals]
 enabled = true
 verify_jwt = false
-import_map = "./functions/dump-signals/deno.json"
+
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
 entrypoint = "./functions/dump-signals/index.ts"
@@ -437,7 +437,7 @@ verify_jwt = false
 [functions.telegram-webhook]
 enabled = true
 verify_jwt = false
-import_map = "./functions/telegram-webhook/deno.json"
+
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
 entrypoint = "./functions/telegram-webhook/index.ts"
