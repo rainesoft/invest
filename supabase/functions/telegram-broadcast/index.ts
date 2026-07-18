@@ -1,8 +1,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
-const FALLBACK_TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN");
-const FALLBACK_TELEGRAM_CHAT_ID = Deno.env.get("TELEGRAM_CHAT_ID");
+const CENTRAL_TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN");
 
 interface DatabaseWebhookPayload {
   type: "INSERT" | "UPDATE" | "DELETE";
@@ -53,31 +52,21 @@ serve(async (req) => {
         return new Response("Ignored REJECTED signal", { status: 200 });
       }
 
-      let subscribedUsers: { token: string, chatId: string }[] = [];
+      let subscribedUsers: { chatId: string }[] = [];
 
       // Fetch all users who have configured Telegram credentials
       const { data: settings, error } = await supabase
         .from('user_risk_settings')
-        .select('telegram_bot_token, telegram_chat_id')
-        .not('telegram_bot_token', 'is', null)
+        .select('telegram_chat_id')
         .not('telegram_chat_id', 'is', null);
 
       if (!error && settings) {
         settings.forEach(user => {
-          if (user.telegram_bot_token?.trim() && user.telegram_chat_id?.trim()) {
+          if (user.telegram_chat_id?.trim()) {
             subscribedUsers.push({
-              token: user.telegram_bot_token.trim(),
               chatId: user.telegram_chat_id.trim()
             });
           }
-        });
-      }
-
-      // Fallback for single-tenant backward compatibility
-      if (subscribedUsers.length === 0 && FALLBACK_TELEGRAM_BOT_TOKEN && FALLBACK_TELEGRAM_CHAT_ID) {
-        subscribedUsers.push({
-          token: FALLBACK_TELEGRAM_BOT_TOKEN,
-          chatId: FALLBACK_TELEGRAM_CHAT_ID
         });
       }
 
@@ -124,9 +113,8 @@ _${aiSummary}_
 [📊 View Ledger](https://yourdomain.com/dashboard)
       `.trim();
 
-      // Fan-out broadcasting
+      const telegramUrl = `https://api.telegram.org/bot${CENTRAL_TELEGRAM_BOT_TOKEN}/sendMessage`;
       const broadcastPromises = subscribedUsers.map(async (user) => {
-        const telegramUrl = `https://api.telegram.org/bot${user.token}/sendMessage`;
         const response = await fetch(telegramUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -167,15 +155,14 @@ _${aiSummary}_
       // Fetch this specific user's telegram credentials
       const { data: userSettings } = await supabase
         .from('user_risk_settings')
-        .select('telegram_bot_token, telegram_chat_id')
+        .select('telegram_chat_id')
         .eq('user_id', record.user_id)
         .single();
 
-      const botToken = userSettings?.telegram_bot_token?.trim() || FALLBACK_TELEGRAM_BOT_TOKEN;
-      const chatId = userSettings?.telegram_chat_id?.trim() || FALLBACK_TELEGRAM_CHAT_ID;
+      const chatId = userSettings?.telegram_chat_id?.trim();
 
-      if (!botToken || !chatId) {
-        console.log("User has no telegram credentials configured.");
+      if (!CENTRAL_TELEGRAM_BOT_TOKEN || !chatId) {
+        console.log("User has no telegram credentials configured or central bot token is missing.");
         return new Response("User has no telegram credentials", { status: 200 });
       }
 
@@ -195,7 +182,7 @@ _${reason}_
 [Manage Account](https://yourdomain.com/dashboard)
       `.trim();
 
-      const telegramUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
+      const telegramUrl = `https://api.telegram.org/bot${CENTRAL_TELEGRAM_BOT_TOKEN}/sendMessage`;
       const response = await fetch(telegramUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

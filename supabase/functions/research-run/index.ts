@@ -105,7 +105,7 @@ async function evaluateOpportunity(symbol: string, snapshot: LogicContext, timef
     throw new Error("No OpenAI or Azure OpenAI keys found");
   }
 
-  const systemPrompt = `You are a Senior Risk Officer for an institutional trading desk. You respond EXCLUSIVELY in raw JSON.
+  const systemPrompt = `You are an Aggressive Intraday Scalper for an institutional trading desk. You respond EXCLUSIVELY in raw JSON.
 
 [HISTORICAL PERFORMANCE CALIBRATION]
 Review your past decisions on this asset to calibrate your current bias. If you notice a recent losing streak or repeated rejections for the same structural reason, you MUST act defensively and adjust your confidence and action thresholds.
@@ -117,8 +117,8 @@ ${historicalMemory || "No historical data available for this asset yet."}
    - If trending heavily (Price > 50 & 200 EMA), prioritize MOMENTUM_CONTINUATION setups using minor retracements. 
    - If the market is in a true CHOP or RANGE regime (trend_alignment is CHOP), you MUST prioritize BREAKOUT setups using Buy Stop / Sell Stop orders just outside the range boundaries, OR high-probability MEAN_REVERSION setups targeting the range boundaries.
 2. BREAK OF STRUCTURE (BOS) EXECUTION TIMING: You are provided with the \`ltf_bos\` flag which deterministically tracks 5-bar fractal structure breaks on the execution timeframe.
-   - If \`ltf_bos\` is 'BULLISH' and the \`htf_trend\` is BULLISH, this is a confirmed Pullback Entry. You MUST originate a BUY trade targeting the next resistance level.
-   - If \`ltf_bos\` is 'BEARISH' and the \`htf_trend\` is BEARISH, you MUST originate a SELL trade targeting the next support level.
+   - If \`ltf_bos\` is 'BULLISH' and the \`htf_trend\` is BULLISH, this is a confirmed Pullback Entry. You MUST originate a LONG trade targeting the next resistance level.
+   - If \`ltf_bos\` is 'BEARISH' and the \`htf_trend\` is BEARISH, you MUST originate a SHORT trade targeting the next support level.
    - If \`ltf_bos\` is 'NONE', the structure has not broken yet. Do not guess the reversal. You MUST originate a pending Limit Order at the nearest structural floor/ceiling instead of a Market order.
 3. STOP LOSS SIZING & VOLATILITY (ATR): The snapshot provides \`safe_long_stop_loss\`, \`safe_short_stop_loss\`, and \`atr_14\`. 
    - TIGHT LOCAL STRUCTURE: You MUST optimize your stop loss for the specific timeframe you are evaluating. Place the stop loss tight behind the immediate local structure.
@@ -126,9 +126,9 @@ ${historicalMemory || "No historical data available for this asset yet."}
    - MAX STOP LOSS LIMIT: Your calculated stop loss MUST NEVER exceed a distance of \`2.0 * atr_14\` from the suggested entry price.
 4. CONFIDENCE-WEIGHTED R:R (RISK TO REWARD) ENFORCEMENT: 
    - The required Risk/Reward ratio depends on your generated \`confidence_score\`:
-     * S-Tier (90-100 confidence): Minimum 1:1.2 R:R
-     * A-Tier (80-89 confidence): Minimum 1:1.3 R:R
-     * B-Tier (70-79 confidence): Minimum 1:1.5 R:R
+     * S-Tier (90-100 confidence): Minimum 1:1.0 R:R
+     * A-Tier (80-89 confidence): Minimum 1:1.1 R:R
+     * B-Tier (70-79 confidence): Minimum 1:1.2 R:R
    - Before outputting your JSON, mathematically verify that \`abs(Entry - TP) / abs(Entry - SL)\` meets the required threshold for your confidence tier.
    - If the market structure does not allow for the required R:R ratio, you MUST set \`recommended_direction\` to "NONE". Do not force trades that fail the math!
 5. RANGING MARKETS & BREAKOUTS (MANDATORY RULE):
@@ -140,7 +140,7 @@ ${historicalMemory || "No historical data available for this asset yet."}
    - ANY trade setup you generate (even inside a range) MUST align with this macro bias.
 7. MULTI-TIMEFRAME CONFLUENCE (MTFA): You are provided with the HTF (Higher Timeframe) trend. 
    - You MUST align your direction with the HTF trend. If HTF is BEARISH, you only look for SHORT entries on the LTF.
-   - Counter-trend trades are only allowed if the setup is A-Tier and R:R > 2.0.
+   - Counter-trend trades are only allowed if the setup is A-Tier and R:R > 1.2.
 
 Current Market Context:
 ${JSON.stringify(snapshot, null, 2)}`;
@@ -193,9 +193,9 @@ ${JSON.stringify(snapshot, null, 2)}`;
       const reward = Math.abs(entry - tp);
       const rr = risk > 0 ? reward / risk : 0;
       
-      let requiredRR = 1.5;
-      if (data.confidence_score >= 90) requiredRR = 1.2;
-      else if (data.confidence_score >= 80) requiredRR = 1.3;
+      let requiredRR = 1.2;
+      if (data.confidence_score >= 90) requiredRR = 1.0;
+      else if (data.confidence_score >= 80) requiredRR = 1.1;
       
       if (rr < requiredRR - 0.05) { // Adding small epsilon tolerance
         console.warn(`[Validation] Attempt ${attempt} failed R:R math (R:R=${rr.toFixed(2)}, Required=${requiredRR}). Retrying...`);
@@ -208,7 +208,7 @@ ${JSON.stringify(snapshot, null, 2)}`;
     return data;
   }
   
-  throw new Error("AI failed to provide a valid JSON response after 3 attempts");
+  throw new Error(`AI failed to provide a valid JSON response after 3 attempts. Last Warning: ${messages[messages.length - 1]?.content}`);
 }
 
 async function revalidateOpportunity(signal: any, snapshot: LogicContext, newsContext: string | null) {
@@ -248,12 +248,13 @@ Breaking News & Macro: ${newsContext || "No major macro events."}
 1. MACRO CONTRADICTION: If the new breaking news fundamentally contradicts the original thesis (e.g. a 'risk-off' geopolitical shock occurs but the signal is LONG equities), you MUST reject the signal.
 2. STRUCTURAL DECAY: If the price action has significantly shifted and the original structural rationale no longer makes sense, reject it.
 3. DO NOT HALLUCINATE MATH: The system has ALREADY mathematically verified that the current price has NOT hit the stop loss or take profit. Do NOT reject the setup claiming the stop loss was hit. You must only reject based on fundamental macro shifts or severe structural decay.
-4. If the thesis remains valid and supported by the new context, keep it valid.
+4. PROFIT SECURING (SCALPING): If the trade is currently in profit, but the momentum has slowed, the market is ranging, or we are approaching a strong structural barrier, issue a TAKE_PROFIT command to secure the bag early. Do not get greedy.
+5. If the thesis remains strongly valid and supported by the new context, issue MAINTAIN.
 
 You MUST respond strictly with a raw JSON object:
 {
-  "is_valid": boolean,
-  "rejection_reason": "If invalid, concisely explain why the new context destroys the thesis. If valid, return null."
+  "action": "MAINTAIN" | "REJECT" | "TAKE_PROFIT",
+  "reason": "Explain why you chose this action."
 }`;
 
   const userPrompt = `Re-evaluate the ${signal.symbol} signal.`;
@@ -271,10 +272,10 @@ You MUST respond strictly with a raw JSON object:
         schema: {
           type: "object",
           properties: {
-            is_valid: { type: "boolean" },
-            rejection_reason: { type: ["string", "null"] }
+            action: { type: "string", enum: ["MAINTAIN", "REJECT", "TAKE_PROFIT"] },
+            reason: { type: "string" }
           },
-          required: ["is_valid", "rejection_reason"],
+          required: ["action", "reason"],
           additionalProperties: false
         },
         strict: true
@@ -300,13 +301,19 @@ You MUST respond strictly with a raw JSON object:
 serve(async (req) => {
   const { searchParams } = new URL(req.url);
   const isCron = req.method === "POST";
-  const timeframe = searchParams.get("timeframe") ?? (isCron ? "1H" : "1D");
+  let reqBody = {};
+  if (req.method === "POST" && req.headers.get("content-type")?.includes("application/json")) {
+    try {
+      reqBody = await req.json();
+    } catch (e) {}
+  }
+  const timeframe = (reqBody as any).timeframe ?? searchParams.get("timeframe") ?? (isCron ? "1H" : "1D");
   const modelId = searchParams.get("model_id") ?? undefined;
   const modelVersion = searchParams.get("model_version") ?? undefined;
   const newsContext = searchParams.get("news") ?? undefined;
   const symbolsParam =
-    searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "XAUUSD,XAGUSD,BTCUSD,UKOIL,EURUSD,GBPUSD,USDJPY,US30,NAS100";
-  const symbols = symbolsParam.split(",").map((s) => s.trim()).filter(Boolean);
+    (reqBody as any).symbols?.join(",") || searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "XAUUSD,XAGUSD,BTCUSD,UKOIL,EURUSD,GBPUSD,USDJPY,US30,NAS100";
+  const symbols = symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean);
 
   const url = Deno.env.get("SUPABASE_URL");
   const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -456,12 +463,19 @@ serve(async (req) => {
               
               const evalResult = await revalidateOpportunity(signal, snapshot, currentContext);
               
-              if (!evalResult.is_valid) {
-                await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Invalidated by AI Risk Officer: ${evalResult.rejection_reason}` }).eq("id", signal.id);
+              if (evalResult.action === "REJECT") {
+                await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Invalidated by AI Risk Officer: ${evalResult.reason}` }).eq("id", signal.id);
                 await cancelBrokerOrdersForOpportunity(supabase, signal.id);
-                console.log(`[Validation] REJECTED ${signal.symbol} by AI: ${evalResult.rejection_reason}`);
+                console.log(`[Validation] REJECTED ${signal.symbol} by AI: ${evalResult.reason}`);
+              } else if (evalResult.action === "TAKE_PROFIT") {
+                // For scalping, if AI decides to secure profits early, we mark it as WON (or REJECTED with profit info) 
+                // Since 'REJECTED' triggers auto-eject, we can update it to REJECTED but state it's a profit take.
+                // Wait, if we mark it as REJECTED, it triggers auto-eject to close the live positions.
+                await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Profit Secured by AI Risk Officer: ${evalResult.reason}` }).eq("id", signal.id);
+                await cancelBrokerOrdersForOpportunity(supabase, signal.id);
+                console.log(`[Validation] TAKE_PROFIT ${signal.symbol} by AI: ${evalResult.reason}`);
               } else {
-                console.log(`[Validation] VALID ${signal.symbol}: Thesis remains intact.`);
+                console.log(`[Validation] MAINTAIN ${signal.symbol}: Thesis remains intact.`);
               }
             } catch (err: any) {
                console.error(`[Validation Error] Failed to revalidate ${signal.symbol}:`, err.message);

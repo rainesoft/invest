@@ -37,16 +37,21 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     
-    // Validate bounds
-    let telegram_chat_id = body.telegram_chat_id || null;
-    
-    // Anti-Piracy Check: Prevent users from hooking up to Group Chats/Channels
-    if (telegram_chat_id) {
-      if (telegram_chat_id.includes('-') || telegram_chat_id.includes('@') || !/^\d+$/.test(telegram_chat_id)) {
-        return NextResponse.json({ 
-          error: 'Invalid Telegram Chat ID. Group chats and channels are strictly prohibited. You must use a personal Direct Message Chat ID (positive numbers only).' 
-        }, { status: 400 });
-      }
+    if (body.action === 'generate_telegram_link_token') {
+      const token = crypto.randomUUID();
+      const { error } = await supabase
+        .from('user_risk_settings')
+        .upsert({ user_id: user.id, telegram_link_token: token }, { onConflict: 'user_id' });
+      if (error) throw error;
+      return NextResponse.json({ success: true, token });
+    }
+
+    if (body.action === 'disconnect_telegram') {
+      const { error } = await supabase
+        .from('user_risk_settings')
+        .upsert({ user_id: user.id, telegram_chat_id: null, telegram_link_token: null }, { onConflict: 'user_id' });
+      if (error) throw error;
+      return NextResponse.json({ success: true });
     }
 
     const updates: any = { user_id: user.id };
@@ -67,8 +72,7 @@ export async function POST(request: Request) {
     if ('auto_trade_enabled' in body) updates.auto_trade_enabled = Boolean(body.auto_trade_enabled);
     if ('sync_trailing_stops' in body) updates.sync_trailing_stops = Boolean(body.sync_trailing_stops);
     if ('auto_trade_tiers' in body) updates.auto_trade_tiers = Array.isArray(body.auto_trade_tiers) ? body.auto_trade_tiers : [];
-    if ('telegram_bot_token' in body) updates.telegram_bot_token = body.telegram_bot_token;
-    if ('telegram_chat_id' in body) updates.telegram_chat_id = telegram_chat_id;
+    if ('use_partial_profit_taking' in body) updates.use_partial_profit_taking = Boolean(body.use_partial_profit_taking);
     if ('use_partial_profit_taking' in body) updates.use_partial_profit_taking = Boolean(body.use_partial_profit_taking);
 
     const { data, error } = await supabase

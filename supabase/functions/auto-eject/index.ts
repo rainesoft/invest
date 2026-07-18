@@ -76,7 +76,7 @@ serve(async (req) => {
            continue;
         }
 
-        const success = await cancelMetaApiOrder(supabase, trade.user_id, userRisk.meta_api_account_id, userRisk.meta_api_token, trade.meta_api_order_id);
+        const success = await cancelMetaApiOrder(supabase, trade.user_id, userRisk.meta_api_account_id, userRisk.meta_api_token, trade.meta_api_order_id, trade.status);
 
         // Finalize locally if successful
         if (success) {

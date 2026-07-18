@@ -74,20 +74,17 @@ export const ACADEMY_POSTS: Post[] = [
         <p style={{ fontSize: '18px', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
           Our AI trades extremely fast. If you want to know exactly what it's doing while you're away from your computer, you can set up Telegram alerts! We will send a direct message straight to your phone whenever a trade opens or closes.
         </p>
-
-        <h3 style={{ fontSize: '24px', fontWeight: 600, margin: '24px 0 8px 0', color: 'var(--text-primary)' }}>Step 1: Find Your Chat ID</h3>
         <p style={{ fontSize: '16px', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
-          Open the Telegram app on your phone and search for <strong>@userinfobot</strong>. Send it a message saying "hello". The bot will reply with a long number called your Chat ID (like 123456789). Copy this number.
+          <strong>Step 1: Go to Settings</strong><br/>
+          Navigate to your Rainebank Settings page. Scroll down to the <strong>Telegram Alerts</strong> section.
         </p>
-
-        <h3 style={{ fontSize: '24px', fontWeight: 600, margin: '24px 0 8px 0', color: 'var(--text-primary)' }}>Step 2: Create a Custom Bot (Optional)</h3>
         <p style={{ fontSize: '16px', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
-          If you want your alerts to come from your very own private bot, you can easily make one! Search for <strong>@BotFather</strong> in Telegram. Send the message `/newbot` and follow the simple steps. At the end, it will give you an API Token. Copy this too!
+          <strong>Step 2: Connect</strong><br/>
+          Click the <strong>Connect Telegram</strong> button. This will automatically open the official Raine Bank Bot in your Telegram app.
         </p>
-
-        <h3 style={{ fontSize: '24px', fontWeight: 600, margin: '24px 0 8px 0', color: 'var(--text-primary)' }}>Step 3: Save in Settings</h3>
         <p style={{ fontSize: '16px', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
-          Go back to your Rainebank Settings. Scroll down to the Telegram section and paste your Bot Token and Chat ID. Hit Save, and you're good to go!
+          <strong>Step 3: Start the Bot</strong><br/>
+          Once Telegram opens, simply tap <strong>Start</strong> at the bottom of the screen. The bot will instantly link to your account and send you a confirmation message!
         </p>
       </div>
     )

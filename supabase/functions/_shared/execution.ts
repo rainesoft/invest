@@ -105,8 +105,9 @@ export async function fetchPaperBars(symbol: string, timeframe = '1D', limit = 3
       .limit(limit);
       
     if (error || !dbBars || dbBars.length === 0) {
+      console.error(`[Data Fetch Debug] Symbol: ${symbol}, Timeframe: ${timeframe.toLowerCase()}, Error: ${JSON.stringify(error)}, dbBars length: ${dbBars?.length}`);
       console.warn(`[Data Fetch] No data found in market_data_pti for ${symbol} ${timeframe}`);
-      throw new Error(`NO_VPS_DATA_FOR_${symbol}`);
+      throw new Error(`NO_VPS_DATA_FOR_${symbol} | ERR: ${JSON.stringify(error)} | LEN: ${dbBars?.length}`);
     }
     
     const bars: Bar[] = dbBars.map((b: any) => ({
@@ -149,7 +150,7 @@ export async function cancelBrokerOrdersForOpportunity(supabase: SupabaseClient,
   // 1. Fetch all OPEN trades for this opportunity that have a broker order ID
   const { data: activeTrades, error: tradesErr } = await supabase
     .from("user_trades")
-    .select("id, user_id, meta_api_order_id")
+    .select("id, user_id, meta_api_order_id, status")
     .eq("opportunity_id", opportunityId)
     .eq("status", "OPEN")
     .not("meta_api_order_id", "is", null);
@@ -179,7 +180,7 @@ export async function cancelBrokerOrdersForOpportunity(supabase: SupabaseClient,
       continue;
     }
 
-    const success = await cancelMetaApiOrder(supabase, trade.user_id, userConfig.meta_api_account_id, userConfig.meta_api_token, trade.meta_api_order_id);
+    const success = await cancelMetaApiOrder(supabase, trade.user_id, userConfig.meta_api_account_id, userConfig.meta_api_token, trade.meta_api_order_id, trade.status || "OPEN");
     if (success) {
       await supabase.from("user_trades").update({ status: "CANCELLED" }).eq("id", trade.id);
     }
@@ -189,45 +190,53 @@ export async function cancelBrokerOrdersForOpportunity(supabase: SupabaseClient,
 /**
  * Generic utility to cancel a MetaAPI order (attempts ORDER_CANCEL, falls back to POSITION_CLOSE_ID)
  */
-export async function cancelMetaApiOrder(supabase: SupabaseClient, userId: string, accountId: string, token: string, orderId: string): Promise<boolean> {
+export async function cancelMetaApiOrder(supabase: SupabaseClient, userId: string, accountId: string, token: string, orderId: string, tradeStatus: string = "OPEN"): Promise<boolean> {
   const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.new-york.agiliumtrade.ai";
   const url = `${baseUrl}/users/current/accounts/${accountId}/trade`;
 
-  // First try ORDER_CANCEL (for Pending limit/stop orders)
-  const cancelPayload = { actionType: "ORDER_CANCEL", orderId };
+  // If the trade is purely pending, use ORDER_CANCEL.
+  // If the trade is ACTIVE, OPEN, or PAPER_OPEN, use POSITION_CLOSE_ID explicitly.
+  const isPending = tradeStatus === "PENDING";
+  const primaryPayload = isPending 
+    ? { actionType: "ORDER_CANCEL", orderId } 
+    : { actionType: "POSITION_CLOSE_ID", positionId: orderId };
+
   try {
     let res = await fetch(url, {
       method: "POST",
       headers: { "auth-token": token, "Content-Type": "application/json" },
-      body: JSON.stringify(cancelPayload)
+      body: JSON.stringify(primaryPayload)
     });
 
     if (res.ok) {
-      console.log(`[Broker Sync] Cancelled pending order ${orderId}`);
+      console.log(`[Broker Sync] Successfully executed ${primaryPayload.actionType} for ${orderId}`);
       return true;
     }
 
-    // If it failed, it might be an open position. Try POSITION_CLOSE_ID
-    const closePayload = { actionType: "POSITION_CLOSE_ID", positionId: orderId };
+    // Fallback logic: If we thought it was a position but it's actually an order (or vice versa), try the other.
+    const fallbackPayload = isPending 
+      ? { actionType: "POSITION_CLOSE_ID", positionId: orderId }
+      : { actionType: "ORDER_CANCEL", orderId };
+
     res = await fetch(url, {
       method: "POST",
       headers: { "auth-token": token, "Content-Type": "application/json" },
-      body: JSON.stringify(closePayload)
+      body: JSON.stringify(fallbackPayload)
     });
 
     if (res.ok) {
-      console.log(`[Broker Sync] Closed active position ${orderId}`);
+      console.log(`[Broker Sync] Fallback successful: Executed ${fallbackPayload.actionType} for ${orderId}`);
       return true;
     }
 
     const errText = await res.text();
-    console.error(`[Broker Sync] Failed to cancel/close ${orderId}: ${errText}`);
+    console.error(`[Broker Sync] Failed to cancel/close ${orderId} (Status: ${tradeStatus}): ${errText}`);
     
     await supabase.from("meta_api_retry_queue").insert({
       user_id: userId,
       meta_api_account_id: accountId,
       request_type: "ORDER_CANCEL_FALLBACK_CLOSE",
-      api_payload: closePayload,
+      api_payload: primaryPayload,
       last_error: errText
     });
     return false;
@@ -236,8 +245,8 @@ export async function cancelMetaApiOrder(supabase: SupabaseClient, userId: strin
     await supabase.from("meta_api_retry_queue").insert({
       user_id: userId,
       meta_api_account_id: accountId,
-      request_type: "ORDER_CANCEL",
-      api_payload: cancelPayload,
+      request_type: "ORDER_CANCEL_EXCEPTION",
+      api_payload: primaryPayload,
       last_error: e.message
     });
     return false;
