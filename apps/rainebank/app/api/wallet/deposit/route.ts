@@ -30,6 +30,36 @@ export async function POST(req: Request) {
     // Generate unique reference code for ledger constraints
     const reference = `DEP-${crypto.randomUUID()}`;
 
+    // 1. Get the target wallet
+    const { data: wallet, error: walletError } = await supabase
+      .from('wallets')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('currency', currency)
+      .single();
+
+    if (walletError || !wallet) {
+      return NextResponse.json({ error: 'Wallet not found for specified currency' }, { status: 400 });
+    }
+
+    // 2. Insert into deposit_requests table as PENDING_PAYMENT
+    const { error: insertError } = await supabase
+      .from('deposit_requests')
+      .insert({
+        user_id: user.id,
+        wallet_id: wallet.id,
+        amount: amount,
+        currency: currency,
+        reference_code: reference,
+        status: 'PENDING_PAYMENT',
+        payment_gateway: 'paystack'
+      });
+
+    if (insertError) {
+      console.error('Failed to create deposit request:', insertError);
+      return NextResponse.json({ error: 'Failed to initiate deposit' }, { status: 500 });
+    }
+
     // Initialize Paystack Checkout
     const response = await fetch('https://api.paystack.co/transaction/initialize', {
       method: 'POST',

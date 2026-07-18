@@ -43,6 +43,7 @@ export default function VaultNavbar({ isAdmin = false }: { isAdmin?: boolean }) 
                 <Link href="/fund-history" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', opacity: pathname === '/fund-history' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>Fund History</Link>
                 <Link href="/academy" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', opacity: pathname === '/academy' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>Academy</Link>
                 {isAdmin && <Link href="/research" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', opacity: pathname === '/research' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>Research</Link>}
+                {isAdmin && <Link href="/admin/deposits" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', opacity: pathname?.startsWith('/admin') ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>Admin</Link>}
                 <Link href="/opportunities" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', opacity: pathname === '/opportunities' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>Signals</Link>
                 <Link href="/docs" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', opacity: pathname === '/docs' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>API Docs</Link>
                 <Link href="/help" style={{ color: 'inherit', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '6px', transition: 'opacity 0.2s', opacity: pathname === '/help' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>
@@ -77,6 +78,7 @@ export default function VaultNavbar({ isAdmin = false }: { isAdmin?: boolean }) 
               <Link onClick={() => setIsOpen(false)} href="/fund-history" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500 }}>Fund History</Link>
               <Link onClick={() => setIsOpen(false)} href="/academy" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500 }}>Academy</Link>
               {isAdmin && <Link onClick={() => setIsOpen(false)} href="/research" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500 }}>Research</Link>}
+              {isAdmin && <Link onClick={() => setIsOpen(false)} href="/admin/deposits" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500 }}>Admin</Link>}
               <Link onClick={() => setIsOpen(false)} href="/opportunities" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500 }}>Signals</Link>
               <Link onClick={() => setIsOpen(false)} href="/docs" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500 }}>API Docs</Link>
               <Link onClick={() => setIsOpen(false)} href="/help" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '8px' }}>
