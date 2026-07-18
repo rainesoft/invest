@@ -71,7 +71,7 @@ const TradeEvaluationSchema = z.object({
   }),
   market_structure: z.enum(["BULLISH_TREND", "BEARISH_TREND", "RANGING", "BREAKOUT"]),
   recommended_direction: z.enum(["LONG", "SHORT", "NONE"]),
-  strategy_applied: z.enum(["PULLBACK", "MOMENTUM_CONTINUATION", "MEAN_REVERSION", "NONE"]),
+  strategy_applied: z.enum(["PULLBACK", "MOMENTUM_CONTINUATION", "MEAN_REVERSION", "BREAKOUT", "NONE"]),
   execution_parameters: z.object({
     entry_type: z.enum(["Buy Limit", "Sell Limit", "Buy Stop", "Sell Stop", "Market", "NONE"]),
     suggested_entry_price: z.number().nullable(),
@@ -146,8 +146,8 @@ ${historicalMemory || "No historical data available for this asset yet."}
 
 [REQUIRED OUTPUT FORMAT]
 You must output a single, valid JSON object matching the exact schema below. You MUST use the \`thought_process\` key FIRST to calculate your math and R:R before defining the trade parameters. If you don't calculate the R:R in text first, the numbers will be invalid.
+Output strictly the JSON object. Do not wrap your response in markdown formatting or backticks.
 
-\`\`\`json
 {
   "thought_process": "Briefly evaluate the EMAs, state the LTF BOS, calculate the Entry, SL, TP, and verify the R:R ratio mathematically BEFORE returning parameters.",
   "calculated_rr": 0.0,
@@ -160,7 +160,7 @@ You must output a single, valid JSON object matching the exact schema below. You
   },
   "market_structure": "BULLISH_TREND | BEARISH_TREND | RANGING | BREAKOUT",
   "recommended_direction": "LONG | SHORT | NONE",
-  "strategy_applied": "PULLBACK | MOMENTUM_CONTINUATION | MEAN_REVERSION | NONE",
+  "strategy_applied": "PULLBACK | MOMENTUM_CONTINUATION | MEAN_REVERSION | BREAKOUT | NONE",
   "execution_parameters": {
     "entry_type": "Buy Limit | Sell Limit | Buy Stop | Sell Stop | Market | NONE",
     "suggested_entry_price": 0.0,
@@ -176,7 +176,6 @@ You must output a single, valid JSON object matching the exact schema below. You
     "fundamental_alignment": "..."
   }
 }
-\`\`\`
 
 Current Market Context:
 ${JSON.stringify(snapshot, null, 2)}`;
