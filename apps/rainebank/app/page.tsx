@@ -9,10 +9,10 @@ export const dynamic = 'force-dynamic';
 
 function parseAnalysisText(text: string | null) {
   if (!text) return { tier: null, structure: null, strategy: null, content: '' };
-  
+
   // Try to match the exact pattern: [Tier] [Structure -> Strategy]
   const match = text.match(/^\[(.*?-Tier)\] \[(.*?) -> (.*?)\]/);
-  
+
   if (!match) {
     // If exact pattern fails, maybe there's just a Tier at the start
     const fallbackMatch = text.match(/^\[(.*?-Tier)\]/);
@@ -82,7 +82,7 @@ export default async function LandingPage() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
-  
+
   // Fetch the latest A-Tier trade opportunity for the live showcase
   let { data: latestSignals } = await supabaseAdmin
     .from('trade_opportunities')
@@ -105,15 +105,15 @@ export default async function LandingPage() {
   }
 
   const signal = latestSignals?.[0] || {
-    symbol: 'SCANNING...',
-    side: 'NEUTRAL',
-    status: 'SEARCHING',
-    entry_plan_json: { price: 'Pending Data' },
-    ai_summary: 'The AI Risk Officer is currently scanning the global markets for high-probability setups. Check back shortly.'
+    symbol: 'MARKETS IDLE',
+    side: 'MONITORING',
+    status: 'STANDBY',
+    entry_plan_json: { price: 'Awaiting Breakout' },
+    ai_summary: '[A-Tier] [Macro Alignment -> Searching]\nThe AI Risk Officer is continuously analyzing cross-asset volatility and institutional order flow. We are currently holding cash and waiting for a strictly defined, high-probability structural break before deploying capital. No active trades meet our minimum Risk:Reward thresholds at this precise moment.'
   };
 
-  const statusColor = signal.status === 'APPROVED' ? '#4ade80' : 
-                      signal.status === 'REJECTED' ? '#ef4444' : '#38bdf8';
+  const statusColor = signal.status === 'APPROVED' ? '#4ade80' :
+    signal.status === 'REJECTED' ? '#ef4444' : '#38bdf8';
 
   return (
     <div style={{
@@ -146,19 +146,18 @@ export default async function LandingPage() {
               padding: '6px 16px', borderRadius: '100px', fontSize: '13px', fontWeight: 600, marginBottom: '24px',
               border: '1px solid rgba(56, 189, 248, 0.2)'
             }}>
-              Meet your new AI Trading Assistant
+              An AI Fund Manager
             </div>
             <h1 style={{
               fontSize: 'clamp(48px, 6vw, 72px)', lineHeight: 1.05, fontWeight: 800, marginBottom: '24px',
               color: '#fff', letterSpacing: '-1.5px'
             }}>
-              Your personal AI that trades <br />
-              <span style={{ color: '#9ca3af' }}>while you sleep.</span>
+              A super-smart AI that
+              <span style={{ color: '#9ca3af' }}> grows your money.</span>
             </h1>
             <p style={{ fontSize: '18px', color: '#9ca3af', lineHeight: 1.6, marginBottom: '40px', maxWidth: '550px' }}>
-              Imagine having a really smart math student who watches the stock market 24/7 for you. 
-              It finds the absolute safest times to buy, double-checks the math so you never risk too much money, and automatically makes the trade for you. 
-              No stress, no staring at screens all day.
+              Deposit funds and let our AI trade the global markets for you.
+              It automatically finds safe trades, manages the risk, and grows your account while you sleep. We only make money when you make money, so our goals are exactly the same as yours.
             </p>
             <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
               <Link href={isLoggedIn ? "/dashboard" : "/login"} style={{
@@ -256,22 +255,22 @@ export default async function LandingPage() {
               background: '#0a0a0a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '24px', padding: '40px',
               display: 'flex', flexDirection: 'column'
             }}>
-              <div style={{ fontSize: '20px', fontWeight: 700, color: '#fff', marginBottom: '16px' }}>Spectator Mode</div>
-              <div style={{ fontSize: '48px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-2px' }}>GH₵ 0<span style={{ fontSize: '18px', color: '#9ca3af', fontWeight: 500, letterSpacing: '0' }}>/mo</span></div>
-              <p style={{ color: '#9ca3af', fontSize: '15px', marginBottom: '32px' }}>Perfect if you just want to watch the AI work.</p>
+              <div style={{ fontSize: '20px', fontWeight: 700, color: '#fff', marginBottom: '16px' }}>Performance Plan</div>
+              <div style={{ fontSize: '48px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-2px' }}>30%<span style={{ fontSize: '18px', color: '#9ca3af', fontWeight: 500, letterSpacing: '0' }}> fee</span></div>
+              <p style={{ color: '#9ca3af', fontSize: '15px', marginBottom: '32px' }}>We only win when you win. A 30% performance fee is deducted solely on net profits.</p>
 
               <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 40px 0', display: 'flex', flexDirection: 'column', gap: '16px', color: '#e5e7eb', flex: 1 }}>
                 <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2"><path d="M20 6L9 17l-5-5" /></svg>
-                  See past trades
+                  Fully Automated Execution
                 </li>
                 <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2"><path d="M20 6L9 17l-5-5" /></svg>
-                  Basic market analysis
+                  High-Water Mark Protection
                 </li>
-                <li style={{ display: 'flex', alignItems: 'center', gap: '12px', color: '#4b5563' }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4b5563" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
-                  Live trading automation
+                <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2"><path d="M20 6L9 17l-5-5" /></svg>
+                  Zero Management Fees
                 </li>
               </ul>
 

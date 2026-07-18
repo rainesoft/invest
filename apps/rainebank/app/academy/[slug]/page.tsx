@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { ArrowLeft, Lock, CheckCircle2 } from 'lucide-react';
 import { ACADEMY_POSTS } from '../../../data/academy';
 import LandingNavbar from '@components/LandingNavbar';
+import VaultNavbar from '@components/VaultNavbar';
 import { supabaseServer } from '@lib/supabase-server';
 import { Metadata } from 'next';
 
@@ -60,9 +61,19 @@ export default async function AcademyPostPage({ params }: { params: { slug: stri
 
   const isLocked = post.isPremium && !hasPremiumAccess;
 
+  let isAdmin = false;
+  if (isLoggedIn) {
+    const { data: userData } = await supabase
+      .from('users')
+      .select('is_admin')
+      .eq('id', user.id)
+      .single();
+    if (userData?.is_admin) isAdmin = true;
+  }
+
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg-color)' }}>
-      <LandingNavbar isLoggedIn={isLoggedIn} />
+      {isLoggedIn ? <VaultNavbar isAdmin={isAdmin} /> : <LandingNavbar isLoggedIn={false} />}
 
       <main style={{ flex: 1, display: 'flex', justifyContent: 'center', padding: '40px 24px' }}>
         <article style={{ width: '100%', maxWidth: '800px' }}>

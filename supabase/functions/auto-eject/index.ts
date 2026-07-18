@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
-import { insertAuditLog } from "../_shared/audit.ts";
-import { cancelMetaApiOrder } from "../_shared/execution.ts";
+import { insertAuditLog } from "../../../packages/core/audit.ts";
+import { cancelMetaApiOrder } from "../../../packages/execution/index.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -76,7 +76,7 @@ serve(async (req) => {
            continue;
         }
 
-        const success = await cancelMetaApiOrder(supabase, trade.user_id, userRisk.meta_api_account_id, userRisk.meta_api_token, trade.meta_api_order_id);
+        const success = await cancelMetaApiOrder(supabase, trade.user_id, userRisk.meta_api_account_id, userRisk.meta_api_token, trade.meta_api_order_id, trade.status);
 
         // Finalize locally if successful
         if (success) {

@@ -52,6 +52,22 @@ async function metaApiFetch(path: string, opts: RequestInit, token: string, acco
   return res.json();
 }
 
+/**
+ * Historical market data uses a separate API host: mt-market-data-client-api-v1.
+ * Timeframes MUST be lowercase MT5 format: 1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w, 1mn
+ */
+async function metaApiMarketDataFetch(path: string, token: string, accountId: string) {
+  const region = getEnv('METAAPI_REGION') || 'new-york';
+  const base = `https://mt-market-data-client-api-v1.${region}.agiliumtrade.ai`;
+  const fullPath = `${base}/users/current/accounts/${accountId}${path}`;
+  const res = await fetch(fullPath, { headers: { 'auth-token': token } });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`MetaAPI Market Data error ${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
 async function alpacaFetch(path: string, opts: RequestInit, key: string, secret: string) {
   const base = 'https://paper-api.alpaca.markets/v2';
   const headers = {
@@ -280,12 +296,33 @@ export async function fetchPaperBars(
     if (supabase) {
       const { data } = await supabase.from('user_risk_settings').select('*').limit(1).single();
       if (data) settings = data;
+      
+      // Zero-MetaAPI Cache Check: Check if VPS pushed fresh data for this timeframe
+      const { data: cachedBars } = await supabase
+        .from('market_data_pti')
+        .select('*')
+        .eq('symbol', symbol)
+        .eq('timeframe', timeframe.toLowerCase())
+        .order('ts', { ascending: false })
+        .limit(limit);
+        
+      // If we have cached bars that are recent (e.g., within 24h depending on timeframe, but we trust the EA push)
+      if (cachedBars && cachedBars.length > 0) {
+        // Reverse because we want oldest first for the indicator logic
+        return cachedBars.reverse().map((b: any) => ({
+          t: b.ts, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v
+        }));
+      }
     }
 
     if (settings.active_broker === 'METAAPI') {
-      const res = await metaApiFetch(`/historical-market-data/symbols/${symbol}/timeframes/${timeframe}/candles?limit=${limit}`, {
-        method: 'GET'
-      }, settings.meta_api_token, settings.meta_api_account_id);
+      // Normalize timeframe to lowercase MT5 format required by the Market Data API
+      const tfNorm = timeframe.toLowerCase(); // e.g. '1D' → '1d', '1H' → '1h'
+      const res = await metaApiMarketDataFetch(
+        `/historical-market-data/symbols/${symbol}/timeframes/${tfNorm}/candles?limit=${limit}`,
+        settings.meta_api_token,
+        settings.meta_api_account_id
+      );
       
       return (res || []).map((c: any) => ({
         t: c.time,
@@ -295,7 +332,74 @@ export async function fetchPaperBars(
         c: c.close,
         v: c.tickVolume || c.volume || 0,
       }));
-    } else {
+    }
+
+    // ── PERMANENT METAAPI FALLBACK ───────────────────────────────────────────
+    // Regardless of active_broker setting, always try MetaAPI via environment
+    // variables (META_API_TOKEN + META_API_ACCOUNT_ID Supabase secrets).
+    // This ensures agents never fail from missing price data even when
+    // active_broker is set to ALPACA or the cache is cold.
+    const envToken     = getEnv('META_API_TOKEN');
+    const envAccountId = getEnv('META_API_ACCOUNT_ID');
+
+    if (envToken && envAccountId) {
+      try {
+        const tfNorm = timeframe.toLowerCase();
+        const res = await metaApiMarketDataFetch(
+          `/historical-market-data/symbols/${symbol}/timeframes/${tfNorm}/candles?limit=${limit}`,
+          envToken,
+          envAccountId
+        );
+
+        const bars: Bar[] = (res || []).map((c: any) => ({
+          t: c.time,
+          o: c.open,
+          h: c.high,
+          l: c.low,
+          c: c.close,
+          v: c.tickVolume || c.volume || 0,
+        }));
+
+        if (bars.length > 0) {
+          // Write-back to cache so the next call is instant (fire-and-forget)
+          if (supabase) {
+            (async () => {
+              try {
+                const rows = bars.map(b => ({
+                  symbol,
+                  timeframe: tfNorm,
+                  ts: b.t,
+                  o: b.o,
+                  h: b.h,
+                  l: b.l,
+                  c: b.c,
+                  v: b.v,
+                  revision: 0,
+                  hash: `${b.t}_${b.o}_${b.c}`,
+                }));
+                // Insert in chunks, ignoring conflicts (rows may already exist)
+                const CHUNK = 200;
+                for (let i = 0; i < rows.length; i += CHUNK) {
+                  await supabase.from('market_data_pti').upsert(
+                    rows.slice(i, i + CHUNK),
+                    { onConflict: 'symbol,timeframe,ts', ignoreDuplicates: true }
+                  );
+                }
+                console.log(`[Cache Write-back] Stored ${bars.length} bars for ${symbol}/${tfNorm}`);
+              } catch (e) {
+                console.warn(`[Cache Write-back] Failed for ${symbol}: ${e}`);
+              }
+            })();
+          }
+          return bars;
+        }
+      } catch (metaErr) {
+        console.warn(`[MetaAPI Fallback] Failed for ${symbol}/${timeframe}: ${metaErr}`);
+      }
+    }
+
+    // ── ALPACA FALLBACK (stock symbols only) ─────────────────────────────────
+    {
       const tfMap: Record<string, string> = { '1h': '1Hour', '1d': '1Day', '15m': '15Min', '1m': '1Min' };
       const alpacaTf = tfMap[timeframe.toLowerCase()] || '1Day';
       const key = settings.alpaca_key || getEnv('BROKER_KEY') || '';
@@ -320,11 +424,18 @@ export async function fetchPaperBars(
   }
 }
 
+
 export async function syncBrokerPosition(
   symbol: string,
   settings: any
 ): Promise<{ isOpen: boolean; pl: number; positionId?: string }> {
   try {
+    if (settings.active_broker === 'MT5_VPS') {
+      // VPS entirely manages physical execution and closures locally.
+      // We assume it's open until the VPS specifically fires a vps-history or vps-callback.
+      return { isOpen: true, pl: 0 };
+    }
+    
     if (settings.active_broker === 'METAAPI') {
       const res = await metaApiFetch(`/positions`, { method: 'GET' }, settings.meta_api_token, settings.meta_api_account_id);
       const position = (res || []).find((p: any) => p.symbol === symbol);
@@ -361,6 +472,11 @@ export async function updateBrokerStopLoss(
   positionId?: string
 ): Promise<boolean> {
   try {
+    if (settings.active_broker === 'MT5_VPS') {
+      console.log(`[MT5_VPS] Mathematical trailing stop updated to ${newStop} for ${symbol} in DB. VPS EA manages physical stop locally.`);
+      return false; 
+    }
+    
     if (settings.active_broker === 'METAAPI' && positionId) {
       await metaApiFetch('/trade', {
         method: 'POST',

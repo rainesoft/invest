@@ -52,7 +52,7 @@ serve(async (req) => {
       // Check if user has any OPEN or PENDING trades (a pending limit order might have filled and closed rapidly)
       const { data: openTrades, error: openTradesError } = await supabase
         .from("user_trades")
-        .select("id, symbol, meta_api_order_id, status, trade_type, opportunity_id")
+        .select("id, symbol, meta_api_order_id, status, trade_type, opportunity_id, risk_amount")
         .eq("user_id", userId)
         .in("status", ["OPEN", "PENDING"]);
 
@@ -111,6 +111,37 @@ serve(async (req) => {
               closed_at: closedAt
             })
             .eq("id", trade.id);
+
+          // VIRTUAL PAMM REPLICATION
+          // If this is the Master Account resolving a trade, we must replicate this outcome 
+          // to all virtual retail trades attached to the same opportunity_id.
+          const roiMult = profitUsd / trade.risk_amount; // e.g. made +$100 on $1000 risk = +0.10 ROI
+
+          // Fetch all open virtual trades for this opportunity
+          const { data: virtualTrades } = await supabase
+            .from("user_trades")
+            .select("id, risk_amount")
+            .eq("opportunity_id", trade.opportunity_id)
+            .eq("trade_type", trade.trade_type)
+            .in("status", ["PAPER_OPEN", "PENDING", "OPEN"])
+            .neq("id", trade.id);
+
+          if (virtualTrades && virtualTrades.length > 0) {
+            console.log(`[History Sync] Replicating Master PnL to ${virtualTrades.length} virtual trades...`);
+            
+            for (const vTrade of virtualTrades) {
+              const vProfit = Number((vTrade.risk_amount * roiMult).toFixed(2));
+              await supabase
+                .from("user_trades")
+                .update({
+                  status: finalStatus,
+                  profit_usd: vProfit,
+                  close_price: closePrice,
+                  closed_at: closedAt
+                })
+                .eq("id", vTrade.id);
+            }
+          }
 
           resolvedTrades.push({ id: trade.id, finalStatus, profitUsd });
 

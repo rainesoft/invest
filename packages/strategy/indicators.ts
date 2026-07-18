@@ -19,6 +19,9 @@ export type LogicContext = {
   trend_alignment: 'BULLISH_TREND' | 'BULLISH_PULLBACK' | 'BEARISH_TREND' | 'BEARISH_PULLBACK' | 'CHOP';
   htf_support?: number[];
   htf_resistance?: number[];
+  mtfa_ema_50?: number | null;
+  mtfa_ema_200?: number | null;
+  mtfa_trend?: 'BULLISH' | 'BEARISH' | 'CHOP';
 };
 
 export function calculateFractals(high: number[], low: number[]) {

@@ -341,13 +341,7 @@ verify_jwt = false
 # cron = "0 * * * *"
 
 # Trigger the Outcome Simulator at 2 and 32 past the hour
-[functions.exness-executor]
-verify_jwt = false
-
 [functions.resolve-outcomes]
-verify_jwt = false
-
-[functions.exness-monitor]
 verify_jwt = false
 
 # [functions.resolve-outcomes.schedule]
@@ -374,10 +368,15 @@ verify_jwt = false
 # [functions.daily-drip-campaign.schedule]
 # cron = "0 12 * * *"
 
+# Swing Fibonacci Engine: Daily macro swing signal generation at 07:00 UTC (before London open)
+# Cron is registered directly in pg_cron: cron.schedule('swing-research-run-daily', '0 7 * * *', ...)
+[functions.swing-research-run]
+verify_jwt = false
+
 [functions.process-retries]
 enabled = true
 verify_jwt = false
-import_map = "./functions/process-retries/deno.json"
+
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
 entrypoint = "./functions/process-retries/index.ts"
@@ -392,7 +391,7 @@ verify_jwt = false
 [functions.process-recurring-billing]
 enabled = true
 verify_jwt = false
-import_map = "./functions/process-recurring-billing/deno.json"
+
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
 entrypoint = "./functions/process-recurring-billing/index.ts"
@@ -403,10 +402,45 @@ entrypoint = "./functions/process-recurring-billing/index.ts"
 [functions.auto-eject]
 enabled = true
 verify_jwt = false
-import_map = "./functions/auto-eject/deno.json"
+
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
 entrypoint = "./functions/auto-eject/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/auto-eject/*.html" ]
+
+[functions.dump-signals]
+enabled = true
+verify_jwt = false
+
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/dump-signals/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/dump-signals/*.html" ]
+
+[functions.vps-poll]
+verify_jwt = false
+
+[functions.vps-callback]
+verify_jwt = false
+
+[functions.vps-market-feed]
+verify_jwt = false
+
+[functions.vps-history]
+verify_jwt = false
+
+[functions.telegram-webhook]
+enabled = true
+verify_jwt = false
+
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/telegram-webhook/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/telegram-webhook/*.html" ]
+

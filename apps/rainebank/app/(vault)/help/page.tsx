@@ -57,15 +57,12 @@ export default function HelpPage() {
           <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontWeight: 'bold', color: 'white' }}>3</div>
           <div>
             <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '12px' }}>Get your Personal Chat ID</h3>
-            <p style={{ color: 'var(--text-secondary)', lineHeight: '1.6', marginBottom: '12px' }}>
-              You need to find out what your personal Telegram ID number is so the bot knows exactly who to message.
-            </p>
-            <ul style={{ color: 'var(--text-secondary)', lineHeight: '1.8', listStyleType: 'disc', paddingLeft: '20px' }}>
-              <li>Search for <strong style={{ color: 'var(--text-primary)' }}>@userinfobot</strong> in Telegram and open the chat.</li>
-              <li>Click <strong style={{ color: 'var(--text-primary)' }}>Start</strong>.</li>
-              <li>It will instantly reply with a message containing your <strong>Id</strong> (a positive number like <code style={{ background: 'var(--input-bg)', padding: '2px 6px', borderRadius: '4px', color: 'var(--text-primary)' }}>987654321</code>).</li>
-              <li>Copy that positive number and paste it into the <strong>Telegram Chat ID</strong> field on your Raine Settings page.</li>
-            </ul>
+            <ol style={{ lineHeight: '1.8', color: 'var(--text-secondary)' }}>
+              <li>Navigate to your Raine <strong>Settings</strong> page.</li>
+              <li>Scroll down to the <strong>Telegram Alerts</strong> section.</li>
+              <li>Click the <strong>Connect Telegram</strong> button. This will automatically open the official Raine Bank Bot in your Telegram app.</li>
+              <li>Once Telegram opens, simply tap <strong>Start</strong> at the bottom of the screen. The bot will instantly link to your account and send you a confirmation message!</li>
+            </ol>
             <div style={{ marginTop: '16px', padding: '12px 16px', background: 'rgba(239, 68, 68, 0.1)', borderLeft: '4px solid #ef4444', borderRadius: '4px', display: 'flex', gap: '12px' }}>
               <ShieldAlert color="#ef4444" size={20} style={{ flexShrink: 0, marginTop: '2px' }} />
               <div>

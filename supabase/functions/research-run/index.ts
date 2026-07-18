@@ -1,15 +1,16 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2.108.2";
-import { fetchPaperBars, Bar, placePaperOrder, makeClientOrderId, cancelBrokerOrdersForOpportunity } from "../_shared/execution.ts";
-import { sma, rsi, detectRegime } from "../_shared/strategy.ts";
-import { insertAuditLog } from "../_shared/audit.ts";
-import { isMarketOpen } from "../_shared/market.ts";
+import { fetchPaperBars, Bar, placePaperOrder, makeClientOrderId } from "../../../packages/execution/index.ts";
+import { sma, rsi, detectRegime } from "../../../packages/strategy/index.ts";
+import { insertAuditLog } from "../../../packages/core/audit.ts";
+import { isMarketOpen } from "../../../packages/core/market.ts";
 import { netEdge, transactionCost, slippage } from "../../../packages/strategy/index.ts";
 import { getContextSnapshot, LogicContext, calculatePivotPoints } from "../../../packages/strategy/indicators.ts";
 import { validateGlobalSignal } from "../../../packages/strategy/riskManager.ts";
-import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews } from "../_shared/news.ts";
+import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews } from "../../../packages/core/news.ts";
 import { sizeWithRiskCaps } from "../../../packages/risk/index.ts";
 import OpenAI from "npm:openai";
+import { z } from "npm:zod";
 
 async function hashBar(b: Bar) {
   const str = `${b.t}|${b.o}|${b.h}|${b.l}|${b.c}|${b.v}`;
@@ -58,7 +59,37 @@ async function saveBars(
   }
 }
 
-async function evaluateOpportunity(symbol: string, snapshot: LogicContext, timeframe: string, historicalMemory: string) {
+const TradeEvaluationSchema = z.object({
+  thought_process: z.string().describe("Briefly evaluate the EMAs, state the LTF BOS, calculate the Entry, SL, TP, and verify the R:R ratio mathematically BEFORE returning parameters."),
+  calculated_rr: z.number().nullable().describe("The mathematical R:R calculated in the thought_process"),
+  technical_audit: z.object({
+    current_price: z.number(),
+    ema_50: z.number(),
+    ema_200: z.number(),
+    price_position: z.enum(["ABOVE_BOTH", "BELOW_BOTH", "BETWEEN_EMAS"]),
+    ltf_bos: z.enum(["BULLISH", "BEARISH", "NONE"])
+  }),
+  market_structure: z.enum(["BULLISH_TREND", "BEARISH_TREND", "RANGING", "BREAKOUT"]),
+  recommended_direction: z.enum(["LONG", "SHORT", "NONE"]),
+  strategy_applied: z.enum(["PULLBACK", "MOMENTUM_CONTINUATION", "MEAN_REVERSION", "BREAKOUT", "NONE"]),
+  execution_parameters: z.object({
+    entry_type: z.enum(["Buy Limit", "Sell Limit", "Buy Stop", "Sell Stop", "Market", "NONE"]),
+    suggested_entry_price: z.number().nullable(),
+    scaled_entries: z.array(z.object({ price: z.number(), weight: z.number() })).nullable().optional(),
+    suggested_stop_loss: z.number().nullable(),
+    suggested_take_profit: z.number().nullable()
+  }),
+  confidence_score: z.number(),
+  institutional_rationale: z.object({
+    directional_bias: z.string(),
+    execution_trigger: z.string(),
+    invalidation_point: z.string(),
+    take_profit_target: z.string(),
+    fundamental_alignment: z.string()
+  })
+});
+
+async function evaluateOpportunity(symbol: string, snapshot: LogicContext & { agent_context?: any[] }, timeframe: string, historicalMemory: string) {
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
   const azureKey = Deno.env.get("AZURE_OPENAI_API_KEY");
   
@@ -76,42 +107,11 @@ async function evaluateOpportunity(symbol: string, snapshot: LogicContext, timef
     throw new Error("No OpenAI or Azure OpenAI keys found");
   }
 
-  const systemPrompt = `You are a Senior Risk Officer for an institutional trading desk. You respond EXCLUSIVELY in raw JSON.
+  const systemPrompt = `You are an Aggressive Intraday Scalper for an institutional trading desk. You respond EXCLUSIVELY in raw JSON.
 
 [HISTORICAL PERFORMANCE CALIBRATION]
 Review your past decisions on this asset to calibrate your current bias. If you notice a recent losing streak or repeated rejections for the same structural reason, you MUST act defensively and adjust your confidence and action thresholds.
 ${historicalMemory || "No historical data available for this asset yet."}
-
-[CRITICAL OUTPUT RULE]
-You MUST respond strictly with a raw JSON object matching the exact schema below. Do not include any markdown formatting (like \`\`\`json), wrapper text, HTML tags, or conversational preambles. If you include anything other than raw JSON, the system breaks.
-
-{
-  "technical_audit": {
-    "current_price": number,
-    "ema_50": number,
-    "ema_200": number,
-    "price_position": "ABOVE_BOTH" | "BELOW_BOTH" | "BETWEEN_EMAS",
-    "ltf_bos": "BULLISH" | "BEARISH" | "NONE"
-  },
-  "market_structure": "BULLISH_TREND" | "BEARISH_TREND" | "RANGING" | "BREAKOUT",
-  "recommended_direction": "LONG" | "SHORT" | "NONE",
-  "strategy_applied": "PULLBACK" | "MOMENTUM_CONTINUATION" | "MEAN_REVERSION" | "NONE",
-  "execution_parameters": {
-    "entry_type": "Buy Limit" | "Sell Limit" | "Buy Stop" | "Sell Stop" | "Market" | "NONE",
-    "suggested_entry_price": number | null,
-    "scaled_entries": [{"price": number, "weight": number}] | null,
-    "suggested_stop_loss": number | null,
-    "suggested_take_profit": number | null
-  },
-  "confidence_score": number,
-  "institutional_rationale": {
-    "directional_bias": "Explain why the recommended direction is the path of least resistance based on EMAs and key levels.",
-    "execution_trigger": "Specify the exact lower-timeframe price action required at the entry price to trigger the trade.",
-    "invalidation_point": "Explain exactly why the stop loss is placed where it is structurally.",
-    "take_profit_target": "Explain the structural target for the trade (e.g. recent swing high, major resistance). Do NOT calculate the price or R:R ratio, the system will append this automatically.",
-    "fundamental_alignment": "State how the technical setup aligns with or fights current macro drivers."
-  }
-}
 
 [RISK EVALUATION RULES]
 1. DYNAMIC STRATEGY SELECTION & TREND ALIGNMENT: Identify the market structure accurately. 
@@ -119,123 +119,138 @@ You MUST respond strictly with a raw JSON object matching the exact schema below
    - If trending heavily (Price > 50 & 200 EMA), prioritize MOMENTUM_CONTINUATION setups using minor retracements. 
    - If the market is in a true CHOP or RANGE regime (trend_alignment is CHOP), you MUST prioritize BREAKOUT setups using Buy Stop / Sell Stop orders just outside the range boundaries, OR high-probability MEAN_REVERSION setups targeting the range boundaries.
 2. BREAK OF STRUCTURE (BOS) EXECUTION TIMING: You are provided with the \`ltf_bos\` flag which deterministically tracks 5-bar fractal structure breaks on the execution timeframe.
-   - If \`ltf_bos\` is 'BULLISH' and the \`htf_trend\` is BULLISH, this is a confirmed Pullback Entry. You MUST originate a BUY trade targeting the next resistance level.
-   - If \`ltf_bos\` is 'BEARISH' and the \`htf_trend\` is BEARISH, you MUST originate a SELL trade targeting the next support level.
+   - If \`ltf_bos\` is 'BULLISH' and the \`htf_trend\` is BULLISH, this is a confirmed Pullback Entry. You MUST originate a LONG trade targeting the next resistance level.
+   - If \`ltf_bos\` is 'BEARISH' and the \`htf_trend\` is BEARISH, you MUST originate a SHORT trade targeting the next support level.
    - If \`ltf_bos\` is 'NONE', the structure has not broken yet. Do not guess the reversal. You MUST originate a pending Limit Order at the nearest structural floor/ceiling instead of a Market order.
-3. THE 'EMPTY AIR' CHECK: Before suggesting a direction, evaluate the distance to the next major liquidity zone. If the current price is floating in 'empty air' midway between support and resistance, do NOT reject the setup automatically! Instead, originate a pending Limit Order (Buy Limit or Sell Limit) exactly at the nearest major support or resistance level to catch the reversion.
 3. STOP LOSS SIZING & VOLATILITY (ATR): The snapshot provides \`safe_long_stop_loss\`, \`safe_short_stop_loss\`, and \`atr_14\`. 
-   - TIGHT LOCAL STRUCTURE: You MUST optimize your stop loss for the specific timeframe you are evaluating (e.g. a \${timeframe} swing trade). Place the stop loss tight behind the immediate local structure.
-   - MANDATORY ATR LIMIT: Your \`suggested_stop_loss\` MUST be the TIGHTER of either your structural stop, or the volatility threshold \`Entry +/- (1.5 * atr_14)\`. 
-   - MAX STOP LOSS LIMIT: Your calculated stop loss MUST NEVER exceed a distance of \`2.0 * atr_14\` from the suggested entry price (and strictly \`1.5 * atr_14\` for commodities like XAUUSD, UKOIL). If the required structural stop is too far away, adjust your Entry Price closer to the invalidation point to shrink the risk!
-4. FUNDAMENTAL REALITY CHECK (MACRO CATALYSTS & BREAKOUTS): You MUST heavily weigh the provided \`fundamental_context\`. 
-   - Be specific: Do not generically state "there are no geopolitical shocks." Cite specific institutional drivers like Central Bank divergence, upcoming rate decisions, or CPI/NFP data that specifically impacts the asset.
-   - MACRO BREAKOUT OPPORTUNISM: If there is an impending High-Impact event (e.g., CPI, NFP, Fed speeches) within the next 12 hours, you MUST NOT use Limit orders that could be slipped during the volatility. You MUST originate a BREAKOUT strategy. Place pending Buy Stop / Sell Stop orders just outside the immediate consolidation zone to trap the impending volatility explosion upon confirmation.
-   - [LIVE BREAKING NEWS]: If the \`fundamental_context\` contains live breaking headlines indicating sudden geopolitical shocks (e.g., airstrikes, war), you MUST evaluate if it creates a massive directional opportunity. Only reject if it completely destroys the mathematical structure of the chart without presenting a new edge.
-   - [CRITICAL MACRO DIRECTIVE]: If the technical setup aligns perfectly with a High-Impact fundamental catalyst in the \`fundamental_context\`, you MUST upgrade your confidence to S-Tier (90+).
+   - TIGHT LOCAL STRUCTURE: You MUST optimize your stop loss for the specific timeframe you are evaluating. Place the stop loss tight behind the immediate local structure.
+   - MANDATORY ATR PADDING: Your \`suggested_stop_loss\` MUST be mathematically padded by exactly \`1.0 * atr_14\` beyond the structural invalidation point (for Crypto pairs like BTCUSD, use \`2.0 * atr_14\`) to avoid liquidity sweeps!
+   - MAX STOP LOSS LIMIT: Your calculated stop loss MUST NEVER exceed a distance of \`2.0 * atr_14\` from the suggested entry price (or \`3.0 * atr_14\` for Crypto assets).
+4. CONFIDENCE-WEIGHTED R:R (RISK TO REWARD) ENFORCEMENT: 
+   - The required Risk/Reward ratio depends on your generated \`confidence_score\`:
+     * S-Tier (90-100 confidence): Minimum 1:1.0 R:R
+     * A-Tier (80-89 confidence): Minimum 1:1.1 R:R
+     * B-Tier (70-79 confidence): Minimum 1:1.2 R:R
+   - Before outputting your JSON, mathematically verify that \`abs(Entry - TP) / abs(Entry - SL)\` meets the required threshold for your confidence tier.
+   - If the market structure does not allow for the required R:R ratio, you MUST set \`recommended_direction\` to "NONE". Do not force trades that fail the math!
 5. RANGING MARKETS & BREAKOUTS (MANDATORY RULE):
-   - If the market is RANGING (price between 50 and 200 EMAs, or EMAs are within 0.1% of each other), a 'recommended_direction' of NONE is STRICTLY FORBIDDEN.
-   - You MUST always identify the nearest Swing High and Swing Low from the bars data. Place a Buy Stop 0.1% above the Swing High and a Sell Stop 0.1% below the Swing Low. The tighter the range, the more explosive the eventual breakout--this is the edge.
-   - If the range is too tight to achieve 1:1.5 R:R on a breakout stop order, you MUST use MEAN_REVERSION instead: Buy Limit at the Swing Low with TP at the Swing High, or Sell Limit at the Swing High with TP at the Swing Low.
-   - The output must ALWAYS have a valid entry price, stop loss, and take profit. A trade with NONE execution_parameters from a RANGING market is a systemic failure.
-6. INSTITUTIONAL TONE: 
-   - Never use apologetic, weak, or observational phrasing regarding missing data. Write with bulletproof brevity. Do NOT repeat your rationale. Combine your thoughts into a single, sharp thesis.
-7. MULTI-TIMEFRAME ALIGNMENT (COUNTER-TREND PULLBACKS): You are provided with the 'htf_trend' (Daily macro trend). You generally want to align with it. HOWEVER, if the \${timeframe} setup contradicts the Daily trend, you MAY originate a "Counter-Trend Pullback" trade IF AND ONLY IF you limit the confidence score to B-Tier (80 max) and mandate a tighter structural stop loss (max 1.5 * atr_14).
-8. BOLLINGER BAND EXHAUSTION (LIMIT ORDERS): You are provided with 'bb_upper' and 'bb_lower'. NEVER suggest a Market Entry LONG if the current price is at or above 'bb_upper'. NEVER suggest a Market Entry SHORT if the price is at or below 'bb_lower'. INSTEAD, use the \`execution_trigger\` to prescribe a pending LIMIT ORDER at the 50 EMA or the nearest Support/Resistance level to catch the pullback.
-9. RSI DYNAMICS IN TRENDS: In a strong uptrend (Price > 50 EMA and > 200 EMA), the daily RSI rarely drops all the way to 30. A pullback to the 40-45 range is typically sufficient to reset momentum. Do NOT demand a drop to 30 if the asset is in heavy bullish momentum.
-10. DIRECTIONAL MATH & SUPPORT VALIDATION: You MUST perform basic directional math. If Current Price < Support, the support has been BROKEN and is now Resistance. If Current Price > Resistance, it is now Support. Do not suggest a "pullback to support" if price has already broken below it.
-11. EMPTY AIR PROTOCOL & MOMENTUM CONTINUATION: 
-    - If the current price is floating in "empty air" (midway between major support and resistance), DO NOT reject the setup. Instead, originate a deep Limit Order at the nearest major structural floor or ceiling. The market may take days to reach it, but having the pending order published is highly valuable.
-    - Never recommend 'immediate market entry' directly underneath a major swing high or resistance. You must either recommend a pullback limit order to a moving average/support, or a pending breakout (Buy Stop/Sell Stop) just beyond the structure. Avoid buying the local top.
-12. STRICT STRUCTURAL TARGETS & RISK:REWARD OPTIMIZATION: You MUST output a \`suggested_take_profit\` that matches the exact structural target (e.g. major support/resistance) identified in your rationale. 
-    - MINIMUM VIABLE R:R: Institutional setups require a MINIMUM Risk:Reward of 1:1.5. If your setup yields an R:R worse than 1:1.5, you MUST mathematically reject the setup by categorizing it as a C-Tier trade with "NONE" for recommended_direction and execution_parameters.
-    - ENTRY PRICING TRADEOFF (SCALING IN): If your setup yields a weak R:R (e.g., 1:1.2), you MUST mathematically optimize your \`suggested_entry_price\`. Instead of moving the entire entry, you MUST split your risk by providing the \`scaled_entries\` array to ensure a blended 1:1.5 R:R is achieved.
-13. FRONT-RUNNING LIMIT ORDERS (ENTRY PRICING): When suggesting a Buy Limit at support or a Sell Limit at resistance, do NOT place the exact entry price at the absolute extreme of the structural level. Markets frequently front-run major levels. You MUST adjust your Limit Order slightly closer to the current price (e.g., front-running the support/resistance by 10-20% of the daily ATR) to ensure the order actually gets filled during a shallow pullback.
-14. CONFIDENCE SCORING HEURISTICS: You must apply the following baseline scoring criteria:
-    - S-Tier (90-100): Perfect technical alignment + High-Impact Macro Catalyst supporting the trade.
-    - A-Tier (80-89): Pristine technical setup. Price is trending cleanly on the correct side of the 50 & 200 EMAs, pulling back to a clear structural zone with empty air to the Take Profit target.
-    - B-Tier (70-79): Decent setup but possesses a minor flaw (e.g., Counter-Trend, forced to use wide ATR stop, or weak fundamentals). Ranging markets with a valid breakout stop structure ALWAYS qualify for at least B-Tier.
-    - C-Tier (<70): ONLY applicable when: (a) Price is trending strongly but mid-candle with no structural entry level available, OR (b) The asset is halted/suspended. C-Tier is NEVER valid for a ranging market that has identifiable Swing Highs and Swing Lows.
-15. COMMODITY GEOPOLITICAL SUPPLY SHOCK OVERRIDE: For commodities (UKOIL, XAUUSD, XAGUSD), technical EMAs are SECONDARY to active supply disruption events. 
-    - If the \`fundamental_context\` headlines reference an active military conflict affecting supply routes (e.g., Strait of Hormuz blockade, pipeline sabotage, OPEC emergency cuts), this is a HIGH-IMPACT MACRO CATALYST that OVERRIDES technical ranging/chop classifications.
-    - In such scenarios, you MUST NOT default to C-Tier simply because the price sits between EMAs or because the market is highly volatile. GEOPOLITICAL VOLATILITY = AGGRESSIVE TRADING OPPORTUNITY. Do not use "messy volatility" as an excuse to reject the trade. 
-    - You must evaluate the geopolitical catalyst as the PRIMARY driver. If it supports a directional bias (e.g., supply disruption = bullish oil), you MUST originate a trade setup with S-Tier confidence (90+) provided the structural R:R is viable. Lean into the asymmetrical upside.
-    - Use pending Limit Orders to catch pullbacks within the geopolitically-driven trend rather than chasing market orders at the top of a spike.
-    - OPEC production decisions are MEDIUM-IMPACT catalysts. They support a directional bias but alone do not warrant S-Tier unless combined with a supply disruption or demand shock.
-16. MAXIMUM ENTRY DISTANCE (EXECUTION PROBABILITY): Your \`suggested_entry_price\` MUST NOT be further than \`2.0 * atr_14\` from the current price. Placing a Buy Limit 10% below current price guarantees zero fills and wastes capital allocation. If your structural level is deeper than 2x ATR from the current price, you MUST use \`scaled_entries\` to split between a near entry (within 1x ATR) and a deep entry (at the structural level).
-17. MANDATORY SCALING IN FOR DEEP RETRACEMENTS: If the optimal structural entry is more than \`1.5 * atr_14\` from the current price, you MUST provide \`scaled_entries\` with at least two entries: (1) a primary entry within 1x ATR of the current price with \`weight: 0.5\`, and (2) a secondary entry at the deep structural level with \`weight: 0.5\`. This ensures partial execution on shallow pullbacks while preserving the mathematical edge of the deeper entry.
-18. NO RETAIL GURU-SPEAK (SYSTEMIC QUANT TONE ONLY): You are an automated algorithmic signal generator, not a retail trading guru. DO NOT advise the user to wait for "candlestick confirmation", "buying volume", or "price action triggers". The execution desk operates fully autonomously using hard LIMIT/STOP orders. Your rationale must focus purely on mathematical edge, structural levels, liquidity sweeps, and macro catalysts. Trade management (trailing stops, breakeven moves) is handled globally by a separate risk microservice—do not invent or suggest trade management rules in your rationale.
+   - If the market is RANGING (price between 50 and 200 EMAs), a 'recommended_direction' of NONE is STRICTLY FORBIDDEN unless R:R fails.
+   - You MUST always identify the nearest Swing High and Swing Low. Based on the dominant macro bias or HTF trend, place EITHER a Buy Stop 0.1% above the Swing High OR a Sell Stop 0.1% below the Swing Low. Do not place both.
+   - [MACRO-ALIGNED MEAN REVERSION]: When forced to use MEAN_REVERSION in a range, you MUST align the direction of the trade with the underlying fundamental macro bias provided in the context.
+6. FUNDAMENTAL MACRO OVERRIDE (COMMODITIES & FOREX): Technical EMAs are SECONDARY to dominant macro narratives and active supply/demand shocks.
+   - If the \`fundamental_context\` headlines reference overwhelming macro drivers (e.g., active military conflicts, aggressive rate hike rhetoric), this OVERRIDES technical ranging/chop classifications.
+   - ANY trade setup you generate (even inside a range) MUST align with this macro bias.
+7. MULTI-TIMEFRAME CONFLUENCE (MTFA): You are provided with the HTF (Higher Timeframe) trend. 
+   - You MUST align your direction with the HTF trend. If HTF is BEARISH, you only look for SHORT entries on the LTF.
+   - Counter-trend trades are only allowed if the setup is A-Tier and R:R > 1.2.
+8. SWING TRADER FIBONACCI CONFLUENCE (CRITICAL — READ CAREFULLY):
+   The snapshot may include an \`agent_context\` array from longer-timeframe specialist agents.
+   This is pre-computed institutional analysis — treat it as senior analyst guidance.
+   - DIRECTION ALIGNMENT: If \`agent_context\` contains a SWING_TRADER entry and its \`macro_bias\` matches your intended trade direction → add +5 to your confidence_score before outputting.
+   - FIBONACCI LEVEL ALIGNMENT: If your \`suggested_entry_price\` is within 0.3% of any price in \`agent_context[].key_levels.fib_levels\` → add +8 to your confidence_score. This is multi-timeframe Fibonacci confluence — the highest-quality signal in institutional trading.
+   - COUNTER-TREND PENALTY: If you are trading LONG but the SWING_TRADER macro_bias is BEARISH, or trading SHORT but macro_bias is BULLISH → subtract 10 from your confidence_score and require minimum A-Tier (80) confidence to proceed.
+   - INVALIDATION AWARENESS: If the \`invalidation_price\` field is set and your proposed stop loss is BEYOND it in the wrong direction, you must acknowledge this structural conflict in your thought_process.
+
+[REQUIRED OUTPUT FORMAT]
+You must output a single, valid JSON object matching the exact schema below. You MUST use the \`thought_process\` key FIRST to calculate your math and R:R before defining the trade parameters. If you don't calculate the R:R in text first, the numbers will be invalid.
+Output strictly the JSON object. Do not wrap your response in markdown formatting or backticks.
+
+{
+  "thought_process": "Briefly evaluate the EMAs, state the LTF BOS, calculate the Entry, SL, TP, and verify the R:R ratio mathematically BEFORE returning parameters.",
+  "calculated_rr": 0.0,
+  "technical_audit": {
+    "current_price": 0.0,
+    "ema_50": 0.0,
+    "ema_200": 0.0,
+    "price_position": "ABOVE_BOTH | BELOW_BOTH | BETWEEN_EMAS",
+    "ltf_bos": "BULLISH | BEARISH | NONE"
+  },
+  "market_structure": "BULLISH_TREND | BEARISH_TREND | RANGING | BREAKOUT",
+  "recommended_direction": "LONG | SHORT | NONE",
+  "strategy_applied": "PULLBACK | MOMENTUM_CONTINUATION | MEAN_REVERSION | BREAKOUT | NONE",
+  "execution_parameters": {
+    "entry_type": "Buy Limit | Sell Limit | Buy Stop | Sell Stop | Market | NONE",
+    "suggested_entry_price": 0.0,
+    "suggested_stop_loss": 0.0,
+    "suggested_take_profit": 0.0
+  },
+  "confidence_score": 0,
+  "institutional_rationale": {
+    "directional_bias": "...",
+    "execution_trigger": "...",
+    "invalidation_point": "...",
+    "take_profit_target": "...",
+    "fundamental_alignment": "..."
+  }
+}
 
 Current Market Context:
 ${JSON.stringify(snapshot, null, 2)}`;
 
-  const userPrompt = `Evaluate the raw market data for ${symbol} on the ${timeframe} timeframe at current price ${snapshot.current_price} and autonomously originate the highest probability trade setup, if any. Return the required JSON object execution profile.`;
+  let messages = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: `Evaluate the raw market data for ${symbol} on the ${timeframe} timeframe at current price ${snapshot.current_price} and autonomously originate the highest probability trade setup, if any. Return the required JSON object execution profile.` }
+  ];
 
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o",
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt }
-    ],
-    response_format: {
-      type: "json_schema",
-      json_schema: {
-        name: "trade_evaluation",
-        schema: {
-          type: "object",
-          properties: {
-            technical_audit: {
-              type: "object",
-              properties: {
-                current_price: { type: "number" },
-                ema_50: { type: "number" },
-                ema_200: { type: "number" },
-                price_position: { type: "string", enum: ["ABOVE_BOTH", "BELOW_BOTH", "BETWEEN_EMAS"] },
-                ltf_bos: { type: "string", enum: ["BULLISH", "BEARISH", "NONE"] }
-              },
-              required: ["current_price", "ema_50", "ema_200", "price_position", "ltf_bos"],
-              additionalProperties: false
-            },
-            market_structure: { type: "string", enum: ["BULLISH_TREND", "BEARISH_TREND", "RANGING", "BREAKOUT"] },
-            recommended_direction: { type: "string", enum: ["LONG", "SHORT"] },
-            strategy_applied: { type: "string", enum: ["PULLBACK", "MOMENTUM_CONTINUATION", "MEAN_REVERSION", "NONE"] },
-            execution_parameters: {
-              type: "object",
-              properties: {
-                entry_type: { type: "string", enum: ["Buy Limit", "Sell Limit", "Buy Stop", "Sell Stop", "Market", "NONE"] },
-                suggested_entry_price: { type: ["number", "null"] },
-                suggested_stop_loss: { type: ["number", "null"] },
-                suggested_take_profit: { type: ["number", "null"] }
-              },
-              required: ["entry_type", "suggested_entry_price", "suggested_stop_loss", "suggested_take_profit"],
-              additionalProperties: false
-            },
-            confidence_score: { type: "number" },
-            institutional_rationale: {
-              type: "object",
-              properties: {
-                directional_bias: { type: "string" },
-                execution_trigger: { type: "string" },
-                invalidation_point: { type: "string" },
-                take_profit_target: { type: "string" },
-                fundamental_alignment: { type: "string" }
-              },
-              required: ["directional_bias", "execution_trigger", "invalidation_point", "take_profit_target", "fundamental_alignment"],
-              additionalProperties: false
-            }
-          },
-          required: ["technical_audit", "market_structure", "recommended_direction", "strategy_applied", "execution_parameters", "confidence_score", "institutional_rationale"],
-          additionalProperties: false
-        },
-        strict: true
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: messages as any,
+      response_format: { type: "json_object" },
+      temperature: 0.1
+    });
+
+    const content = response.choices[0].message.content;
+    if (!content) throw new Error("No content returned from AI");
+    
+    // 0. Native JSON Parsing
+    let parsedJson;
+    try {
+      parsedJson = JSON.parse(content);
+    } catch (e: any) {
+      console.warn(`[Validation] Attempt ${attempt} failed JSON.parse. Retrying...`);
+      messages.push({ role: "assistant", content });
+      messages.push({ role: "user", content: `Your response was not valid JSON: ${e.message}. Please respond EXCLUSIVELY with the raw JSON object.` });
+      continue;
+    }
+
+    // 1. Zod Parsing
+    const parsed = TradeEvaluationSchema.safeParse(parsedJson);
+    if (!parsed.success) {
+      console.warn(`[Validation] Attempt ${attempt} failed Zod schema parsing. Retrying...`);
+      messages.push({ role: "assistant", content });
+      messages.push({ role: "user", content: `Your JSON failed validation: ${parsed.error.message}. Please fix the structure and try again. Ensure all required fields are present and correctly typed.` });
+      continue;
+    }
+
+    const data = parsed.data;
+
+    // 2. R:R Mathematical Verification
+    if (data.recommended_direction !== "NONE" && data.execution_parameters.suggested_entry_price && data.execution_parameters.suggested_stop_loss && data.execution_parameters.suggested_take_profit) {
+      const entry = data.execution_parameters.suggested_entry_price;
+      const sl = data.execution_parameters.suggested_stop_loss;
+      const tp = data.execution_parameters.suggested_take_profit;
+      
+      const risk = Math.abs(entry - sl);
+      const reward = Math.abs(entry - tp);
+      const rr = risk > 0 ? reward / risk : 0;
+      
+      let requiredRR = 1.2;
+      if (data.confidence_score >= 90) requiredRR = 1.0;
+      else if (data.confidence_score >= 80) requiredRR = 1.1;
+      
+      if (rr < requiredRR - 0.05) { // Adding small epsilon tolerance
+        console.warn(`[Validation] Attempt ${attempt} failed R:R math (R:R=${rr.toFixed(2)}, Required=${requiredRR}). Retrying...`);
+        messages.push({ role: "assistant", content });
+        messages.push({ role: "user", content: `Your suggested trade yields a Risk/Reward ratio of 1:${rr.toFixed(2)}, but your confidence score of ${data.confidence_score} requires a minimum R:R of 1:${requiredRR}. You MUST either tighten your stop loss, extend your take profit target, or change recommended_direction to "NONE".` });
+        continue;
       }
-    },
-    temperature: 0.1
-  });
+    }
 
-  const content = response.choices[0].message.content;
-  if (!content) throw new Error("No content returned from AI");
+    return data;
+  }
   
-  return JSON.parse(content);
+  throw new Error(`AI failed to provide a valid JSON response after 3 attempts. Last Warning: ${messages[messages.length - 1]?.content}`);
 }
 
 async function revalidateOpportunity(signal: any, snapshot: LogicContext, newsContext: string | null) {
@@ -275,12 +290,13 @@ Breaking News & Macro: ${newsContext || "No major macro events."}
 1. MACRO CONTRADICTION: If the new breaking news fundamentally contradicts the original thesis (e.g. a 'risk-off' geopolitical shock occurs but the signal is LONG equities), you MUST reject the signal.
 2. STRUCTURAL DECAY: If the price action has significantly shifted and the original structural rationale no longer makes sense, reject it.
 3. DO NOT HALLUCINATE MATH: The system has ALREADY mathematically verified that the current price has NOT hit the stop loss or take profit. Do NOT reject the setup claiming the stop loss was hit. You must only reject based on fundamental macro shifts or severe structural decay.
-4. If the thesis remains valid and supported by the new context, keep it valid.
+4. PROFIT SECURING (SCALPING): If the trade is currently in profit, but the momentum has slowed, the market is ranging, or we are approaching a strong structural barrier, issue a TAKE_PROFIT command to secure the bag early. Do not get greedy.
+5. If the thesis remains strongly valid and supported by the new context, issue MAINTAIN.
 
 You MUST respond strictly with a raw JSON object:
 {
-  "is_valid": boolean,
-  "rejection_reason": "If invalid, concisely explain why the new context destroys the thesis. If valid, return null."
+  "action": "MAINTAIN" | "REJECT" | "TAKE_PROFIT",
+  "reason": "Explain why you chose this action."
 }`;
 
   const userPrompt = `Re-evaluate the ${signal.symbol} signal.`;
@@ -298,10 +314,10 @@ You MUST respond strictly with a raw JSON object:
         schema: {
           type: "object",
           properties: {
-            is_valid: { type: "boolean" },
-            rejection_reason: { type: ["string", "null"] }
+            action: { type: "string", enum: ["MAINTAIN", "REJECT", "TAKE_PROFIT"] },
+            reason: { type: "string" }
           },
-          required: ["is_valid", "rejection_reason"],
+          required: ["action", "reason"],
           additionalProperties: false
         },
         strict: true
@@ -327,13 +343,19 @@ You MUST respond strictly with a raw JSON object:
 serve(async (req) => {
   const { searchParams } = new URL(req.url);
   const isCron = req.method === "POST";
-  const timeframe = searchParams.get("timeframe") ?? (isCron ? "1H" : "1D");
+  let reqBody = {};
+  if (req.method === "POST" && req.headers.get("content-type")?.includes("application/json")) {
+    try {
+      reqBody = await req.json();
+    } catch (e) {}
+  }
+  const timeframe = (reqBody as any).timeframe ?? searchParams.get("timeframe") ?? (isCron ? "1H" : "1D");
   const modelId = searchParams.get("model_id") ?? undefined;
   const modelVersion = searchParams.get("model_version") ?? undefined;
   const newsContext = searchParams.get("news") ?? undefined;
   const symbolsParam =
-    searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "XAUUSD,XAGUSD,BTCUSD,UKOIL,EURUSD,GBPUSD,USDJPY,US30,NAS100";
-  const symbols = symbolsParam.split(",").map((s) => s.trim()).filter(Boolean);
+    (reqBody as any).symbols?.join(",") || searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "XAUUSD,XAGUSD,BTCUSD,UKOIL,EURUSD,GBPUSD,USDJPY,US30,NAS100";
+  const symbols = symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean);
 
   const url = Deno.env.get("SUPABASE_URL");
   const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -448,18 +470,18 @@ serve(async (req) => {
               const hoursElapsed = (Date.now() - new Date(signal.created_at).getTime()) / (1000 * 60 * 60);
               if (hoursElapsed > 12) {
                 await supabase.from("trade_opportunities").update({ status: "EXPIRED", ai_risks: "Expired: 12h TTL exceeded without execution." }).eq("id", signal.id);
-                await cancelBrokerOrdersForOpportunity(supabase, signal.id);
+                // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
                 console.log(`[Validation] EXPIRED ${signal.symbol}: 12h TTL expired.`);
                 continue;
               }
 
               // 2. Fetch Live Snapshot
-              const result = await fetchPaperBars(signal.symbol, signal.timeframe);
+              const result = await fetchPaperBars(signal.symbol, signal.timeframe, 100, supabase);
               const snapshot = getContextSnapshot(
-                result.bars.map((b: any) => b.t),
-                result.bars.map((b: any) => b.h),
-                result.bars.map((b: any) => b.l),
-                result.bars.map((b: any) => b.c)
+                result.map((b: any) => b.t),
+                result.map((b: any) => b.h),
+                result.map((b: any) => b.l),
+                result.map((b: any) => b.c)
               );
 
               // 3. Math Validation (Stop Loss Hit)
@@ -468,7 +490,7 @@ serve(async (req) => {
                 if ((signal.side === 'LONG' && snapshot.current_price <= stopLoss) || 
                     (signal.side === 'SHORT' && snapshot.current_price >= stopLoss)) {
                   await supabase.from("trade_opportunities").update({ status: "LOST", r_multiple: -1, ai_risks: "Technical Invalidation: Stop Loss crossed." }).eq("id", signal.id);
-                  await cancelBrokerOrdersForOpportunity(supabase, signal.id);
+                  // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
                   console.log(`[Validation] LOST ${signal.symbol}: Stop loss crossed by live price.`);
                   continue;
                 }
@@ -483,12 +505,19 @@ serve(async (req) => {
               
               const evalResult = await revalidateOpportunity(signal, snapshot, currentContext);
               
-              if (!evalResult.is_valid) {
-                await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Invalidated by AI Risk Officer: ${evalResult.rejection_reason}` }).eq("id", signal.id);
-                await cancelBrokerOrdersForOpportunity(supabase, signal.id);
-                console.log(`[Validation] REJECTED ${signal.symbol} by AI: ${evalResult.rejection_reason}`);
+              if (evalResult.action === "REJECT") {
+                await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Invalidated by AI Risk Officer: ${evalResult.reason}` }).eq("id", signal.id);
+                // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
+                console.log(`[Validation] REJECTED ${signal.symbol} by AI: ${evalResult.reason}`);
+              } else if (evalResult.action === "TAKE_PROFIT") {
+                // For scalping, if AI decides to secure profits early, we mark it as WON (or REJECTED with profit info) 
+                // Since 'REJECTED' triggers auto-eject, we can update it to REJECTED but state it's a profit take.
+                // Wait, if we mark it as REJECTED, it triggers auto-eject to close the live positions.
+                await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Profit Secured by AI Risk Officer: ${evalResult.reason}` }).eq("id", signal.id);
+                // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
+                console.log(`[Validation] TAKE_PROFIT ${signal.symbol} by AI: ${evalResult.reason}`);
               } else {
-                console.log(`[Validation] VALID ${signal.symbol}: Thesis remains intact.`);
+                console.log(`[Validation] MAINTAIN ${signal.symbol}: Thesis remains intact.`);
               }
             } catch (err: any) {
                console.error(`[Validation Error] Failed to revalidate ${signal.symbol}:`, err.message);
@@ -522,9 +551,9 @@ serve(async (req) => {
             try {
               console.log(`[Data Fetch] Fetching market data for ${symbol}...`);
               sendEvent({ type: 'progress', message: `[Data Fetch] Fetching historical price data for ${symbol}...` });
-              const result = await fetchPaperBars(symbol, timeframe);
-              bars = result.bars;
-              source = result.source;
+              const result = await fetchPaperBars(symbol, timeframe, 100, supabase);
+              bars = result;
+              source = "Broker API";
             } catch (err: any) {
               console.error(`[Data Fetch Error] Failed to fetch data for ${symbol}: ${err.message}`);
               if (err.message === "META_API_FAILURE") {
@@ -544,14 +573,20 @@ serve(async (req) => {
               return;
             }
             
-            console.log(`\n[Info] [Data Fetch] Successfully fetched ${bars.length} bars from ${source} for ${symbol}.`);
-            sendEvent({ type: 'progress', message: `[Data Fetch] Successfully acquired ${bars.length} data points from ${source}.` });
+            console.log(`\n[Info] [Data Fetch v2] Successfully fetched ${bars.length} bars from ${source} for ${symbol}.`);
+            sendEvent({ type: 'progress', message: `[Data Fetch v2] Successfully acquired ${bars.length} data points from ${source}.` });
 
             // Store fetched bars in PTI database asynchronously
             // [TEMPORARILY DISABLED] This is causing WORKER_RESOURCE_LIMIT due to thousands of unawaited N+1 queries.
             // saveBars(supabase, symbol, timeframe, bars).catch(err => 
             //   console.error(`[Error] Failed to save bars for ${symbol}:`, err)
             // );
+
+            if (bars.length < 50) {
+              rejections.push({ symbol, reason: `Insufficient historical data (${bars.length} bars)`, layer: "Data" });
+              sendEvent({ type: 'progress', message: `[Rejected] Insufficient data for ${symbol}.` });
+              return;
+            }
 
             // LAYER A: Deterministic Evaluation Guard
             sendEvent({ type: 'progress', message: `[Layer A: Deterministic Guard] Evaluating mathematical momentum and regime...` });
@@ -560,27 +595,47 @@ serve(async (req) => {
             let htf_trend: 'BULLISH' | 'BEARISH' | 'CHOP' = 'CHOP';
             let htf_support: number[] = [];
             let htf_resistance: number[] = [];
+            
+            let mtfa_trend: 'BULLISH' | 'BEARISH' | 'CHOP' | undefined;
+            let mtfa_ema_50: number | null = null;
+            let mtfa_ema_200: number | null = null;
 
             if (timeframe !== '1D') {
               try {
-                const result = await fetchPaperBars(symbol, '1D');
+                const result = await fetchPaperBars(symbol, '1D', 100, supabase);
                 const dailySnapshot = getContextSnapshot(
-                  result.bars.map((b: any) => b.t),
-                  result.bars.map((b: any) => b.h),
-                  result.bars.map((b: any) => b.l),
-                  result.bars.map((b: any) => b.c)
+                  result.map((b: any) => b.t),
+                  result.map((b: any) => b.h),
+                  result.map((b: any) => b.l),
+                  result.map((b: any) => b.c)
                 );
                 if (dailySnapshot.trend_alignment.startsWith('BULLISH')) htf_trend = 'BULLISH';
                 else if (dailySnapshot.trend_alignment.startsWith('BEARISH')) htf_trend = 'BEARISH';
                 
-                if (result.bars.length > 0) {
-                  const lastBar = result.bars[result.bars.length - 1];
+                if (result.length > 0) {
+                  const lastBar = result[result.length - 1];
                   const pivots = calculatePivotPoints(lastBar.h, lastBar.l, lastBar.c);
                   htf_support = pivots.support;
                   htf_resistance = pivots.resistance;
                 }
+                
+                // Fetch MTFA (1H or 4H) for confluence
+                const mtfaTf = timeframe === '15Min' ? '1H' : '4H';
+                const mtfaResult = await fetchPaperBars(symbol, mtfaTf, 100, supabase);
+                const mtfaSnapshot = getContextSnapshot(
+                  mtfaResult.map((b: any) => b.t),
+                  mtfaResult.map((b: any) => b.h),
+                  mtfaResult.map((b: any) => b.l),
+                  mtfaResult.map((b: any) => b.c)
+                );
+                if (mtfaSnapshot.trend_alignment.startsWith('BULLISH')) mtfa_trend = 'BULLISH';
+                else if (mtfaSnapshot.trend_alignment.startsWith('BEARISH')) mtfa_trend = 'BEARISH';
+                else mtfa_trend = 'CHOP';
+                
+                mtfa_ema_50 = mtfaSnapshot.ema_50;
+                mtfa_ema_200 = mtfaSnapshot.ema_200;
               } catch (e) {
-                console.warn(`[Macro Fetch] Failed to fetch 1D trend for ${symbol}`);
+                console.warn(`[Macro Fetch] Failed to fetch 1D/MTFA trend for ${symbol}`);
               }
             }
 
@@ -591,6 +646,9 @@ serve(async (req) => {
               bars.map((b) => b.c)
             );
             rawSnapshot.htf_trend = htf_trend;
+            rawSnapshot.mtfa_trend = mtfa_trend;
+            rawSnapshot.mtfa_ema_50 = mtfa_ema_50;
+            rawSnapshot.mtfa_ema_200 = mtfa_ema_200;
             if (htf_support.length > 0) {
               rawSnapshot.htf_support = htf_support;
               rawSnapshot.htf_resistance = htf_resistance;
@@ -603,9 +661,29 @@ serve(async (req) => {
               fundamental_context = generateMacroContext(symbol, allEvents, headlines);
             }
 
+            // Fetch swing/positional agent context from market_context table
+            let agent_context: any[] = [];
+            try {
+              const { data: ctxRows } = await supabase
+                .from('market_context')
+                .select('agent_persona, macro_bias, key_levels, invalidation_price, narrative')
+                .eq('symbol', symbol)
+                .gt('expires_at', new Date().toISOString())
+                .order('created_at', { ascending: false })
+                .limit(5);
+              if (ctxRows && ctxRows.length > 0) {
+                agent_context = ctxRows;
+                console.log(`[Market Context] Loaded ${ctxRows.length} agent context entries for ${symbol}`);
+                sendEvent({ type: 'progress', message: `[Market Context] Swing Trader Fib levels loaded for ${symbol}: ${ctxRows.map(c => c.agent_persona + ' → ' + c.macro_bias).join(', ')}` });
+              }
+            } catch (ctxErr: any) {
+              console.warn(`[Market Context] Failed to load agent context for ${symbol}: ${ctxErr.message}`);
+            }
+
             const snapshot = {
               ...rawSnapshot,
-              fundamental_context
+              fundamental_context,
+              agent_context: agent_context.length > 0 ? agent_context : undefined
             };
 
             // PRE-EVALUATION ASSET ISOLATION (with candle-duration caching)
@@ -649,7 +727,7 @@ serve(async (req) => {
               return;
             }
 
-            console.log(`[Strategy Eval] Market snapshot for ${symbol}: Trend=${snapshot.trend_alignment}, RSI=${snapshot.rsi_14.toFixed(2)}, CurrentPrice=${snapshot.current_price}`);
+            console.log(`[Strategy Eval] Market snapshot for ${symbol}: Trend=${snapshot.trend_alignment}, RSI=${snapshot.rsi_14?.toFixed(2) ?? 'N/A'}, CurrentPrice=${snapshot.current_price}`);
             
             // LAYER A: Deterministic Guard
             // [MODIFIED]: CHOP regimes now bypass the halt and proceed to the AI for Mean Reversion evaluation.
@@ -838,13 +916,17 @@ serve(async (req) => {
             const riskPoints = Math.abs(entry_price - stop_loss);
             const rewardPoints = Math.abs(take_profit - entry_price);
             const riskRewardRatio = riskPoints > 0 ? (rewardPoints / riskPoints) : 0;
+            
+            let deskRequiredRR = 1.5;
+            if (confidence_score >= 90) deskRequiredRR = 1.2;
+            else if (confidence_score >= 80) deskRequiredRR = 1.3;
 
-            if (riskRewardRatio < 1.45) {
-              console.log(`[Layer C: Execution Desk] REJECTED ${symbol}: Risk:Reward ratio (${riskRewardRatio.toFixed(2)}) is below the institutional minimum of 1.5.`);
-              sendEvent({ type: 'progress', message: `[Layer C: Execution Desk] REJECTED: Structural mismatch. R:R ratio (${riskRewardRatio.toFixed(2)}) is below minimum of 1.5.` });
+            if (riskRewardRatio < deskRequiredRR - 0.05) {
+              console.log(`[Layer C: Execution Desk] REJECTED ${symbol}: Risk:Reward ratio (${riskRewardRatio.toFixed(2)}) is below the institutional minimum of ${deskRequiredRR} for Tier score ${confidence_score}.`);
+              sendEvent({ type: 'progress', message: `[Layer C: Execution Desk] REJECTED: Structural mismatch. R:R ratio (${riskRewardRatio.toFixed(2)}) is below minimum of ${deskRequiredRR}.` });
               rejections.push({
                 symbol,
-                reason: `Structural R:R mismatch: Risk:Reward ratio is ${riskRewardRatio.toFixed(2)}, which is below the required 1:1.5 threshold.`,
+                reason: `Structural R:R mismatch: Risk:Reward ratio is ${riskRewardRatio.toFixed(2)}, which is below the required 1:${deskRequiredRR} threshold for a ${confidence_score} confidence score.`,
                 layer: "Execution Desk"
               });
               await supabase.from("trade_opportunities").insert({
@@ -853,7 +935,7 @@ serve(async (req) => {
                 timeframe: timeframe.toLowerCase(),
                 status: "REJECTED",
                 ai_summary: institutional_rationale,
-                ai_risks: `Rejected by Execution Desk: R:R ratio ${riskRewardRatio.toFixed(2)} < 1.5`,
+                ai_risks: `Rejected by Execution Desk: R:R ratio ${riskRewardRatio.toFixed(2)} < ${deskRequiredRR}`,
                 model_id: modelId,
                 model_version: modelVersion,
                 risk_summary: `RSI ${snapshot.rsi_14}`

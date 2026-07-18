@@ -58,6 +58,53 @@ serve(async (req) => {
     // Create Supabase client with admin privileges to bypass RLS
     const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
+    if (event.event === 'charge.success' && event.data.reference?.startsWith('DEP-')) {
+      const reference = event.data.reference;
+      console.log(`Processing successful deposit for reference: ${reference}`);
+      
+      // 1. Get deposit request
+      const { data: request, error: reqError } = await supabase
+        .from('deposit_requests')
+        .select('*')
+        .eq('reference_code', reference)
+        .single();
+        
+      if (reqError || !request) {
+        console.error(`Deposit request not found for reference: ${reference}`);
+        return new Response('Deposit request not found', { status: 404 });
+      }
+      
+      if (request.status !== 'PENDING_PAYMENT') {
+        console.log(`Deposit ${reference} already processed. Current status: ${request.status}`);
+        return new Response('Already processed', { status: 200 });
+      }
+
+      // 2. Update status to PENDING_CLEARANCE
+      await supabase
+        .from('deposit_requests')
+        .update({ status: 'PENDING_CLEARANCE' })
+        .eq('id', request.id);
+        
+      // 3. Update the wallet's ledger_balance
+      const { data: wallet, error: walletError } = await supabase
+        .from('wallets')
+        .select('ledger_balance')
+        .eq('id', request.wallet_id)
+        .single();
+        
+      if (!walletError && wallet) {
+        await supabase
+          .from('wallets')
+          .update({ ledger_balance: Number(wallet.ledger_balance) + Number(request.amount) })
+          .eq('id', request.wallet_id);
+      }
+      
+      return new Response(JSON.stringify({ received: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
     if (event.event === 'charge.success' || event.event === 'subscription.create') {
       const email = event.data.customer.email;
       const customerCode = event.data.customer.customer_code;
