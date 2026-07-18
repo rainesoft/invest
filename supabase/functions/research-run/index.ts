@@ -135,7 +135,7 @@ ${historicalMemory || "No historical data available for this asset yet."}
    - If the market structure does not allow for the required R:R ratio, you MUST set \`recommended_direction\` to "NONE". Do not force trades that fail the math!
 5. RANGING MARKETS & BREAKOUTS (MANDATORY RULE):
    - If the market is RANGING (price between 50 and 200 EMAs), a 'recommended_direction' of NONE is STRICTLY FORBIDDEN unless R:R fails.
-   - You MUST always identify the nearest Swing High and Swing Low from the bars data. Place a Buy Stop 0.1% above the Swing High and a Sell Stop 0.1% below the Swing Low. The tighter the range, the more explosive the eventual breakout.
+   - You MUST always identify the nearest Swing High and Swing Low. Based on the dominant macro bias or HTF trend, place EITHER a Buy Stop 0.1% above the Swing High OR a Sell Stop 0.1% below the Swing Low. Do not place both.
    - [MACRO-ALIGNED MEAN REVERSION]: When forced to use MEAN_REVERSION in a range, you MUST align the direction of the trade with the underlying fundamental macro bias provided in the context.
 6. FUNDAMENTAL MACRO OVERRIDE (COMMODITIES & FOREX): Technical EMAs are SECONDARY to dominant macro narratives and active supply/demand shocks.
    - If the \`fundamental_context\` headlines reference overwhelming macro drivers (e.g., active military conflicts, aggressive rate hike rhetoric), this OVERRIDES technical ranging/chop classifications.
@@ -145,7 +145,38 @@ ${historicalMemory || "No historical data available for this asset yet."}
    - Counter-trend trades are only allowed if the setup is A-Tier and R:R > 1.2.
 
 [REQUIRED OUTPUT FORMAT]
-You must output a single, valid JSON object matching the requested execution profile. You MUST use the \`thought_process\` key FIRST to calculate your math and R:R before defining the trade parameters. If you don't calculate the R:R in text first, the numbers will be invalid.
+You must output a single, valid JSON object matching the exact schema below. You MUST use the \`thought_process\` key FIRST to calculate your math and R:R before defining the trade parameters. If you don't calculate the R:R in text first, the numbers will be invalid.
+
+\`\`\`json
+{
+  "thought_process": "Briefly evaluate the EMAs, state the LTF BOS, calculate the Entry, SL, TP, and verify the R:R ratio mathematically BEFORE returning parameters.",
+  "calculated_rr": 0.0,
+  "technical_audit": {
+    "current_price": 0.0,
+    "ema_50": 0.0,
+    "ema_200": 0.0,
+    "price_position": "ABOVE_BOTH | BELOW_BOTH | BETWEEN_EMAS",
+    "ltf_bos": "BULLISH | BEARISH | NONE"
+  },
+  "market_structure": "BULLISH_TREND | BEARISH_TREND | RANGING | BREAKOUT",
+  "recommended_direction": "LONG | SHORT | NONE",
+  "strategy_applied": "PULLBACK | MOMENTUM_CONTINUATION | MEAN_REVERSION | NONE",
+  "execution_parameters": {
+    "entry_type": "Buy Limit | Sell Limit | Buy Stop | Sell Stop | Market | NONE",
+    "suggested_entry_price": 0.0,
+    "suggested_stop_loss": 0.0,
+    "suggested_take_profit": 0.0
+  },
+  "confidence_score": 0,
+  "institutional_rationale": {
+    "directional_bias": "...",
+    "execution_trigger": "...",
+    "invalidation_point": "...",
+    "take_profit_target": "...",
+    "fundamental_alignment": "..."
+  }
+}
+\`\`\`
 
 Current Market Context:
 ${JSON.stringify(snapshot, null, 2)}`;
