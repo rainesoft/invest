@@ -18,16 +18,16 @@ serve(async (req) => {
     }
 
     const liability = Number(liabilityData || 0);
-    const stanbicTotal = Number(bankData || 0);
+    const bankTotal = Number(bankData || 0);
     const exnessTotal = Number(brokerData || 0);
     
-    const totalAssets = stanbicTotal + exnessTotal;
+    const totalAssets = bankTotal + exnessTotal;
     const solvencyRatio = liability > 0 ? (totalAssets / liability) : 1.0;
 
     // 2. Insert Snapshot
     const { error: insertError } = await supabase.from('treasury_snapshots').insert({
       total_customer_liability: liability,
-      stanbic_bank_total: stanbicTotal,
+      bank_total: bankTotal,
       exness_master_total: exnessTotal,
       total_assets: totalAssets,
       solvency_ratio: solvencyRatio,

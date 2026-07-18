@@ -780,7 +780,7 @@ CREATE TABLE IF NOT EXISTS "public"."treasury_snapshots" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "snapshot_timestamp" timestamp with time zone DEFAULT "timezone"('utc'::"text", "now"()) NOT NULL,
     "total_customer_liability" numeric NOT NULL,
-    "stanbic_bank_total" numeric NOT NULL,
+    "bank_total" numeric NOT NULL,
     "exness_master_total" numeric NOT NULL,
     "total_assets" numeric NOT NULL,
     "solvency_ratio" numeric NOT NULL,
