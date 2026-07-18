@@ -7,7 +7,7 @@ import Logo from './Logo';
 import { Menu, X, Settings, HelpCircle } from 'lucide-react';
 import LogoutButton from './LogoutButton';
 
-export default function VaultNavbar() {
+export default function VaultNavbar({ isAdmin = false }: { isAdmin?: boolean }) {
   const [isOpen, setIsOpen] = useState(false);
   const pathname = usePathname();
 
@@ -38,7 +38,7 @@ export default function VaultNavbar() {
               
               {/* Desktop Links */}
               <div className="desktop-nav" style={{ gap: '24px', alignItems: 'center', color: 'var(--text-secondary)', fontSize: '14px', fontWeight: 500 }}>
-                <Link href="/research" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', opacity: pathname === '/research' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>Research</Link>
+                {isAdmin && <Link href="/research" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', opacity: pathname === '/research' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>Research</Link>}
                 <Link href="/opportunities" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', opacity: pathname === '/opportunities' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>Signals</Link>
                 <Link href="/dashboard" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', opacity: pathname === '/dashboard' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>Vault</Link>
                 <Link href="/wallet" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', opacity: pathname === '/wallet' ? 1 : 0.8, ':hover': { opacity: 1 } } as any}>Wallet</Link>
@@ -72,7 +72,7 @@ export default function VaultNavbar() {
           {/* Mobile Dropdown Menu */}
           {isOpen && (
             <div className="mobile-nav" style={{ flexDirection: 'column', gap: '20px', marginTop: '24px', paddingBottom: '16px', borderTop: '1px solid var(--border-color)', paddingTop: '24px' }}>
-              <Link onClick={() => setIsOpen(false)} href="/research" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500 }}>Research</Link>
+              {isAdmin && <Link onClick={() => setIsOpen(false)} href="/research" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500 }}>Research</Link>}
               <Link onClick={() => setIsOpen(false)} href="/opportunities" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500 }}>Signals</Link>
               <Link onClick={() => setIsOpen(false)} href="/dashboard" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500 }}>Vault</Link>
               <Link onClick={() => setIsOpen(false)} href="/wallet" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 500 }}>Wallet</Link>

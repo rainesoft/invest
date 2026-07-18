@@ -15,12 +15,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: 'Missing env variables' }, { status: 500 });
     }
 
-    let fnUrl = url;
-    if (url.includes('localhost') || url.includes('127.0.0.1') || url.includes('host.docker.internal')) {
-      fnUrl = `${url}/functions/v1`;
-    } else {
-      fnUrl = url.replace('.supabase.co', '.functions.supabase.co');
-    }
+    const fnUrl = `${url}/functions/v1`;
     
     const params = new URLSearchParams();
     params.append('symbols', symbol);
