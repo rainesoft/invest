@@ -51,8 +51,10 @@ serve(async (req) => {
            : Number((entryPrice - riskDistance).toFixed(5));
       }
       
-      // Format: ID,SYMBOL,SIDE,VOLUME,STOPLOSS,TAKEPROFIT,TRADE_TYPE
-      csvResponse += `${trade.id},${trade.symbol},${trade.side},${trade.volume},${stopLossRaw},${targetTP},${trade.trade_type}\n`;
+      const orderType = opp?.entry_plan_json?.order_type || (trade.side === "LONG" ? "BUY MARKET" : "SELL MARKET");
+
+      // Format: ID,SYMBOL,SIDE,VOLUME,STOPLOSS,TAKEPROFIT,TRADE_TYPE,ENTRY_PRICE,ORDER_TYPE
+      csvResponse += `${trade.id},${trade.symbol},${trade.side},${trade.volume},${stopLossRaw},${targetTP},${trade.trade_type},${entryPrice},${orderType}\n`;
       
       // Lock the trade so it isn't picked up twice by multiple polls
       await supabase.from("user_trades").update({ status: "VPS_PROCESSING" }).eq("id", trade.id);

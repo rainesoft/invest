@@ -18,21 +18,21 @@ export const ACADEMY_POSTS: Post[] = [
   {
     id: '1',
     slug: 'connect-exness-broker',
-    title: 'How to Connect Your Exness Account to Rainebank',
-    excerpt: 'A super simple guide to setting up your Exness trading account and connecting it to our platform so the AI can start trading for you.',
+    title: 'How to Connect Your Exness Account to Rainebank (MT5)',
+    excerpt: 'A super simple guide to setting up your Exness trading account and running the Rainebank Expert Advisor on MetaTrader 5.',
     category: 'Setup Guides',
     isPremium: false,
-    date: '2026-07-06',
+    date: '2026-07-18',
     readTime: '4 min read',
     content: (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
         <p style={{ fontSize: '18px', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
-          To let Rainebank's AI trade for you, you first need a broker. A broker is just a bank that lets you buy and sell currencies. We highly recommend <strong>Exness</strong> because their fees are incredibly low, which means you keep more of your profits!
+          To let Rainebank's AI trade for you, you first need a broker. We highly recommend <strong>Exness</strong> because their raw spreads and low commissions mean you keep more of your profits!
         </p>
 
         <h3 style={{ fontSize: '24px', fontWeight: 600, margin: '24px 0 8px 0', color: 'var(--text-primary)' }}>Step 1: Create an Exness Account</h3>
         <p style={{ fontSize: '16px', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
-          First, click the button below to create your Exness account. By using this special link, you get placed into our VIP group which gives you the best trading speeds.
+          First, click the button below to create your Exness account. By using this special link, you get placed into our VIP group which gives you the best execution speeds.
         </p>
         <div style={{ padding: '24px', background: 'var(--bg-gradient-1)', borderRadius: '12px', border: '1px solid var(--accent)' }}>
           <a href="https://one.exnessonelink.com/a/f7qeqc4thh" target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', background: 'var(--accent)', color: '#fff', padding: '12px 24px', borderRadius: '8px', textDecoration: 'none', fontWeight: 600 }}>
@@ -40,22 +40,17 @@ export const ACADEMY_POSTS: Post[] = [
           </a>
         </div>
 
-        <h3 style={{ fontSize: '24px', fontWeight: 600, margin: '24px 0 8px 0', color: 'var(--text-primary)' }}>Step 2: Get Your Secret Keys</h3>
+        <h3 style={{ fontSize: '24px', fontWeight: 600, margin: '24px 0 8px 0', color: 'var(--text-primary)' }}>Step 2: Install MetaTrader 5</h3>
         <p style={{ fontSize: '16px', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
-          Instead of giving us your personal login password, you are going to use a tool called <strong>MetaAPI</strong> to generate a secure "key".
+          Download MetaTrader 5 (MT5) from the Exness website and log into your trading account. MT5 is the industry standard terminal where our automated trading robot (Expert Advisor) will live.
         </p>
-        <ul style={{ fontSize: '16px', lineHeight: '1.6', color: 'var(--text-secondary)', marginLeft: '24px' }}>
-          <li>Go to the MetaAPI website and create a free account.</li>
-          <li>Click "Add Connection" and type in your Exness account details.</li>
-          <li>Once connected, copy the long string of letters and numbers called the <strong>Account ID</strong> and generate an <strong>API Token</strong>.</li>
-        </ul>
 
-        <h3 style={{ fontSize: '24px', fontWeight: 600, margin: '24px 0 8px 0', color: 'var(--text-primary)' }}>Step 3: Paste Your Keys into Rainebank</h3>
+        <h3 style={{ fontSize: '24px', fontWeight: 600, margin: '24px 0 8px 0', color: 'var(--text-primary)' }}>Step 3: Attach the Rainebank EA</h3>
         <p style={{ fontSize: '16px', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
-          Finally, go to your Rainebank Settings page. Under "Broker Connection", choose "MetaAPI" from the dropdown. Paste the Token and Account ID you just copied in Step 2.
+          Navigate to the <strong>Vault</strong> page on Rainebank and copy your personal Security Token. Then, download the `.ex5` Expert Advisor file and drop it into the `Experts` folder in your MT5 terminal. 
         </p>
         <p style={{ fontSize: '16px', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
-          Click Save, and you're done! The AI is now officially linked to your account.
+          Attach the EA to a chart, ensure "Allow Algorithmic Trading" is enabled, and paste your token into the EA inputs window. The EA will instantly connect to our backend servers and begin trading automatically!
         </p>
       </div>
     )
@@ -64,27 +59,27 @@ export const ACADEMY_POSTS: Post[] = [
     id: '2',
     slug: 'setup-telegram-notifications',
     title: 'How to Get Trade Alerts on Telegram',
-    excerpt: 'Learn how to connect Rainebank to your Telegram app so you get a text message on your phone every time a trade happens.',
+    excerpt: 'Learn how to connect the Rainebank EA to your Telegram app so you get a push notification on your phone every time a trade executes.',
     category: 'Setup Guides',
     isPremium: false,
-    date: '2026-07-06',
+    date: '2026-07-18',
     readTime: '3 min read',
     content: (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
         <p style={{ fontSize: '18px', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
-          Our AI trades extremely fast. If you want to know exactly what it's doing while you're away from your computer, you can set up Telegram alerts! We will send a direct message straight to your phone whenever a trade opens or closes.
+          Our AI trades extremely fast. If you want to know exactly what it's doing while you're away from your computer, you can set up Telegram alerts! The EA will send a direct message straight to your phone whenever it opens or closes a trade.
         </p>
+        <h3 style={{ fontSize: '20px', fontWeight: 600, margin: '8px 0 0 0', color: 'var(--text-primary)' }}>Step 1: Get Your Chat ID</h3>
         <p style={{ fontSize: '16px', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
-          <strong>Step 1: Go to Settings</strong><br/>
-          Navigate to your Rainebank Settings page. Scroll down to the <strong>Telegram Alerts</strong> section.
+          Message the official <strong>@RawDataBot</strong> on Telegram to find your personal Chat ID (a string of numbers like 123456789).
         </p>
+        <h3 style={{ fontSize: '20px', fontWeight: 600, margin: '8px 0 0 0', color: 'var(--text-primary)' }}>Step 2: Add it to the EA</h3>
         <p style={{ fontSize: '16px', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
-          <strong>Step 2: Connect</strong><br/>
-          Click the <strong>Connect Telegram</strong> button. This will automatically open the official Raine Bank Bot in your Telegram app.
+          When attaching the Rainebank EA to your MT5 chart, look for the "Telegram Chat ID" input field in the settings window. Paste your Chat ID there and click OK.
         </p>
+        <h3 style={{ fontSize: '20px', fontWeight: 600, margin: '8px 0 0 0', color: 'var(--text-primary)' }}>Step 3: Enable WebRequests</h3>
         <p style={{ fontSize: '16px', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
-          <strong>Step 3: Start the Bot</strong><br/>
-          Once Telegram opens, simply tap <strong>Start</strong> at the bottom of the screen. The bot will instantly link to your account and send you a confirmation message!
+          To allow MT5 to send messages to Telegram, go to Tools -> Options -> Expert Advisors. Check "Allow WebRequests for listed URL" and add `https://api.telegram.org` to the list. You're done!
         </p>
       </div>
     )

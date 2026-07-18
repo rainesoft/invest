@@ -52,6 +52,15 @@ serve(async (req) => {
         return new Response("Ignored REJECTED signal", { status: 200 });
       }
 
+      // Extract tier from ai_summary early to filter out noise
+      const tierMatch = (record.ai_summary || "").match(/(S|A|B|C)-Tier/);
+      const rawTier = tierMatch ? `${tierMatch[1]}-Tier` : null;
+
+      if (rawTier === "C-Tier") {
+        console.log("Skipping C-Tier broadcast to prevent alert fatigue.");
+        return new Response("Ignored C-Tier signal", { status: 200 });
+      }
+
       let subscribedUsers: { chatId: string }[] = [];
 
       // Fetch all users who have configured Telegram credentials
@@ -86,16 +95,21 @@ serve(async (req) => {
       const takeProfit = record.take_profit_json?.tp   ?? record.take_profit_json?.tp_price ?? "—";
       const orderType  = record.entry_plan_json?.order_type ?? "Limit";
 
-      // Extract tier and R:R from ai_summary
-      const tierMatch = (record.ai_summary || "").match(/(S|A|B|C)-Tier/);
+      // R:R formatting
       const rrMatch   = (record.ai_summary || "").match(/1:([0-9.]+)\s*Risk:Reward/);
-      const tier      = tierMatch ? escapeMd(tierMatch[1] + "-Tier") : "—";
+      const tier      = rawTier ? escapeMd(rawTier) : "—";
       const rr        = rrMatch   ? escapeMd(`1:${rrMatch[1]}`) : "—";
 
       const sideEmoji = record.side === "LONG" ? "🟢" : "🔴";
-      
+      const headerEmoji = (rawTier === "S-Tier" || rawTier === "A-Tier") ? "🚀" : "⚠️";
+      const headerTitle = (rawTier === "S-Tier" || rawTier === "A-Tier") ? "*AUTOPILOT PAMM EXECUTED*" : "*ACTIONABLE SIGNAL DETECTED*";
+      const subHeader = (rawTier === "S-Tier" || rawTier === "A-Tier") 
+        ? "✅ _Trade executed on Master Account\\. View Ledger\\._"
+        : "⚠️ _B\\-Tier Setup\\. Auto\\-execution skipped\\. Manual execution recommended\\._";
+
       const message = `
-🚨 *RAINEBANK ALPHA SIGNAL* 🚨
+${headerEmoji} ${headerTitle} ${headerEmoji}
+${subHeader}
 
 ${sideEmoji} *${symbol}* — *${side}* \\| ${tier}
 
@@ -109,8 +123,6 @@ ${sideEmoji} *${symbol}* — *${side}* \\| ${tier}
 
 *Institutional Rationale:*
 _${aiSummary}_
-
-[📊 View Ledger](https://yourdomain.com/dashboard)
       `.trim();
 
       const telegramUrl = `https://api.telegram.org/bot${CENTRAL_TELEGRAM_BOT_TOKEN}/sendMessage`;

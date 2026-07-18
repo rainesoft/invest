@@ -16,30 +16,45 @@ export default function WalletPage() {
   const [currency, setCurrency] = useState('USD');
   const [isDepositing, setIsDepositing] = useState(false);
 
+  const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [withdrawWalletId, setWithdrawWalletId] = useState('');
+  const [recipientCode, setRecipientCode] = useState('');
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
+
   useEffect(() => {
     fetchWallets();
   }, []);
 
   const fetchWallets = async () => {
     setLoading(true);
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return;
-    
-    const { data, error } = await supabase
-      .from('wallets')
-      .select('*')
-      .eq('user_id', session.user.id)
-      .eq('is_platform', false)
-      .order('currency', { ascending: true });
-      
-    if (data) setWallets(data);
-    setLoading(false);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const { data, error } = await supabase
+        .from('wallets')
+        .select('*')
+        .eq('user_id', session.user.id)
+        .eq('is_platform', false)
+        .order('currency', { ascending: true });
+
+      if (data) {
+        setWallets(data);
+        if (data.length > 0) {
+          setWithdrawWalletId(prev => prev || data[0].id);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch wallets:', err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleDeposit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsDepositing(true);
-    
+
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error('Not authenticated');
@@ -54,7 +69,7 @@ export default function WalletPage() {
       });
 
       const data = await res.json();
-      
+
       if (data.authorization_url) {
         window.location.href = data.authorization_url;
       } else {
@@ -67,59 +82,132 @@ export default function WalletPage() {
     }
   };
 
+  const handleWithdraw = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!withdrawWalletId) return toast.error('Please select a wallet');
+    
+    setIsWithdrawing(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Not authenticated');
+
+      const selectedWallet = wallets.find(w => w.id === withdrawWalletId);
+      if (!selectedWallet) throw new Error('Invalid wallet');
+      
+      if (parseFloat(withdrawAmount) > selectedWallet.balance) {
+        throw new Error('Insufficient funds. You cannot withdraw more than your wallet balance.');
+      }
+
+      const res = await fetch('/api/wallet/withdraw', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({ 
+          amount: parseFloat(withdrawAmount), 
+          currency: selectedWallet.currency,
+          walletId: withdrawWalletId,
+          destination: { recipient_code: recipientCode }
+        })
+      });
+
+      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to request withdrawal');
+      }
+      
+      toast.success(data.message || 'Withdrawal initiated successfully!');
+      setWithdrawAmount('');
+      setRecipientCode('');
+      fetchWallets(); // refresh balances
+    } catch (err: any) {
+      toast.error(err.message || 'An error occurred');
+    } finally {
+      setIsWithdrawing(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '50vh' }}>
+        <div style={{ color: '#38bdf8', fontSize: '18px', fontWeight: 600 }}>Syncing Ledger...</div>
+      </div>
+    );
+  }
+
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-8">
-      <div className="flex items-center justify-between">
+    <div style={{ paddingBottom: '64px' }}>
+      {/* Header section */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '40px', flexWrap: 'wrap', gap: '16px' }}>
         <div>
-          <h1 className="text-3xl font-bold text-slate-100 flex items-center gap-3">
-            <Landmark className="w-8 h-8 text-indigo-400" />
-            Rainebank Escrow
+          <h1 style={{ fontSize: '36px', fontWeight: 800, color: '#fff', letterSpacing: '-1px', margin: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
+            Wallet
           </h1>
-          <p className="text-slate-400 mt-2">Manage your institutional trading capital across multiple currencies.</p>
+          <p style={{ color: '#9ca3af', fontSize: '15px', marginTop: '8px' }}>
+            Manage your institutional trading capital across multiple currencies.
+          </p>
         </div>
-        <button onClick={fetchWallets} className="p-2 bg-slate-800 rounded-lg hover:bg-slate-700 transition">
-          <RefreshCcw className="w-5 h-5 text-slate-300" />
+        <button
+          onClick={fetchWallets}
+          style={{
+            background: 'rgba(255,255,255,0.05)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            padding: '10px',
+            borderRadius: '12px',
+            color: '#e5e7eb',
+            cursor: 'pointer',
+            transition: 'all 0.2s'
+          }}
+        >
+          <RefreshCcw size={20} />
         </button>
       </div>
 
-      {/* Balances */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {loading ? (
-          <div className="col-span-3 text-center py-10 text-slate-500">Loading wallets...</div>
-        ) : wallets.length === 0 ? (
-          <div className="col-span-3 text-center py-10 text-slate-500 bg-slate-800/50 rounded-xl border border-slate-700">
-            No active wallets found. Make a deposit to instantiate your ledger.
+      {/* Balances Grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px', marginBottom: '40px' }}>
+        {wallets.length === 0 ? (
+          <div style={{ gridColumn: '1 / -1', background: '#111', border: '1px solid rgba(255,255,255,0.05)', padding: '48px 32px', borderRadius: '24px', textAlign: 'center' }}>
+            <div style={{ color: '#9ca3af', fontSize: '16px' }}>No active wallets found. Make a deposit to instantiate your ledger.</div>
           </div>
         ) : (
           wallets.map(w => (
-            <div key={w.id} className="bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 p-6 rounded-2xl shadow-xl relative overflow-hidden">
-              <div className="absolute top-0 right-0 p-4 opacity-10">
-                <Wallet className="w-24 h-24" />
+            <div key={w.id} style={{
+              background: 'linear-gradient(145deg, rgba(30,30,30,0.8) 0%, rgba(15,15,15,0.8) 100%)',
+              border: '1px solid rgba(255,255,255,0.05)',
+              padding: '32px',
+              borderRadius: '24px',
+              position: 'relative',
+              overflow: 'hidden'
+            }}>
+              <div style={{ position: 'absolute', top: '-10px', right: '-10px', opacity: 0.05, transform: 'rotate(15deg)' }}>
+                <Wallet size={120} />
               </div>
-              <p className="text-slate-400 font-medium mb-1">{w.currency} Balance</p>
-              <h2 className="text-4xl font-bold text-white tracking-tight">
+              <div style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '12px', fontWeight: 600 }}>{w.currency} BALANCE</div>
+              <div style={{ fontSize: '48px', fontWeight: 800, color: '#fff', letterSpacing: '-1px' }}>
                 {w.currency === 'USD' ? '$' : w.currency === 'NGN' ? '₦' : '₵'}{Number(w.balance).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-              </h2>
+              </div>
             </div>
           ))
         )}
       </div>
 
-      {/* Actions */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+      {/* Actions Grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px' }}>
         {/* Deposit Card */}
-        <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6">
-          <h3 className="text-xl font-semibold text-white flex items-center gap-2 mb-6">
-            <ArrowDownToLine className="w-5 h-5 text-emerald-400" />
+        <div style={{ background: '#111', border: '1px solid rgba(255,255,255,0.05)', padding: '32px', borderRadius: '24px' }}>
+          <h3 style={{ fontSize: '20px', fontWeight: 700, color: '#fff', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <ArrowDownToLine size={20} color="#4ade80" />
             Deposit Capital
           </h3>
-          <form onSubmit={handleDeposit} className="space-y-4">
+          <form onSubmit={handleDeposit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div>
-              <label className="block text-sm font-medium text-slate-400 mb-1">Currency</label>
-              <select 
-                value={currency} 
+              <label style={{ display: 'block', fontSize: '13px', color: '#9ca3af', marginBottom: '8px', fontWeight: 600 }}>CURRENCY</label>
+              <select
+                value={currency}
                 onChange={e => setCurrency(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '12px 16px', color: '#fff', fontSize: '15px', outline: 'none' }}
               >
                 <option value="USD">USD - US Dollar</option>
                 <option value="NGN">NGN - Nigerian Naira</option>
@@ -127,40 +215,102 @@ export default function WalletPage() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-400 mb-1">Amount</label>
-              <input 
-                type="number" 
+              <label style={{ display: 'block', fontSize: '13px', color: '#9ca3af', marginBottom: '8px', fontWeight: 600 }}>AMOUNT</label>
+              <input
+                type="number"
                 min="1"
                 step="0.01"
                 required
                 value={amount}
                 onChange={e => setAmount(e.target.value)}
                 placeholder="0.00"
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '12px 16px', color: '#fff', fontSize: '15px', outline: 'none' }}
               />
             </div>
-            <button 
-              type="submit" 
+            <button
+              type="submit"
               disabled={isDepositing}
-              className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-medium py-3 rounded-lg transition disabled:opacity-50"
+              style={{
+                marginTop: '8px',
+                width: '100%',
+                background: isDepositing ? '#374151' : '#4ade80',
+                color: isDepositing ? '#9ca3af' : '#064e3b',
+                fontWeight: 700,
+                padding: '14px',
+                borderRadius: '12px',
+                border: 'none',
+                cursor: isDepositing ? 'not-allowed' : 'pointer',
+                transition: 'all 0.2s'
+              }}
             >
-              {isDepositing ? 'Initializing...' : 'Proceed to Paystack Gateway'}
+              {isDepositing ? 'Initializing...' : 'Proceed to Gateway'}
             </button>
           </form>
         </div>
 
         {/* Withdraw Card */}
-        <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 opacity-75">
-          <h3 className="text-xl font-semibold text-white flex items-center gap-2 mb-6">
-            <ArrowUpFromLine className="w-5 h-5 text-rose-400" />
+        <div style={{ background: '#111', border: '1px solid rgba(255,255,255,0.05)', padding: '32px', borderRadius: '24px' }}>
+          <h3 style={{ fontSize: '20px', fontWeight: 700, color: '#fff', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <ArrowUpFromLine size={20} color="#f87171" />
             Request Withdrawal
           </h3>
-          <div className="text-slate-400 text-sm mb-4">
-            Withdrawal architecture is implemented securely on the backend via escrow locks. The frontend UI for bank account selection is coming in the next update.
-          </div>
-          <button disabled className="w-full bg-slate-700 text-slate-400 font-medium py-3 rounded-lg cursor-not-allowed">
-            Coming Soon
-          </button>
+          <form onSubmit={handleWithdraw} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', color: '#9ca3af', marginBottom: '8px', fontWeight: 600 }}>SOURCE WALLET</label>
+              <select
+                value={withdrawWalletId}
+                onChange={e => setWithdrawWalletId(e.target.value)}
+                style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '12px 16px', color: '#fff', fontSize: '15px', outline: 'none' }}
+              >
+                {wallets.map(w => (
+                  <option key={w.id} value={w.id}>{w.currency} - Balance: {w.currency === 'USD' ? '$' : w.currency === 'NGN' ? '₦' : '₵'}{Number(w.balance).toFixed(2)}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', color: '#9ca3af', marginBottom: '8px', fontWeight: 600 }}>AMOUNT</label>
+              <input
+                type="number"
+                min="1"
+                step="0.01"
+                max={wallets.find(w => w.id === withdrawWalletId)?.balance || 0}
+                required
+                value={withdrawAmount}
+                onChange={e => setWithdrawAmount(e.target.value)}
+                placeholder="0.00"
+                style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '12px 16px', color: '#fff', fontSize: '15px', outline: 'none' }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', color: '#9ca3af', marginBottom: '8px', fontWeight: 600 }}>PAYSTACK RECIPIENT CODE</label>
+              <input
+                type="text"
+                required
+                value={recipientCode}
+                onChange={e => setRecipientCode(e.target.value)}
+                placeholder="RCP_xxxxxxxxxx"
+                style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '12px 16px', color: '#fff', fontSize: '15px', outline: 'none' }}
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={isWithdrawing || wallets.length === 0}
+              style={{
+                marginTop: '8px',
+                width: '100%',
+                background: isWithdrawing ? '#374151' : '#ef4444',
+                color: isWithdrawing ? '#9ca3af' : '#fff',
+                fontWeight: 700,
+                padding: '14px',
+                borderRadius: '12px',
+                border: 'none',
+                cursor: isWithdrawing || wallets.length === 0 ? 'not-allowed' : 'pointer',
+                transition: 'all 0.2s'
+              }}
+            >
+              {isWithdrawing ? 'Processing Escrow...' : 'Submit Request'}
+            </button>
+          </form>
         </div>
       </div>
     </div>

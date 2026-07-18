@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2.108.2";
-import { fetchPaperBars, Bar, placePaperOrder, makeClientOrderId, cancelBrokerOrdersForOpportunity } from "../../../packages/execution/index.ts";
+import { fetchPaperBars, Bar, placePaperOrder, makeClientOrderId } from "../../../packages/execution/index.ts";
 import { sma, rsi, detectRegime } from "../../../packages/strategy/index.ts";
 import { insertAuditLog } from "../../../packages/core/audit.ts";
 import { isMarketOpen } from "../../../packages/core/market.ts";
@@ -463,18 +463,18 @@ serve(async (req) => {
               const hoursElapsed = (Date.now() - new Date(signal.created_at).getTime()) / (1000 * 60 * 60);
               if (hoursElapsed > 12) {
                 await supabase.from("trade_opportunities").update({ status: "EXPIRED", ai_risks: "Expired: 12h TTL exceeded without execution." }).eq("id", signal.id);
-                await cancelBrokerOrdersForOpportunity(supabase, signal.id);
+                // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
                 console.log(`[Validation] EXPIRED ${signal.symbol}: 12h TTL expired.`);
                 continue;
               }
 
               // 2. Fetch Live Snapshot
-              const result = await fetchPaperBars(signal.symbol, signal.timeframe);
+              const result = await fetchPaperBars(signal.symbol, signal.timeframe, 100, supabase);
               const snapshot = getContextSnapshot(
-                result.bars.map((b: any) => b.t),
-                result.bars.map((b: any) => b.h),
-                result.bars.map((b: any) => b.l),
-                result.bars.map((b: any) => b.c)
+                result.map((b: any) => b.t),
+                result.map((b: any) => b.h),
+                result.map((b: any) => b.l),
+                result.map((b: any) => b.c)
               );
 
               // 3. Math Validation (Stop Loss Hit)
@@ -483,7 +483,7 @@ serve(async (req) => {
                 if ((signal.side === 'LONG' && snapshot.current_price <= stopLoss) || 
                     (signal.side === 'SHORT' && snapshot.current_price >= stopLoss)) {
                   await supabase.from("trade_opportunities").update({ status: "LOST", r_multiple: -1, ai_risks: "Technical Invalidation: Stop Loss crossed." }).eq("id", signal.id);
-                  await cancelBrokerOrdersForOpportunity(supabase, signal.id);
+                  // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
                   console.log(`[Validation] LOST ${signal.symbol}: Stop loss crossed by live price.`);
                   continue;
                 }
@@ -500,14 +500,14 @@ serve(async (req) => {
               
               if (evalResult.action === "REJECT") {
                 await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Invalidated by AI Risk Officer: ${evalResult.reason}` }).eq("id", signal.id);
-                await cancelBrokerOrdersForOpportunity(supabase, signal.id);
+                // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
                 console.log(`[Validation] REJECTED ${signal.symbol} by AI: ${evalResult.reason}`);
               } else if (evalResult.action === "TAKE_PROFIT") {
                 // For scalping, if AI decides to secure profits early, we mark it as WON (or REJECTED with profit info) 
                 // Since 'REJECTED' triggers auto-eject, we can update it to REJECTED but state it's a profit take.
                 // Wait, if we mark it as REJECTED, it triggers auto-eject to close the live positions.
                 await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Profit Secured by AI Risk Officer: ${evalResult.reason}` }).eq("id", signal.id);
-                await cancelBrokerOrdersForOpportunity(supabase, signal.id);
+                // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
                 console.log(`[Validation] TAKE_PROFIT ${signal.symbol} by AI: ${evalResult.reason}`);
               } else {
                 console.log(`[Validation] MAINTAIN ${signal.symbol}: Thesis remains intact.`);
@@ -544,9 +544,9 @@ serve(async (req) => {
             try {
               console.log(`[Data Fetch] Fetching market data for ${symbol}...`);
               sendEvent({ type: 'progress', message: `[Data Fetch] Fetching historical price data for ${symbol}...` });
-              const result = await fetchPaperBars(symbol, timeframe);
-              bars = result.bars;
-              source = result.source;
+              const result = await fetchPaperBars(symbol, timeframe, 100, supabase);
+              bars = result;
+              source = "Broker API";
             } catch (err: any) {
               console.error(`[Data Fetch Error] Failed to fetch data for ${symbol}: ${err.message}`);
               if (err.message === "META_API_FAILURE") {
@@ -566,14 +566,20 @@ serve(async (req) => {
               return;
             }
             
-            console.log(`\n[Info] [Data Fetch] Successfully fetched ${bars.length} bars from ${source} for ${symbol}.`);
-            sendEvent({ type: 'progress', message: `[Data Fetch] Successfully acquired ${bars.length} data points from ${source}.` });
+            console.log(`\n[Info] [Data Fetch v2] Successfully fetched ${bars.length} bars from ${source} for ${symbol}.`);
+            sendEvent({ type: 'progress', message: `[Data Fetch v2] Successfully acquired ${bars.length} data points from ${source}.` });
 
             // Store fetched bars in PTI database asynchronously
             // [TEMPORARILY DISABLED] This is causing WORKER_RESOURCE_LIMIT due to thousands of unawaited N+1 queries.
             // saveBars(supabase, symbol, timeframe, bars).catch(err => 
             //   console.error(`[Error] Failed to save bars for ${symbol}:`, err)
             // );
+
+            if (bars.length < 50) {
+              rejections.push({ symbol, reason: `Insufficient historical data (${bars.length} bars)`, layer: "Data" });
+              sendEvent({ type: 'progress', message: `[Rejected] Insufficient data for ${symbol}.` });
+              return;
+            }
 
             // LAYER A: Deterministic Evaluation Guard
             sendEvent({ type: 'progress', message: `[Layer A: Deterministic Guard] Evaluating mathematical momentum and regime...` });
@@ -589,18 +595,18 @@ serve(async (req) => {
 
             if (timeframe !== '1D') {
               try {
-                const result = await fetchPaperBars(symbol, '1D');
+                const result = await fetchPaperBars(symbol, '1D', 100, supabase);
                 const dailySnapshot = getContextSnapshot(
-                  result.bars.map((b: any) => b.t),
-                  result.bars.map((b: any) => b.h),
-                  result.bars.map((b: any) => b.l),
-                  result.bars.map((b: any) => b.c)
+                  result.map((b: any) => b.t),
+                  result.map((b: any) => b.h),
+                  result.map((b: any) => b.l),
+                  result.map((b: any) => b.c)
                 );
                 if (dailySnapshot.trend_alignment.startsWith('BULLISH')) htf_trend = 'BULLISH';
                 else if (dailySnapshot.trend_alignment.startsWith('BEARISH')) htf_trend = 'BEARISH';
                 
-                if (result.bars.length > 0) {
-                  const lastBar = result.bars[result.bars.length - 1];
+                if (result.length > 0) {
+                  const lastBar = result[result.length - 1];
                   const pivots = calculatePivotPoints(lastBar.h, lastBar.l, lastBar.c);
                   htf_support = pivots.support;
                   htf_resistance = pivots.resistance;
@@ -608,12 +614,12 @@ serve(async (req) => {
                 
                 // Fetch MTFA (1H or 4H) for confluence
                 const mtfaTf = timeframe === '15Min' ? '1H' : '4H';
-                const mtfaResult = await fetchPaperBars(symbol, mtfaTf);
+                const mtfaResult = await fetchPaperBars(symbol, mtfaTf, 100, supabase);
                 const mtfaSnapshot = getContextSnapshot(
-                  mtfaResult.bars.map((b: any) => b.t),
-                  mtfaResult.bars.map((b: any) => b.h),
-                  mtfaResult.bars.map((b: any) => b.l),
-                  mtfaResult.bars.map((b: any) => b.c)
+                  mtfaResult.map((b: any) => b.t),
+                  mtfaResult.map((b: any) => b.h),
+                  mtfaResult.map((b: any) => b.l),
+                  mtfaResult.map((b: any) => b.c)
                 );
                 if (mtfaSnapshot.trend_alignment.startsWith('BULLISH')) mtfa_trend = 'BULLISH';
                 else if (mtfaSnapshot.trend_alignment.startsWith('BEARISH')) mtfa_trend = 'BEARISH';
@@ -694,7 +700,7 @@ serve(async (req) => {
               return;
             }
 
-            console.log(`[Strategy Eval] Market snapshot for ${symbol}: Trend=${snapshot.trend_alignment}, RSI=${snapshot.rsi_14.toFixed(2)}, CurrentPrice=${snapshot.current_price}`);
+            console.log(`[Strategy Eval] Market snapshot for ${symbol}: Trend=${snapshot.trend_alignment}, RSI=${snapshot.rsi_14?.toFixed(2) ?? 'N/A'}, CurrentPrice=${snapshot.current_price}`);
             
             // LAYER A: Deterministic Guard
             // [MODIFIED]: CHOP regimes now bypass the halt and proceed to the AI for Mean Reversion evaluation.

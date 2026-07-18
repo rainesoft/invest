@@ -39,117 +39,134 @@ export default function FundHistoryPage() {
     fetchHistory();
   }, []);
 
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '50vh' }}>
+        <div style={{ color: '#38bdf8', fontSize: '18px', fontWeight: 600 }}>Decrypting Ledger...</div>
+      </div>
+    );
+  }
+
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-8">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+    <div style={{ paddingBottom: '64px' }}>
+      {/* Header section */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '40px', flexWrap: 'wrap', gap: '16px' }}>
         <div>
-          <h1 className="text-3xl font-bold text-slate-100 flex items-center gap-3">
-            <History className="w-8 h-8 text-indigo-400" />
+          <h1 style={{ fontSize: '36px', fontWeight: 800, color: '#fff', letterSpacing: '-1px', margin: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <History size={36} color="#38bdf8" />
             Master Fund History
           </h1>
-          <p className="text-slate-400 mt-2">
+          <p style={{ color: '#9ca3af', fontSize: '15px', marginTop: '8px' }}>
             Complete transparency into the execution performance of the RaineBank Master Node.
           </p>
         </div>
-        <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-4 py-2 rounded-full flex items-center gap-2 text-sm font-semibold">
-          <ShieldCheck className="w-4 h-4" />
-          Verified Execution
+        <div style={{
+          background: 'rgba(56, 189, 248, 0.1)',
+          border: '1px solid rgba(56, 189, 248, 0.3)',
+          padding: '8px 16px',
+          borderRadius: '100px',
+          fontSize: '13px',
+          fontWeight: 700,
+          color: '#38bdf8',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px'
+        }}>
+          <ShieldCheck size={16} />
+          VERIFIED EXECUTION
         </div>
       </div>
 
       {/* Stats Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-slate-800/50 border border-slate-700 p-6 rounded-2xl">
-          <p className="text-slate-400 text-sm font-medium mb-1">Total Trades Tracked</p>
-          <h2 className="text-3xl font-bold text-white">{trades.length}</h2>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '24px', marginBottom: '40px' }}>
+        <div style={{ background: '#111', border: '1px solid rgba(255,255,255,0.05)', padding: '32px', borderRadius: '24px' }}>
+          <div style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '12px', fontWeight: 600 }}>TOTAL TRADES TRACKED</div>
+          <div style={{ fontSize: '40px', fontWeight: 800, color: '#fff', letterSpacing: '-1px' }}>
+            {trades.length}
+          </div>
         </div>
-        <div className="bg-slate-800/50 border border-slate-700 p-6 rounded-2xl">
-          <p className="text-slate-400 text-sm font-medium mb-1">Win Rate (Closed)</p>
-          <h2 className="text-3xl font-bold text-emerald-400">
+        <div style={{ background: '#111', border: '1px solid rgba(255,255,255,0.05)', padding: '32px', borderRadius: '24px' }}>
+          <div style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '12px', fontWeight: 600 }}>WIN RATE (CLOSED)</div>
+          <div style={{ fontSize: '40px', fontWeight: 800, color: '#4ade80', letterSpacing: '-1px' }}>
             {trades.filter(t => t.status === 'CLOSED').length > 0 
               ? Math.round((trades.filter(t => t.status === 'CLOSED' && t.is_win).length / trades.filter(t => t.status === 'CLOSED').length) * 100) 
               : 0}%
-          </h2>
+          </div>
         </div>
-        <div className="bg-slate-800/50 border border-slate-700 p-6 rounded-2xl">
-          <p className="text-slate-400 text-sm font-medium mb-1">Active Positions</p>
-          <h2 className="text-3xl font-bold text-sky-400">{trades.filter(t => t.status !== 'CLOSED').length}</h2>
+        <div style={{ background: '#111', border: '1px solid rgba(255,255,255,0.05)', padding: '32px', borderRadius: '24px' }}>
+          <div style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '12px', fontWeight: 600 }}>ACTIVE POSITIONS</div>
+          <div style={{ fontSize: '40px', fontWeight: 800, color: '#38bdf8', letterSpacing: '-1px' }}>
+            {trades.filter(t => t.status !== 'CLOSED').length}
+          </div>
         </div>
       </div>
 
       {/* Data Table */}
-      <div className="bg-slate-800 border border-slate-700 rounded-2xl overflow-hidden shadow-xl">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-slate-900/50 text-slate-400 border-b border-slate-700">
+      <div style={{ background: '#111', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '24px', overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', textAlign: 'left', fontSize: '14px', borderCollapse: 'collapse' }}>
+            <thead style={{ background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
               <tr>
-                <th className="px-6 py-4 font-semibold">Asset</th>
-                <th className="px-6 py-4 font-semibold">Direction</th>
-                <th className="px-6 py-4 font-semibold">Status</th>
-                <th className="px-6 py-4 font-semibold">Entry Price</th>
-                <th className="px-6 py-4 font-semibold">Exit Price</th>
-                <th className="px-6 py-4 font-semibold text-right">Yield (Points)</th>
-                <th className="px-6 py-4 font-semibold text-right">Duration</th>
+                <th style={{ padding: '16px 24px', fontWeight: 600, color: '#9ca3af' }}>Asset</th>
+                <th style={{ padding: '16px 24px', fontWeight: 600, color: '#9ca3af' }}>Direction</th>
+                <th style={{ padding: '16px 24px', fontWeight: 600, color: '#9ca3af' }}>Status</th>
+                <th style={{ padding: '16px 24px', fontWeight: 600, color: '#9ca3af' }}>Entry Price</th>
+                <th style={{ padding: '16px 24px', fontWeight: 600, color: '#9ca3af' }}>Exit Price</th>
+                <th style={{ padding: '16px 24px', fontWeight: 600, color: '#9ca3af', textAlign: 'right' }}>Yield (Points)</th>
+                <th style={{ padding: '16px 24px', fontWeight: 600, color: '#9ca3af', textAlign: 'right' }}>Duration</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-700/50">
-              {loading ? (
+            <tbody>
+              {trades.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
-                    <Activity className="w-6 h-6 animate-spin mx-auto mb-2" />
-                    Fetching immutable ledger...
-                  </td>
-                </tr>
-              ) : trades.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
+                  <td colSpan={7} style={{ padding: '48px 24px', textAlign: 'center', color: '#9ca3af' }}>
                     No trades executed by the Master Node yet.
                   </td>
                 </tr>
               ) : (
                 trades.map((trade) => (
-                  <tr key={trade.id} className="hover:bg-slate-800/50 transition-colors">
-                    <td className="px-6 py-4 font-medium text-white">{trade.symbol}</td>
-                    <td className="px-6 py-4">
+                  <tr key={trade.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', transition: 'background 0.2s', cursor: 'default' }} onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'} onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
+                    <td style={{ padding: '16px 24px', fontWeight: 600, color: '#fff' }}>{trade.symbol}</td>
+                    <td style={{ padding: '16px 24px' }}>
                       {trade.side === 'BUY' ? (
-                        <span className="inline-flex items-center gap-1 text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded text-xs font-bold">
-                          <ArrowUpRight className="w-3 h-3" /> BUY
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#4ade80', background: 'rgba(74, 222, 128, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 800 }}>
+                          <ArrowUpRight size={14} /> BUY
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 text-rose-400 bg-rose-400/10 px-2 py-1 rounded text-xs font-bold">
-                          <ArrowDownRight className="w-3 h-3" /> SELL
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#f87171', background: 'rgba(248, 113, 113, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 800 }}>
+                          <ArrowDownRight size={14} /> SELL
                         </span>
                       )}
                     </td>
-                    <td className="px-6 py-4">
+                    <td style={{ padding: '16px 24px' }}>
                       {trade.status === 'CLOSED' ? (
-                        <span className="text-slate-400 font-medium">Closed</span>
+                        <span style={{ color: '#9ca3af', fontWeight: 600 }}>Closed</span>
                       ) : (
-                        <span className="text-sky-400 font-medium flex items-center gap-1">
-                          <Activity className="w-3 h-3 animate-pulse" /> Active
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#38bdf8', fontWeight: 600 }}>
+                          <Activity size={14} /> Active
                         </span>
                       )}
                     </td>
-                    <td className="px-6 py-4 text-slate-300 font-mono">
+                    <td style={{ padding: '16px 24px', color: '#d1d5db', fontFamily: 'monospace', fontSize: '13px' }}>
                       {trade.entry_price?.toFixed(5) || 'Pending'}
                     </td>
-                    <td className="px-6 py-4 text-slate-300 font-mono">
+                    <td style={{ padding: '16px 24px', color: '#d1d5db', fontFamily: 'monospace', fontSize: '13px' }}>
                       {trade.close_price?.toFixed(5) || '-'}
                     </td>
-                    <td className="px-6 py-4 text-right">
+                    <td style={{ padding: '16px 24px', textAlign: 'right' }}>
                       {trade.status === 'CLOSED' ? (
-                        <span className={`font-bold ${trade.is_win ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        <span style={{ fontWeight: 800, color: trade.is_win ? '#4ade80' : '#f87171' }}>
                           {trade.points_yield > 0 ? '+' : ''}{trade.points_yield.toFixed(3)}
                         </span>
                       ) : (
-                        <span className="text-slate-500">-</span>
+                        <span style={{ color: '#6b7280' }}>-</span>
                       )}
                     </td>
-                    <td className="px-6 py-4 text-right text-slate-400 text-xs">
+                    <td style={{ padding: '16px 24px', textAlign: 'right', color: '#9ca3af', fontSize: '12px' }}>
                       {trade.closed_at 
-                        ? formatDistanceToNow(new Date(trade.created_at), { addSuffix: false }) 
-                        : formatDistanceToNow(new Date(trade.created_at), { addSuffix: true })}
+                        ? formatDistanceToNow(new Date(trade.closed_at)) + ' ago'
+                        : formatDistanceToNow(new Date(trade.created_at)) + ' elapsed'
+                      }
                     </td>
                   </tr>
                 ))

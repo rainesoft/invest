@@ -1,5 +1,6 @@
 import { supabaseServer } from '@lib/supabase-server';
 import LandingNavbar from '@components/LandingNavbar';
+import VaultNavbar from '@components/VaultNavbar';
 import AcademyClient from './AcademyClient';
 
 export const metadata = {
@@ -12,9 +13,19 @@ export default async function AcademyPage() {
   const { data: { user } } = await supabase.auth.getUser();
   const isLoggedIn = !!user;
 
+  let isAdmin = false;
+  if (isLoggedIn) {
+    const { data: userData } = await supabase
+      .from('users')
+      .select('is_admin')
+      .eq('id', user.id)
+      .single();
+    if (userData?.is_admin) isAdmin = true;
+  }
+
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <LandingNavbar isLoggedIn={isLoggedIn} />
+      {isLoggedIn ? <VaultNavbar isAdmin={isAdmin} /> : <LandingNavbar isLoggedIn={false} />}
       
       <main style={{ flex: 1, display: 'flex', justifyContent: 'center', padding: '40px 24px' }}>
         <div style={{ width: '100%', maxWidth: '1200px' }}>

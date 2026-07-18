@@ -54,7 +54,17 @@ void RecoverActiveTickets()
          activeTickets[size] = ticket;
         }
      }
-   Print("Recovered ", ArraySize(activeTickets), " active positions.");
+   for(int i=0; i<OrdersTotal(); i++)
+     {
+      ulong ticket = OrderGetTicket(i);
+      if(OrderGetString(ORDER_COMMENT) == "RaineBank AI" || OrderGetInteger(ORDER_MAGIC) == 410673)
+        {
+         int size = ArraySize(activeTickets);
+         ArrayResize(activeTickets, size+1);
+         activeTickets[size] = ticket;
+        }
+     }
+   Print("Recovered ", ArraySize(activeTickets), " active positions and pending orders.");
   }
 
 //+------------------------------------------------------------------+
@@ -129,8 +139,8 @@ void ProcessTrades(string data)
       
       string parts[];
       int numParts = StringSplit(line, ',', parts);
-      // Format: ID,SYMBOL,SIDE,VOLUME,STOPLOSS,TAKEPROFIT,TRADE_TYPE
-      if(numParts >= 6)
+      // Format: ID,SYMBOL,SIDE,VOLUME,STOPLOSS,TAKEPROFIT,TRADE_TYPE,ENTRY_PRICE,ORDER_TYPE
+      if(numParts >= 9)
         {
          string id = parts[0];
          string symbol = parts[1];
@@ -138,8 +148,10 @@ void ProcessTrades(string data)
          double volume = StringToDouble(parts[3]);
          double sl = StringToDouble(parts[4]);
          double tp = StringToDouble(parts[5]);
+         double entryPrice = StringToDouble(parts[7]);
+         string orderType = parts[8];
          
-         ExecuteTrade(id, symbol, side, volume, sl, tp);
+         ExecuteTrade(id, symbol, side, volume, sl, tp, entryPrice, orderType);
         }
      }
   }
@@ -147,9 +159,9 @@ void ProcessTrades(string data)
 //+------------------------------------------------------------------+
 //| Execute Trade and Callback                                       |
 //+------------------------------------------------------------------+
-void ExecuteTrade(string id, string symbol, string side, double volume, double sl, double tp)
+void ExecuteTrade(string id, string symbol, string side, double volume, double sl, double tp, double entryPrice, string orderTypeStr)
   {
-   Print("Executing trade: ", id, " ", symbol, " ", side, " Vol:", volume, " SL:", sl, " TP:", tp);
+   Print("Executing trade: ", id, " ", symbol, " ", orderTypeStr, " Vol:", volume, " Entry:", entryPrice, " SL:", sl, " TP:", tp);
    
    // Ensure symbol is selected in Market Watch
    SymbolSelect(symbol, true);
@@ -159,7 +171,6 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
    ZeroMemory(request);
    ZeroMemory(result);
    
-   request.action = TRADE_ACTION_DEAL;
    request.symbol = symbol;
    request.volume = volume;
    request.sl = sl;
@@ -167,15 +178,45 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
    request.magic = 410673; // RaineBank Magic
    request.comment = "RaineBank AI";
    
-   if(side == "LONG")
+   if(orderTypeStr == "BUY MARKET")
      {
+      request.action = TRADE_ACTION_DEAL;
       request.type = ORDER_TYPE_BUY;
       request.price = SymbolInfoDouble(symbol, SYMBOL_ASK);
      }
-   else
+   else if(orderTypeStr == "SELL MARKET")
      {
+      request.action = TRADE_ACTION_DEAL;
       request.type = ORDER_TYPE_SELL;
       request.price = SymbolInfoDouble(symbol, SYMBOL_BID);
+     }
+   else if(orderTypeStr == "BUY LIMIT")
+     {
+      request.action = TRADE_ACTION_PENDING;
+      request.type = ORDER_TYPE_BUY_LIMIT;
+      request.price = entryPrice;
+      request.type_time = ORDER_TIME_GTC;
+     }
+   else if(orderTypeStr == "SELL LIMIT")
+     {
+      request.action = TRADE_ACTION_PENDING;
+      request.type = ORDER_TYPE_SELL_LIMIT;
+      request.price = entryPrice;
+      request.type_time = ORDER_TIME_GTC;
+     }
+   else if(orderTypeStr == "BUY STOP")
+     {
+      request.action = TRADE_ACTION_PENDING;
+      request.type = ORDER_TYPE_BUY_STOP;
+      request.price = entryPrice;
+      request.type_time = ORDER_TIME_GTC;
+     }
+   else if(orderTypeStr == "SELL STOP")
+     {
+      request.action = TRADE_ACTION_PENDING;
+      request.type = ORDER_TYPE_SELL_STOP;
+      request.price = entryPrice;
+      request.type_time = ORDER_TIME_GTC;
      }
      
    request.deviation = 20;
@@ -274,9 +315,9 @@ void MonitorPositions()
    for(int i=ArraySize(activeTickets)-1; i>=0; i--)
      {
       long ticket = activeTickets[i];
-      if(!PositionSelectByTicket(ticket))
+      if(!PositionSelectByTicket(ticket) && !OrderSelect(ticket))
         {
-         // Position is no longer open! Check history.
+         // Position is no longer open and no pending order! Check history.
          if(HistorySelectByPosition(ticket))
            {
             int deals = HistoryDealsTotal();

@@ -101,11 +101,7 @@ export default function Page() {
   const router = useRouter();
   const [opps, setOpps] = useState<Opportunity[]>([]);
   const [loading, setLoading] = useState(true);
-  const [processing, setProcessing] = useState<string | null>(null);
-  const [checkingRisk, setCheckingRisk] = useState<string | null>(null);
-  const [confirmExecuteId, setConfirmExecuteId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'ACTIVE' | 'INVALIDATED' | 'REJECTED'>('ACTIVE');
-  const [executedIds, setExecutedIds] = useState<Set<string>>(new Set());
 
   // Pagination State
   const [page, setPage] = useState(1);
@@ -141,18 +137,7 @@ export default function Page() {
       setHasMore(count ? (from + pageSize) < count : false);
       setTotalPages(count ? Math.ceil(count / pageSize) : 1);
       
-      if (data && data.length > 0) {
-        const oppIds = data.map((o: any) => o.id);
-        const { data: userTrades } = await client
-          .from('user_trades')
-          .select('opportunity_id')
-          .in('opportunity_id', oppIds)
-          .not('status', 'in', '("REJECTED","FAILED","CANCELLED")');
-          
-        if (userTrades) {
-           setExecutedIds(new Set(userTrades.map((ut: any) => ut.opportunity_id)));
-        }
-      }
+
 
       setLoading(false);
     };
@@ -165,49 +150,7 @@ export default function Page() {
     return <div style={{ color: '#9ca3af', fontSize: '15px' }}>Loading signals...</div>;
   }
 
-  const preExecuteCheck = async (signal: Opportunity) => {
-    setCheckingRisk(signal.id);
-    try {
-      const { data: activeTrades, error } = await client
-        .from('user_trades')
-        .select('id')
-        .eq('symbol', signal.symbol)
-        .in('status', ['OPEN', 'PENDING']);
-        
-      if (error) throw error;
-      
-      if (activeTrades && activeTrades.length > 0) {
-        setConfirmExecuteId(signal.id);
-      } else {
-        // No active trades, safe to execute directly
-        await handleExecute(signal.id);
-      }
-    } catch (err: any) {
-      toast.error(`Risk Check Failed: ${err.message}`);
-    } finally {
-      setCheckingRisk(null);
-    }
-  };
 
-  const handleExecute = async (id: string) => {
-    setProcessing(id);
-    try {
-      const res = await fetch(`/api/opportunities/${id}/execute`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Execution failed');
-      
-      toast.success('Trade executed successfully! Redirecting to Ledger...');
-      // Optimistically update status so the user knows they executed it
-      setOpps(prev => prev.map(o => o.id === id ? { ...o, status: 'EXECUTED' } : o));
-      setTimeout(() => {
-        router.push('/dashboard');
-      }, 1000);
-    } catch (err: any) {
-      toast.error(`Error: ${err.message}`);
-    } finally {
-      setProcessing(null);
-    }
-  };
 
   return (
     <div>
@@ -253,10 +196,7 @@ export default function Page() {
           const entryPrice = signal.entry_plan_json?.price || signal.entry_plan_json?.limit_price;
           const stopPrice = signal.stop_plan_json?.stop || signal.stop_plan_json?.stop_price;
           const tpPrice = signal.take_profit_json?.tp || signal.take_profit_json?.tp_price;
-          const isProcessing = processing === signal.id;
           const isWarning = signal.status === 'REJECTED';
-
-          const isExecuted = executedIds.has(signal.id) || signal.status === 'EXECUTED';
 
           return (
             <div key={signal.id} style={{
@@ -265,17 +205,13 @@ export default function Page() {
               padding: '32px',
               borderRadius: '24px',
               transition: 'transform 0.2s, box-shadow 0.2s',
-              opacity: isProcessing ? 0.5 : 1,
-              pointerEvents: isProcessing ? 'none' : 'auto'
             }}
             onMouseOver={(e) => {
-              if (isProcessing) return;
               e.currentTarget.style.transform = 'translateY(-2px)';
               e.currentTarget.style.boxShadow = '0 12px 32px rgba(0,0,0,0.4)';
               e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)';
             }}
             onMouseOut={(e) => {
-              if (isProcessing) return;
               e.currentTarget.style.transform = 'translateY(0)';
               e.currentTarget.style.boxShadow = 'none';
               e.currentTarget.style.borderColor = 'rgba(255,255,255,0.05)';
@@ -356,30 +292,9 @@ export default function Page() {
               </div>
 
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '24px' }}>
-                {signal.status === 'APPROVED' ? (
-                  <button 
-                    onClick={() => preExecuteCheck(signal)}
-                    disabled={processing === signal.id || checkingRisk === signal.id || isExecuted}
-                    style={{
-                      background: isExecuted ? '#374151' : (signal.side === 'LONG' ? '#10b981' : '#ef4444'),
-                      color: isExecuted ? '#9ca3af' : '#fff',
-                      border: 'none',
-                      borderRadius: '8px',
-                      padding: '10px 24px',
-                      fontSize: '14px',
-                      fontWeight: 700,
-                      cursor: (processing === signal.id || checkingRisk === signal.id || isExecuted) ? 'not-allowed' : 'pointer',
-                      opacity: (processing === signal.id || checkingRisk === signal.id || isExecuted) ? 0.7 : 1,
-                      transition: 'all 0.2s'
-                    }}
-                  >
-                    {checkingRisk === signal.id ? 'Checking Ledger...' : processing === signal.id ? 'Executing...' : (isExecuted ? 'Executed' : `Execute ${signal.side}`)}
-                  </button>
-                ) : (
-                  <div style={{ color: signal.status === 'APPROVED' ? '#10b981' : '#9ca3af', fontSize: '13px', fontWeight: 600 }}>
-                    Status: {signal.status}
-                  </div>
-                )}
+                <div style={{ color: signal.status === 'APPROVED' ? '#10b981' : '#9ca3af', fontSize: '13px', fontWeight: 600 }}>
+                  Status: {signal.status}
+                </div>
               </div>
             </div>
           );
@@ -422,49 +337,7 @@ export default function Page() {
         </div>
       )}
 
-      {/* Manual Execution Warning Modal */}
-      {confirmExecuteId && typeof document !== 'undefined' ? <>{createPortal(
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)',
-          display: 'flex', justifyContent: 'center', alignItems: 'center',
-          zIndex: 99999
-        }}>
-          <div style={{
-            background: '#0a0a0a', border: '1px solid rgba(255,255,255,0.1)',
-            borderRadius: '16px', padding: '32px', maxWidth: '440px', width: '90%',
-            boxShadow: '0 24px 48px rgba(0,0,0,0.8)'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-              <ShieldAlert size={28} color="#eab308" />
-              <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#fff' }}>Manual Execution Warning</h3>
-            </div>
-            <p style={{ color: '#9ca3af', fontSize: '15px', lineHeight: '1.6', marginBottom: '24px' }}>
-              We've checked your ledger, and you <strong>ALREADY</strong> have an active trade open for <strong style={{color: '#fff'}}>{opps.find(o => o.id === confirmExecuteId)?.symbol}</strong>. 
-              <br/><br/>
-              Executing this signal will explicitly bypass the AI's autonomous Asset Isolation guardrails and duplicate your risk exposure on this asset. Are you sure you want to proceed?
-            </p>
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-              <button 
-                onClick={() => setConfirmExecuteId(null)}
-                style={{ padding: '10px 16px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: '#fff', cursor: 'pointer', fontWeight: 600 }}
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={() => {
-                  handleExecute(confirmExecuteId);
-                  setConfirmExecuteId(null);
-                }}
-                style={{ padding: '10px 16px', borderRadius: '8px', border: 'none', background: '#3b82f6', color: '#fff', cursor: 'pointer', fontWeight: 600 }}
-              >
-                Proceed & Execute
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}</> : null}
+
 
     </div>
   );
