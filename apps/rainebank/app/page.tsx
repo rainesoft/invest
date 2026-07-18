@@ -105,11 +105,11 @@ export default async function LandingPage() {
   }
 
   const signal = latestSignals?.[0] || {
-    symbol: 'SCANNING...',
-    side: 'NEUTRAL',
-    status: 'SEARCHING',
-    entry_plan_json: { price: 'Pending Data' },
-    ai_summary: 'The AI Risk Officer is currently scanning the global markets for high-probability setups. Check back shortly.'
+    symbol: 'MARKETS IDLE',
+    side: 'MONITORING',
+    status: 'STANDBY',
+    entry_plan_json: { price: 'Awaiting Breakout' },
+    ai_summary: '[A-Tier] [Macro Alignment -> Searching]\nThe AI Risk Officer is continuously analyzing cross-asset volatility and institutional order flow. We are currently holding cash and waiting for a strictly defined, high-probability structural break before deploying capital. No active trades meet our minimum Risk:Reward thresholds at this precise moment.'
   };
 
   const statusColor = signal.status === 'APPROVED' ? '#4ade80' :
