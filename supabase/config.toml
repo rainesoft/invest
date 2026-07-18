@@ -341,13 +341,7 @@ verify_jwt = false
 # cron = "0 * * * *"
 
 # Trigger the Outcome Simulator at 2 and 32 past the hour
-[functions.exness-executor]
-verify_jwt = false
-
 [functions.resolve-outcomes]
-verify_jwt = false
-
-[functions.exness-monitor]
 verify_jwt = false
 
 # [functions.resolve-outcomes.schedule]
