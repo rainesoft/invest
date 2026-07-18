@@ -1,13 +1,13 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2.108.2";
-import { fetchPaperBars, Bar, placePaperOrder, makeClientOrderId, cancelBrokerOrdersForOpportunity } from "../_shared/execution.ts";
-import { sma, rsi, detectRegime } from "../_shared/strategy.ts";
-import { insertAuditLog } from "../_shared/audit.ts";
-import { isMarketOpen } from "../_shared/market.ts";
+import { fetchPaperBars, Bar, placePaperOrder, makeClientOrderId, cancelBrokerOrdersForOpportunity } from "../../../packages/execution/index.ts";
+import { sma, rsi, detectRegime } from "../../../packages/strategy/index.ts";
+import { insertAuditLog } from "../../../packages/core/audit.ts";
+import { isMarketOpen } from "../../../packages/core/market.ts";
 import { netEdge, transactionCost, slippage } from "../../../packages/strategy/index.ts";
 import { getContextSnapshot, LogicContext, calculatePivotPoints } from "../../../packages/strategy/indicators.ts";
 import { validateGlobalSignal } from "../../../packages/strategy/riskManager.ts";
-import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews } from "../_shared/news.ts";
+import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews } from "../../../packages/core/news.ts";
 import { sizeWithRiskCaps } from "../../../packages/risk/index.ts";
 import OpenAI from "npm:openai";
 import { z } from "npm:zod";

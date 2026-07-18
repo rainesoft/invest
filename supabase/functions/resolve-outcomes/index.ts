@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
-import { insertAuditLog } from "../_shared/audit.ts";
-import { isMarketOpen } from "../_shared/market.ts";
+import { insertAuditLog } from "../../../packages/core/audit.ts";
+import { isMarketOpen } from "../../../packages/core/market.ts";
 serve(async (req) => {
 
   const url = Deno.env.get("SUPABASE_URL");

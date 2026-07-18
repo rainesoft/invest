@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
 import { validateUserExposure } from "../../../packages/strategy/riskManager.ts";
-import { insertAuditLog } from "../_shared/audit.ts";
+import { insertAuditLog } from "../../../packages/core/audit.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_ROLE_KEY =
