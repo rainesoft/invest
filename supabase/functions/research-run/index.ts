@@ -60,6 +60,8 @@ async function saveBars(
 }
 
 const TradeEvaluationSchema = z.object({
+  thought_process: z.string().describe("Briefly evaluate the EMAs, state the LTF BOS, calculate the Entry, SL, TP, and verify the R:R ratio mathematically BEFORE returning parameters."),
+  calculated_rr: z.number().nullable().describe("The mathematical R:R calculated in the thought_process"),
   technical_audit: z.object({
     current_price: z.number(),
     ema_50: z.number(),
@@ -141,6 +143,9 @@ ${historicalMemory || "No historical data available for this asset yet."}
 7. MULTI-TIMEFRAME CONFLUENCE (MTFA): You are provided with the HTF (Higher Timeframe) trend. 
    - You MUST align your direction with the HTF trend. If HTF is BEARISH, you only look for SHORT entries on the LTF.
    - Counter-trend trades are only allowed if the setup is A-Tier and R:R > 1.2.
+
+[REQUIRED OUTPUT FORMAT]
+You must output a single, valid JSON object matching the requested execution profile. You MUST use the \`thought_process\` key FIRST to calculate your math and R:R before defining the trade parameters. If you don't calculate the R:R in text first, the numbers will be invalid.
 
 Current Market Context:
 ${JSON.stringify(snapshot, null, 2)}`;
