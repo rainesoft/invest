@@ -91,7 +91,7 @@ const SETUPS = [
         label:      "Hold $4,000 + H4 Bullish Engulfing",
         entryType:  "market",
         entryPrice: null as number | null,
-        sl: 3980, tp1: 4080, tp2: 4185, tp3: 4300,
+        sl: 3950, tp1: 4080, tp2: 4185, tp3: 4300,  // widened from 3980 → 3950 for room through Asian noise
         check: ({ mid, prev, curr }: any) => mid >= 4000 && isBullishEngulfing(prev, curr),
       },
       {
