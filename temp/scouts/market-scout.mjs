@@ -16,8 +16,8 @@
  *  #4 XAGUSD SHORT — "The Dead Cat into Channel"    ($59.80–$61.00 descending resistance)
  *
  * USAGE:
- *  node scripts/scouts/market-scout.mjs
- *  node scripts/scouts/market-scout.mjs  (with SCOUT_DRY_RUN=true for testing)
+ *  node scripts/scouts/agent-sniper.mjs
+ *  node scripts/scouts/agent-sniper.mjs  (with SCOUT_DRY_RUN=true for testing)
  *
  * ENV REQUIRED (loaded from .env.local + .env):
  *  META_API_TOKEN, META_API_ACCOUNT_ID,

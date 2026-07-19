@@ -550,7 +550,7 @@ begin
   );
 
   select net.http_post(
-    url := webhook_url || '/trade-executor',
+    url := webhook_url || '/functions/v1/agent-trade',
     body := payload,
     headers := jsonb_build_object('Content-Type', 'application/json', 'x-webhook-secret', secret_val)
   ) into request_id;

@@ -4,8 +4,8 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 async function run() {
   const start = Date.now();
   
-  const edgeFunctionUrl = process.env.SUPABASE_URL + "/functions/v1/research-run";
-  console.log("Triggering research-run to measure execution time...");
+  const edgeFunctionUrl = process.env.SUPABASE_URL + "/functions/v1/agent-scalper";
+  console.log("Triggering agent-scalper to measure execution time...");
   
   const response = await fetch(edgeFunctionUrl, {
     method: 'POST',

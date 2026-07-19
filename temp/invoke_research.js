@@ -8,8 +8,8 @@ const serviceRoleKey = envLocal.match(/SUPABASE_SERVICE_ROLE_KEY=(.*)/)[1];
 const supabase = createClient(supabaseUrl, serviceRoleKey);
 
 async function invoke() {
-  console.log('Invoking research-run manually...');
-  const { data, error } = await supabase.functions.invoke('research-run', {
+  console.log('Invoking agent-scalper manually...');
+  const { data, error } = await supabase.functions.invoke('agent-scalper', {
     body: { timeframe: '1h' }
   });
 

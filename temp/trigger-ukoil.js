@@ -10,9 +10,9 @@ async function run() {
     .filter('payload_json->>symbol', 'eq', 'UKOIL');
   console.log('Cleared cached rejections for UKOIL');
 
-  // Now trigger the research-run for UKOIL only
-  const url = `${process.env.SUPABASE_URL}/functions/v1/research-run`;
-  console.log('Triggering research-run for UKOIL...');
+  // Now trigger the agent-scalper for UKOIL only
+  const url = `${process.env.SUPABASE_URL}/functions/v1/agent-scalper`;
+  console.log('Triggering agent-scalper for UKOIL...');
   
   const res = await fetch(url, {
     method: 'POST',

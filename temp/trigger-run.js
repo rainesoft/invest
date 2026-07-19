@@ -1,4 +1,4 @@
-const url = process.env.SUPABASE_URL + "/functions/v1/research-run";
+const url = process.env.SUPABASE_URL + "/functions/v1/agent-scalper";
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 fetch(url, {

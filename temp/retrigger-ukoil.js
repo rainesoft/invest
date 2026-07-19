@@ -16,7 +16,7 @@ async function run() {
     .filter('payload_json->>symbol', 'eq', 'UKOIL');
   console.log('Cleared cache. Triggering with Rules 16+17 active...\n');
 
-  const url = `${process.env.SUPABASE_URL}/functions/v1/research-run`;
+  const url = `${process.env.SUPABASE_URL}/functions/v1/agent-scalper`;
   const res = await fetch(url, {
     method: 'POST',
     headers: {
