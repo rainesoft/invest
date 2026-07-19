@@ -198,7 +198,7 @@ async function registerOpportunity(supabase: any, setup: any, cond: any) {
       side:            setup.side,
       timeframe:       setup.candleTf,
       ai_summary:      `${setup.emoji} ${setup.label} — ${setup.name}: ${cond.label}`,
-      risk_summary:    `R:R ${setup.rr} | SL $${cond.sl} | TP1 $${cond.tp1} | TP2 $${cond.tp2} | TP3 $${cond.tp3}`,
+      risk_summary:    `[SCOUT:${setup.id}] R:R ${setup.rr} | SL $${cond.sl} | TP1 $${cond.tp1} | TP2 $${cond.tp2} | TP3 $${cond.tp3}`,
       expected_return: cond.tp3,
       r_multiple:      parseFloat(setup.rr.split(":")[1]),
       entry_plan_json: { type: cond.entryType, price: cond.entryPrice, condition: cond.label },
@@ -294,20 +294,29 @@ async function fireTrade(setup: any, cond: any) {
 
 // ── CHECK ALREADY FIRED (idempotency) ─────────────────────────────────────────
 async function isAlreadyFired(supabase: any, setupId: string): Promise<boolean> {
-  const { data } = await supabase
-    .from("trade_opportunities")
-    .select("id")
-    .eq("ai_summary", setupId)
-    .in("status", ["ACTIVE", "EXECUTED", "WON", "LOST"])
-    .maybeSingle();
-  // We use a prefix match on ai_summary (id is embedded in it at the start)
-  // Simple alternative: check if there's already an opportunity with this setup's label active today
+  // We embed the setupId in the risk_summary field for reliable idempotency matching
+  // e.g. risk_summary starts with "[SCOUT:XAGUSD-LONG-DOUBLEBOTTOM]"
+  const startOfToday = new Date();
+  startOfToday.setUTCHours(0, 0, 0, 0);
   const { count } = await supabase
     .from("trade_opportunities")
     .select("id", { count: "exact", head: true })
-    .like("ai_summary", `%${setupId}%`)
-    .gte("created_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+    .like("risk_summary", `[SCOUT:${setupId}]%`)
+    .in("status", ["ACTIVE", "EXECUTED", "WON", "LOST"])
+    .gte("created_at", startOfToday.toISOString());
   return (count ?? 0) > 0;
+}
+
+// ── MARKET HOURS GUARD ───────────────────────────────────────────────────────
+// Forex: Sun 22:00 UTC to Fri 22:00 UTC. We guard Sat 00:00–Sun 20:00 UTC.
+function isForexMarketOpen(): boolean {
+  const now = new Date();
+  const day = now.getUTCDay();   // 0=Sun, 6=Sat
+  const hr  = now.getUTCHours();
+  if (day === 6) return false;                   // All day Saturday — closed
+  if (day === 0 && hr < 20) return false;        // Sunday before 20:00 UTC — closed
+  if (day === 5 && hr >= 22) return false;       // Friday after 22:00 UTC — closed
+  return true;
 }
 
 // ── MAIN HANDLER ──────────────────────────────────────────────────────────────
@@ -321,6 +330,14 @@ serve(async (req) => {
     if (!auth?.startsWith("Bearer ")) {
       return new Response("Unauthorized", { status: 401 });
     }
+  }
+
+  // Guard: do nothing if market is closed (prevents stale ledger entries)
+  if (!isForexMarketOpen()) {
+    console.log("[Market Scout] Market is closed — skipping poll");
+    return new Response(JSON.stringify({ ok: true, skipped: "MARKET_CLOSED" }), {
+      headers: { "Content-Type": "application/json" },
+    });
   }
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
