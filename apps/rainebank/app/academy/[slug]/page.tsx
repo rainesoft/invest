@@ -16,7 +16,7 @@ export async function generateMetadata({ params }: { params: { slug: string } })
   const ogImageUrl = `https://og-image.vercel.app/${encodeURIComponent(post.title)}.png?theme=dark&md=1&fontSize=75px`;
 
   return {
-    title: `${post.title} | Rainebank Academy`,
+    title: `${post.title} | Alpha Academy`,
     description: post.excerpt,
     openGraph: {
       title: post.title,
@@ -79,7 +79,7 @@ export default async function AcademyPostPage({ params }: { params: { slug: stri
         <article style={{ width: '100%', maxWidth: '800px' }}>
           
           <Link href="/academy" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', color: 'var(--text-secondary)', textDecoration: 'none', marginBottom: '48px', fontWeight: 500, transition: 'color 0.2s' }}>
-            <ArrowLeft size={16} /> Back to Academy
+            <ArrowLeft size={16} /> Back to Alpha Academy
           </Link>
 
           <div style={{ marginBottom: '48px' }}>
