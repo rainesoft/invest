@@ -236,9 +236,9 @@ ${JSON.stringify(snapshot, null, 2)}`;
       const reward = Math.abs(entry - tp);
       const rr = risk > 0 ? reward / risk : 0;
       
-      let requiredRR = 1.2;
-      if (data.confidence_score >= 90) requiredRR = 1.0;
-      else if (data.confidence_score >= 80) requiredRR = 1.1;
+      let requiredRR = 1.5;
+      if (data.confidence_score >= 90) requiredRR = 1.2;
+      else if (data.confidence_score >= 80) requiredRR = 1.3;
       
       if (rr < requiredRR - 0.05) { // Adding small epsilon tolerance
         console.warn(`[Validation] Attempt ${attempt} failed R:R math (R:R=${rr.toFixed(2)}, Required=${requiredRR}). Retrying...`);
@@ -940,8 +940,8 @@ serve(async (req) => {
             const riskRewardRatio = riskPoints > 0 ? (rewardPoints / riskPoints) : 0;
             
             let deskRequiredRR = 1.5;
-            if (confidence_score >= 90) deskRequiredRR = 1.2;
-            else if (confidence_score >= 80) deskRequiredRR = 1.3;
+            if (confidence_score >= 90) deskRequiredRR = 2.0;
+            else if (confidence_score >= 80) deskRequiredRR = 1.75;
 
             if (riskRewardRatio < deskRequiredRR - 0.05) {
               console.log(`[Layer C: Execution Desk] REJECTED ${symbol}: Risk:Reward ratio (${riskRewardRatio.toFixed(2)}) is below the institutional minimum of ${deskRequiredRR} for Tier score ${confidence_score}.`);
