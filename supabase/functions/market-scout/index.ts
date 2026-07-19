@@ -32,8 +32,26 @@ const REGION                   = Deno.env.get("METAAPI_REGION") ?? "new-york";
 const WEBHOOK_SECRET           = Deno.env.get("WEBHOOK_SECRET") ?? "";
 const TG_TOKEN                 = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
 const TG_CHAT                  = Deno.env.get("TELEGRAM_CHAT_ID") ?? "";
-const VOLUME                   = parseFloat(Deno.env.get("SCOUT_VOLUME") ?? "0.01");
+const RISK_USD                 = parseFloat(Deno.env.get("SCOUT_RISK_USD") ?? "500");  // $ to risk per trade
 const DRY_RUN                  = Deno.env.get("SCOUT_DRY_RUN") === "true";
+
+// ── LOT SIZE CALCULATOR ───────────────────────────────────────────────────────
+// Dollar value per lot for a $1 price move:
+//   XAUUSD: 100 oz/lot  → $100/lot per $1
+//   XAGUSD: 5000 oz/lot → $5000/lot per $1
+const CONTRACT_DOLLARS_PER_LOT: Record<string, number> = {
+  XAUUSD: 100,
+  XAGUSD: 5000,
+};
+
+function calcLots(symbol: string, entryPrice: number, sl: number): number {
+  const perLot      = CONTRACT_DOLLARS_PER_LOT[symbol] ?? 100;
+  const slDistance  = Math.abs(entryPrice - sl);
+  if (slDistance === 0) return 0.01;
+  const raw = RISK_USD / (slDistance * perLot);
+  // Round to 2 decimal places, min 0.01, max 50
+  return Math.min(50, Math.max(0.01, Math.round(raw * 100) / 100));
+}
 
 const MT_CLIENT = `https://mt-client-api-v1.${REGION}.agiliumtrade.ai/users/current/accounts/${META_ACCOUNT}`;
 const MT_DATA   = `https://mt-market-data-client-api-v1.${REGION}.agiliumtrade.ai/users/current/accounts/${META_ACCOUNT}`;
@@ -213,7 +231,7 @@ async function registerOpportunity(supabase: any, setup: any, cond: any) {
   return data.id as string;
 }
 
-async function recordTradeAndOrder(supabase: any, opportunityId: string, setup: any, cond: any, orderRes: any) {
+async function recordTradeAndOrder(supabase: any, opportunityId: string, setup: any, cond: any, orderRes: any, volume: number) {
   // Fetch admin user to satisfy NOT NULL on user_trades.user_id
   let userId: string | null = null;
   try {
@@ -231,7 +249,7 @@ async function recordTradeAndOrder(supabase: any, opportunityId: string, setup: 
         user_id:           userId,
         symbol:            setup.symbol,
         side:              setup.side,
-        volume:            VOLUME,
+        volume:            volume,
         risk_amount:       Math.abs((cond.entryPrice ?? 0) - cond.sl),
         status:            "ACTIVE",
         meta_api_order_id: orderRes?.orderId ?? null,
@@ -261,9 +279,9 @@ async function recordTradeAndOrder(supabase: any, opportunityId: string, setup: 
 }
 
 // ── TRADE EXECUTION ───────────────────────────────────────────────────────────
-async function fireTrade(setup: any, cond: any) {
+async function fireTrade(setup: any, cond: any, entryPx: number, volume: number) {
   if (DRY_RUN) {
-    console.log(`[DRY-RUN] Would fire ${setup.side} ${setup.symbol} @ ${cond.entryPrice ?? "market"} SL=${cond.sl} TP3=${cond.tp3}`);
+    console.log(`[DRY-RUN] Would fire ${setup.side} ${setup.symbol} @ ${cond.entryPrice ?? entryPx.toFixed(3)} SL=${cond.sl} TP3=${cond.tp3} vol=${volume}`);
     return { orderId: "DRY_RUN", stringCode: "ERR_NO_ERROR" };
   }
 
@@ -277,7 +295,7 @@ async function fireTrade(setup: any, cond: any) {
     actionType:      isLimit ? (isBuy ? "ORDER_TYPE_BUY_LIMIT" : "ORDER_TYPE_SELL_LIMIT")
                              : (isBuy ? "ORDER_TYPE_BUY"       : "ORDER_TYPE_SELL"),
     symbol:          setup.symbol,
-    volume:          VOLUME,
+    volume:          volume,
     stopLoss:        cond.sl,
     stopLossUnits:   "ABSOLUTE_PRICE",
     takeProfit:      cond.tp3,
@@ -408,15 +426,22 @@ serve(async (req) => {
 
       console.log(`  ✅ [${setup.label}] TRIGGERED: ${triggered.label}`);
 
+      // Calculate lot size based on $RISK_USD and SL distance
+      const entryPx = triggered.entryType === "limit"
+        ? (triggered.entryPrice ?? priceData.ask)
+        : priceData.ask;
+      const volume  = calcLots(setup.symbol, entryPx, triggered.sl);
+      console.log(`  [${setup.label}] Volume: ${volume} lots (risk $${RISK_USD}, SL distance $${Math.abs(entryPx - triggered.sl).toFixed(2)})`);
+
       // 1. Ledger first
       const opportunityId = await registerOpportunity(supabase, setup, triggered);
 
       // 2. Fire order
-      const orderRes   = await fireTrade(setup, triggered);
+      const orderRes   = await fireTrade(setup, triggered, entryPx, volume);
       const metaOrderId = orderRes?.orderId ?? null;
 
       // 3. Record trail
-      const tradeId = await recordTradeAndOrder(supabase, opportunityId, setup, triggered, orderRes);
+      const tradeId = await recordTradeAndOrder(supabase, opportunityId, setup, triggered, orderRes, volume);
 
       // 4. Notify
       await notify(
@@ -427,6 +452,7 @@ serve(async (req) => {
         `🛑 SL: $${triggered.sl}\n` +
         `🎯 TP1: $${triggered.tp1} | TP2: $${triggered.tp2} | TP3: $${triggered.tp3}\n` +
         `⚖️ R:R: ${setup.rr}\n` +
+        `📦 Volume: ${volume} lots (risk ~$${RISK_USD})\n` +
         `📋 Ledger: ${opportunityId}\n` +
         `🆔 MetaAPI: ${metaOrderId ?? "N/A"}`
       );
