@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { supabase } from '@lib/supabase';
 import dynamic from 'next/dynamic';
-import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, ArrowUpRight, ArrowDownRight, Activity } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 function parseAnalysisText(text: string) {
@@ -268,19 +268,19 @@ export default function VaultDashboard() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '24px', marginBottom: '24px' }}>
             <div style={{ background: '#111', border: '1px solid rgba(255,255,255,0.05)', padding: '32px', borderRadius: '24px' }}>
               <div style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '12px', fontWeight: 600 }}>WIN RATE (30D)</div>
-              <div style={{ fontSize: '40px', fontWeight: 800, color: metrics.winRate > 50 ? '#4ade80' : '#f87171', letterSpacing: '-1px' }}>
+              <div style={{ fontSize: '40px', fontWeight: 800, color: '#4ade80', letterSpacing: '-1px' }}>
                 {metrics.winRate}%
               </div>
             </div>
             <div style={{ background: '#111', border: '1px solid rgba(255,255,255,0.05)', padding: '32px', borderRadius: '24px' }}>
               <div style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '12px', fontWeight: 600 }}>NET R-MULTIPLE</div>
-              <div style={{ fontSize: '40px', fontWeight: 800, color: metrics.netR > 0 ? '#38bdf8' : '#f87171', letterSpacing: '-1px' }}>
+              <div style={{ fontSize: '40px', fontWeight: 800, color: '#38bdf8', letterSpacing: '-1px' }}>
                 {metrics.netR > 0 ? '+' : ''}{metrics.netR}R
               </div>
             </div>
             <div style={{ background: '#111', border: '1px solid rgba(255,255,255,0.05)', padding: '32px', borderRadius: '24px' }}>
               <div style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '12px', fontWeight: 600 }}>SYSTEM EXPECTANCY</div>
-              <div style={{ fontSize: '40px', fontWeight: 800, color: metrics.expectancy > 0 ? '#a855f7' : '#f87171', letterSpacing: '-1px' }}>
+              <div style={{ fontSize: '40px', fontWeight: 800, color: '#a855f7', letterSpacing: '-1px' }}>
                 {metrics.expectancy > 0 ? '+' : ''}{metrics.expectancy}R
               </div>
             </div>
@@ -365,14 +365,15 @@ export default function VaultDashboard() {
                   <tr key={t.id} style={{ borderTop: '1px solid #333', transition: 'background 0.2s' }}>
                     <td style={{ padding: '16px 24px', color: '#fff', fontWeight: 600 }}>{t.symbol}</td>
                     <td style={{ padding: '16px 24px' }}>
-                      <span style={{ 
-                        color: t.side === 'LONG' ? '#10b981' : '#ef4444',
-                        background: t.side === 'LONG' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
-                        padding: '4px 10px',
-                        borderRadius: '6px',
-                        fontSize: '12px',
-                        fontWeight: 700
-                      }}>{t.side}</span>
+                      {t.side === 'LONG' || t.side === 'BUY' ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#4ade80', background: 'rgba(74, 222, 128, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 800 }}>
+                          <ArrowUpRight size={14} /> {t.side}
+                        </span>
+                      ) : (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#f87171', background: 'rgba(248, 113, 113, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 800 }}>
+                          <ArrowDownRight size={14} /> {t.side}
+                        </span>
+                      )}
                     </td>
                     <td style={{ padding: '16px 24px', color: '#e5e7eb', fontFamily: 'monospace' }}>
                       {t.entry_plan_json?.price ? `$${t.entry_plan_json.price}` : '—'}
