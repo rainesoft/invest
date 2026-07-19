@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
 
+
 /**
  * ╔══════════════════════════════════════════════════════════════════════════╗
  * ║           MARKET SCOUT — Supabase Edge Function                        ║
@@ -11,8 +12,8 @@ import { createClient } from "npm:@supabase/supabase-js@2.108.2";
  * when entry conditions are confirmed. Each fired trade is written to the
  * vault ledger: trade_opportunities → user_trades → orders.
  *
- * Scheduled: every 5 minutes from 20:00–00:00 UTC Sunday–Friday
- * (pg_cron: "* /5 20-23 * * 0-4" — runs during active Asian/London overlap)
+ * Scheduled: every 5 minutes from 22:00–00:00 UTC Sunday–Friday
+ * (pg_cron: "* /5 22-23 * * 0-5" — runs during active Asian/London overlap)
  *
  * Can also be triggered manually via POST /market-scout with an
  * x-webhook-secret header matching WEBHOOK_SECRET env var.
@@ -190,9 +191,42 @@ async function mtPost(path: string, body: object) {
   return json;
 }
 
-async function getCandles(symbol: string, tf: string, limit = 3) {
+async function getCandles(supabase: any, symbol: string, tf: string, limit = 3) {
+  // First, check DB for candles
+  const { data: dbCandles, error } = await supabase
+    .from("market_data_pti")
+    .select("ts, o, h, l, c")
+    .eq("symbol", symbol)
+    .eq("timeframe", tf)
+    .order("ts", { ascending: false })
+    .limit(limit);
+
+  if (!error && dbCandles && dbCandles.length >= limit) {
+    // Reverse them to chronological order [oldest, ..., newest]
+    return dbCandles.reverse().map((c: any) => ({ t: c.ts, o: c.o, h: c.h, l: c.l, c: c.c }));
+  }
+
+  // Not enough candles in DB, fallback to MetaAPI
   const data = await mtGet(MT_DATA, `/historical-market-data/symbols/${symbol}/timeframes/${tf}/candles?limit=${limit}`);
-  return (data || []).map((c: any) => ({ t: c.time, o: c.open, h: c.high, l: c.low, c: c.close }));
+  const candles = (data || []).map((c: any) => ({ t: c.time, o: c.open, h: c.high, l: c.low, c: c.close }));
+
+  // Store them in DB for future use
+  if (candles.length > 0) {
+    const upsertPayload = candles.map((c: any) => ({
+      symbol,
+      timeframe: tf,
+      ts: c.t,
+      o: c.o,
+      h: c.h,
+      l: c.l,
+      c: c.c,
+      v: 0,
+      revision: 0
+    }));
+    await supabase.from("market_data_pti").upsert(upsertPayload, { onConflict: "symbol,timeframe,ts" });
+  }
+
+  return candles;
 }
 
 // ── NOTIFICATIONS ─────────────────────────────────────────────────────────────
@@ -208,7 +242,7 @@ async function notify(msg: string) {
 }
 
 // ── LEDGER ────────────────────────────────────────────────────────────────────
-async function registerOpportunity(supabase: any, setup: any, cond: any) {
+async function registerOpportunity(supabase: any, setup: any, cond: any, traceId: string) {
   const { data, error } = await supabase
     .from("trade_opportunities")
     .insert({
@@ -223,6 +257,7 @@ async function registerOpportunity(supabase: any, setup: any, cond: any) {
       stop_plan_json:  { price: cond.sl },
       take_profit_json:{ tp1: cond.tp1, tp2: cond.tp2, tp3: cond.tp3 },
       status:          "ACTIVE",
+      trace_id:        traceId,
     })
     .select("id")
     .single();
@@ -269,7 +304,7 @@ async function recordTradeAndOrder(supabase: any, opportunityId: string, setup: 
     client_order_id: shortId,
     type:            cond.entryType,
     side:            setup.side === "LONG" ? "buy" : "sell",
-    qty:             VOLUME,
+    qty:             volume,
     status:          DRY_RUN ? "DRY_RUN" : "FILLED",
     raw_request:     { symbol: setup.symbol, sl: cond.sl, tp1: cond.tp1, tp2: cond.tp2, tp3: cond.tp3 },
     raw_response:    orderRes ?? { dry_run: true },
@@ -310,6 +345,7 @@ async function fireTrade(setup: any, cond: any, entryPx: number, volume: number)
   return mtPost("/trade", body);
 }
 
+
 // ── CHECK ALREADY FIRED (idempotency) ─────────────────────────────────────────
 async function isAlreadyFired(supabase: any, setupId: string): Promise<boolean> {
   // We embed the setupId in the risk_summary field for reliable idempotency matching
@@ -326,13 +362,13 @@ async function isAlreadyFired(supabase: any, setupId: string): Promise<boolean> 
 }
 
 // ── MARKET HOURS GUARD ───────────────────────────────────────────────────────
-// Forex: Sun 22:00 UTC to Fri 22:00 UTC. We guard Sat 00:00–Sun 20:00 UTC.
+// Forex: Sun 22:00 UTC to Fri 22:00 UTC. We guard Sat 00:00–Sun 22:00 UTC.
 function isForexMarketOpen(): boolean {
   const now = new Date();
   const day = now.getUTCDay();   // 0=Sun, 6=Sat
   const hr  = now.getUTCHours();
   if (day === 6) return false;                   // All day Saturday — closed
-  if (day === 0 && hr < 20) return false;        // Sunday before 20:00 UTC — closed
+  if (day === 0 && hr < 22) return false;        // Sunday before 22:00 UTC — closed
   if (day === 5 && hr >= 22) return false;       // Friday after 22:00 UTC — closed
   return true;
 }
@@ -359,9 +395,26 @@ serve(async (req) => {
   }
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const traceId = crypto.randomUUID();
+  
+  // Guard: Volatility Lockout
+  const { data: lockout } = await supabase
+    .from("market_context")
+    .select("id")
+    .eq("macro_bias", "VOLATILITY_LOCKOUT")
+    .gt("expires_at", new Date().toISOString())
+    .limit(1);
+
+  if (lockout && lockout.length > 0) {
+    console.log(`[Market Scout] [Trace: ${traceId}] VOLATILITY LOCKOUT active — skipping poll to avoid fundamental chaos`);
+    return new Response(JSON.stringify({ ok: true, skipped: "VOLATILITY_LOCKOUT" }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   const results: Record<string, string> = {};
 
-  console.log(`[Market Scout] Poll started — ${new Date().toISOString()} | dry_run=${DRY_RUN}`);
+  console.log(`[Market Scout] [Trace: ${traceId}] Poll started — ${new Date().toISOString()} | dry_run=${DRY_RUN}`);
 
   for (const setup of SETUPS) {
     try {
@@ -377,38 +430,14 @@ serve(async (req) => {
       const mid       = (priceData.bid + priceData.ask) / 2;
 
       // Fetch candles
-      const candles = await getCandles(setup.symbol, setup.candleTf, 3);
+      const candles = await getCandles(supabase, setup.symbol, setup.candleTf, 3);
       const prev    = candles[candles.length - 2];
       const curr    = candles[candles.length - 1];
 
       if (!prev || !curr) { results[setup.id] = "NO_CANDLES"; continue; }
 
-      console.log(`  [${setup.label}] mid=${mid.toFixed(3)} | ${setup.candleTf} O=${curr.o} H=${curr.h} L=${curr.l} C=${curr.c}`);
+      console.log(`  [${setup.label}] [Trace: ${traceId}] mid=${mid.toFixed(3)} | ${setup.candleTf} O=${curr.o} H=${curr.h} L=${curr.l} C=${curr.c}`);
 
-      // Abort checks
-      if (setup.abortBelow !== undefined && mid < setup.abortBelow) {
-        console.log(`  [${setup.label}] Bear abort at ${mid.toFixed(2)}`);
-        await notify(`⛔ <b>${setup.label} ABORTED</b>\nBear level $${setup.abortBelow} broken at $${mid.toFixed(2)}.`);
-        // Register an aborted opportunity in ledger for the record
-        await supabase.from("trade_opportunities").insert({
-          symbol: setup.symbol, side: setup.side, timeframe: setup.candleTf,
-          ai_summary: `⛔ ${setup.id} — ABORTED: bear level $${setup.abortBelow} broken`,
-          status: "EXPIRED",
-        });
-        results[setup.id] = "ABORTED_BEAR";
-        continue;
-      }
-      if (setup.abortAbove !== undefined && mid > setup.abortAbove) {
-        console.log(`  [${setup.label}] Structure abort at ${mid.toFixed(2)}`);
-        await notify(`⛔ <b>${setup.label} ABORTED</b>\nAbove $${setup.abortAbove} — structure broken.`);
-        await supabase.from("trade_opportunities").insert({
-          symbol: setup.symbol, side: setup.side, timeframe: setup.candleTf,
-          ai_summary: `⛔ ${setup.id} — ABORTED: above $${setup.abortAbove}`,
-          status: "EXPIRED",
-        });
-        results[setup.id] = "ABORTED_STRUCTURE";
-        continue;
-      }
 
       // Condition checks
       let triggered: any = null;
@@ -424,20 +453,37 @@ serve(async (req) => {
         continue;
       }
 
-      console.log(`  ✅ [${setup.label}] TRIGGERED: ${triggered.label}`);
+      console.log(`  ✅ [${setup.label}] [Trace: ${traceId}] TRIGGERED: ${triggered.label}`);
 
       // Calculate lot size based on $RISK_USD and SL distance
       const entryPx = triggered.entryType === "limit"
         ? (triggered.entryPrice ?? priceData.ask)
         : priceData.ask;
       const volume  = calcLots(setup.symbol, entryPx, triggered.sl);
-      console.log(`  [${setup.label}] Volume: ${volume} lots (risk $${RISK_USD}, SL distance $${Math.abs(entryPx - triggered.sl).toFixed(2)})`);
+      console.log(`  [${setup.label}] [Trace: ${traceId}] Volume: ${volume} lots (risk $${RISK_USD}, SL distance $${Math.abs(entryPx - triggered.sl).toFixed(2)})`);
+
 
       // 1. Ledger first
-      const opportunityId = await registerOpportunity(supabase, setup, triggered);
+      let opportunityId: string | null = null;
+      try {
+        opportunityId = await registerOpportunity(supabase, setup, triggered, traceId);
+      } catch (err: any) {
+        throw new Error(`Ledger Error: ${err.message}`);
+      }
 
       // 2. Fire order
-      const orderRes   = await fireTrade(setup, triggered, entryPx, volume);
+      let orderRes: any;
+      try {
+        orderRes = await fireTrade(setup, triggered, entryPx, volume);
+      } catch (err: any) {
+        if (opportunityId) {
+          await supabase.from("trade_opportunities").update({ 
+            status: "ERROR", 
+            ai_summary: `⛔ [FAILED TO EXECUTE ON BROKER] ${err.message}` 
+          }).eq("id", opportunityId);
+        }
+        throw new Error(`Broker API Error: ${err.message}`);
+      }
       const metaOrderId = orderRes?.orderId ?? null;
 
       // 3. Record trail
@@ -460,12 +506,12 @@ serve(async (req) => {
       results[setup.id] = `FIRED:${opportunityId}`;
 
     } catch (err: any) {
-      console.error(`  ⚠️  [${setup.id}] Error: ${err.message}`);
+      console.error(`  ⚠️  [${setup.id}] [Trace: ${traceId}] Error: ${err.message}`);
       results[setup.id] = `ERROR:${err.message}`;
     }
   }
 
-  console.log("[Market Scout] Poll complete:", results);
+  console.log(`[Market Scout] [Trace: ${traceId}] Poll complete:`, results);
   return new Response(JSON.stringify({ ok: true, dry_run: DRY_RUN, results }), {
     headers: { "Content-Type": "application/json" },
   });

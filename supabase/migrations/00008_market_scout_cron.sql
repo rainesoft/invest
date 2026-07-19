@@ -19,11 +19,11 @@ WHERE EXISTS (
   SELECT 1 FROM cron.job WHERE jobname = 'market-scout-poll'
 );
 
--- Schedule: every 5 minutes during active trading window (20:00–23:59 UTC)
+-- Schedule: every 5 minutes during active trading window (22:00–23:59 UTC)
 -- Runs Sunday (0) through Friday (5) — covers market open through US close
 SELECT cron.schedule(
   'market-scout-poll',
-  '*/5 20-23 * * 0-5',
+  '*/5 22-23 * * 0-5',
   $$
   SELECT net.http_post(
     url     := current_setting('app.supabase_url') || '/functions/v1/market-scout',

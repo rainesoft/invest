@@ -128,11 +128,12 @@ ${historicalMemory || "No historical data available for this asset yet."}
    - MAX STOP LOSS LIMIT: Your calculated stop loss MUST NEVER exceed a distance of \`2.0 * atr_14\` from the suggested entry price (or \`3.0 * atr_14\` for Crypto assets).
 4. CONFIDENCE-WEIGHTED R:R (RISK TO REWARD) ENFORCEMENT: 
    - The required Risk/Reward ratio depends on your generated \`confidence_score\`:
-     * S-Tier (90-100 confidence): Minimum 1:1.0 R:R
-     * A-Tier (80-89 confidence): Minimum 1:1.1 R:R
-     * B-Tier (70-79 confidence): Minimum 1:1.2 R:R
+     * S-Tier (90-100 confidence): Minimum 1:1.2 R:R
+     * A-Tier (80-89 confidence): Minimum 1:1.3 R:R
+     * B-Tier (70-79 confidence): Minimum 1:1.5 R:R
    - Before outputting your JSON, mathematically verify that \`abs(Entry - TP) / abs(Entry - SL)\` meets the required threshold for your confidence tier.
-   - If the market structure does not allow for the required R:R ratio, you MUST set \`recommended_direction\` to "NONE". Do not force trades that fail the math!
+   - [CRITICAL MATH RULE]: If your initial structural TP does not yield the required R:R against your SL, you MUST aggressively adjust your trade setup to pass the math. You must extend your TP to the next higher-timeframe liquidity pool, or tighten your SL (while still maintaining at least 1.0 ATR padding) so that the mathematical R:R strictly exceeds the minimum threshold.
+   - Only if you absolutely cannot find a logical structure to stretch the R:R to the minimum should you set \`recommended_direction\` to "NONE".
 5. RANGING MARKETS & BREAKOUTS (MANDATORY RULE):
    - If the market is RANGING (price between 50 and 200 EMAs), a 'recommended_direction' of NONE is STRICTLY FORBIDDEN unless R:R fails.
    - You MUST always identify the nearest Swing High and Swing Low. Based on the dominant macro bias or HTF trend, place EITHER a Buy Stop 0.1% above the Swing High OR a Sell Stop 0.1% below the Swing Low. Do not place both.

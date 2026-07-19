@@ -389,13 +389,15 @@ serve(async (req) => {
     global: { headers: { Authorization: `Bearer ${key}` } },
   });
 
+  const traceId = crypto.randomUUID();
+
   async function runSwingPipeline(sendEvent: (data: any) => void) {
     const results: any[] = [];
     const rejections: any[] = [];
 
     try {
-      console.log(`[Swing Pipeline] Starting for symbols: ${symbols.join(", ")}`);
-      sendEvent({ type: "progress", message: `[Swing Pipeline] Starting macro Fibonacci analysis for: ${symbols.join(", ")}` });
+      console.log(`[Swing Pipeline] [Trace: ${traceId}] Starting for symbols: ${symbols.join(", ")}`);
+      sendEvent({ type: "progress", message: `[Swing Pipeline] [Trace: ${traceId}] Starting macro Fibonacci analysis for: ${symbols.join(", ")}` });
 
       // Fetch macro events once
       const allEvents = await fetchAllMacroEvents().catch(() => null);
@@ -408,7 +410,7 @@ serve(async (req) => {
           try {
             bars = await fetchPaperBars(symbol, timeframe, lookback, supabase);
           } catch (err: any) {
-            console.error(`[Data Error] ${symbol}: ${err.message}`);
+            console.error(`[Data Error] [Trace: ${traceId}] ${symbol}: ${err.message}`);
             rejections.push({ symbol, reason: `Data fetch failed: ${err.message}`, layer: "Data" });
             continue;
           }
@@ -455,7 +457,7 @@ serve(async (req) => {
               (snapshot as any).weekly_rsi = weeklySnap.rsi_14;
             }
           } catch (_) {
-            console.warn(`[${symbol}] Weekly MTFA fetch failed, continuing without it.`);
+            console.warn(`[${symbol}] [Trace: ${traceId}] Weekly MTFA fetch failed, continuing without it.`);
           }
 
           // === MACRO CONTEXT ===
@@ -512,16 +514,17 @@ serve(async (req) => {
                 : "NEUTRAL",
               invalidation_price: null, // will be set after AI evaluation below
               narrative: `Swing range $${fib.swing_low.toLocaleString()} → $${fib.swing_high.toLocaleString()} (${fib.direction}). Nearest Fib levels: ${nearestFibs.map((f) => f.label + " @ $" + f.price.toLocaleString()).join(", ")}. Weekly trend: ${(snapshot as any).weekly_trend ?? "unknown"}.`,
+              trace_id: traceId,
             });
 
             if (ctxErr) {
-              console.warn(`[Market Context] Write failed for ${symbol}: ${ctxErr.message}`);
+              console.warn(`[Market Context] [Trace: ${traceId}] Write failed for ${symbol}: ${ctxErr.message}`);
             } else {
-              console.log(`[Market Context] Published Fib levels for ${symbol} (7-day TTL)`);
+              console.log(`[Market Context] [Trace: ${traceId}] Published Fib levels for ${symbol} (7-day TTL)`);
               sendEvent({ type: "progress", message: `[Market Context] Fibonacci zones published for ${symbol} — Scalper will now use these levels` });
             }
           } catch (ctxWriteErr: any) {
-            console.warn(`[Market Context] Unexpected error for ${symbol}: ${ctxWriteErr.message}`);
+            console.warn(`[Market Context] [Trace: ${traceId}] Unexpected error for ${symbol}: ${ctxWriteErr.message}`);
           }
 
           // === AI EVALUATION ===
@@ -531,7 +534,7 @@ serve(async (req) => {
           try {
             evaluation = await evaluateSwingOpportunity(symbol, snapshot, fib, timeframe, historicalMemory, macroContext);
           } catch (err: any) {
-            console.error(`[AI Error] ${symbol}: ${err.message}`);
+            console.error(`[AI Error] [Trace: ${traceId}] ${symbol}: ${err.message}`);
             rejections.push({ symbol, reason: `AI evaluation failed: ${err.message}`, layer: "AI" });
             sendEvent({ type: "progress", message: `[${symbol}] AI evaluation failed: ${err.message}` });
             continue;
@@ -554,6 +557,7 @@ serve(async (req) => {
               ai_summary: `[SWING][${tier}] ${evaluation.recommended_direction === "NONE" ? "No setup" : "Low confidence"}: ${evaluation.thought_process?.slice(0, 400)}`,
               ai_risks: `Rejected by Swing AI: ${reason.slice(0, 200)}`,
               confidence,
+              trace_id: traceId,
             });
             rejections.push({ symbol, reason, layer: "Swing AI" });
             continue;
@@ -576,8 +580,8 @@ serve(async (req) => {
               .eq("agent_persona", "SWING_TRADER")
               .gt("expires_at", new Date().toISOString())
               .then(({ error }) => {
-                if (error) console.warn(`[Market Context] Backfill failed for ${symbol}: ${error.message}`);
-                else console.log(`[Market Context] Invalidation price backfilled for ${symbol}: ${aiSl}`);
+                if (error) console.warn(`[Market Context] [Trace: ${traceId}] Backfill failed for ${symbol}: ${error.message}`);
+                else console.log(`[Market Context] [Trace: ${traceId}] Invalidation price backfilled for ${symbol}: ${aiSl}`);
               });
           }
 
@@ -607,6 +611,7 @@ serve(async (req) => {
               ai_summary: `[SWING][${tier}] ${evaluation.fibonacci_rationale}`,
               ai_risks: msg,
               confidence,
+              trace_id: traceId,
             });
             rejections.push({ symbol, reason: msg, layer: "Execution Desk" });
             continue;
@@ -628,6 +633,7 @@ serve(async (req) => {
               ai_summary: `[SWING][${tier}] ${evaluation.fibonacci_rationale}`,
               ai_risks: `Rejected by Swing Desk: ${msg}`,
               confidence,
+              trace_id: traceId,
             });
             rejections.push({ symbol, reason: msg, layer: "Execution Desk" });
             continue;
@@ -683,17 +689,18 @@ serve(async (req) => {
               confidence,
               ai_summary: aiSummary,
               ai_risks: "Managed by Swing AI Risk Officer",
+              trace_id: traceId,
             })
             .select("id")
             .single();
 
           if (dbError) {
-            console.error(`[DB Error] ${symbol}: ${dbError.message}`);
+            console.error(`[DB Error] [Trace: ${traceId}] ${symbol}: ${dbError.message}`);
             rejections.push({ symbol, reason: dbError.message, layer: "Database" });
             continue;
           }
 
-          console.log(`[Swing] APPROVED ${symbol} — ID: ${dbData.id} | ${tier} | R:R 1:${rrToTp2.toFixed(1)} to TP2`);
+          console.log(`[Swing] [Trace: ${traceId}] APPROVED ${symbol} — ID: ${dbData.id} | ${tier} | R:R 1:${rrToTp2.toFixed(1)} to TP2`);
           sendEvent({
             type: "progress",
             message: `[${symbol}] ✅ SWING SIGNAL APPROVED — ${tier} | Entry: $${entry.toLocaleString()} | SL: $${sl.toLocaleString()} | TP2: $${tp2.toLocaleString()} | R:R 1:${rrToTp2.toFixed(1)}`,
@@ -736,7 +743,7 @@ serve(async (req) => {
 
           results.push({ symbol, id: dbData.id, tier, entry, sl, tp1, tp2, tp3, rr_to_tp2: rrToTp2 });
         } catch (symbolErr: any) {
-          console.error(`[Global Error] ${symbol}: ${symbolErr.message}`);
+          console.error(`[Global Error] [Trace: ${traceId}] ${symbol}: ${symbolErr.message}`);
           rejections.push({ symbol, reason: symbolErr.message, layer: "System" });
         }
       }
@@ -744,7 +751,7 @@ serve(async (req) => {
       sendEvent({ type: "complete", opportunities: results, rejections });
       return { opportunities: results, rejections };
     } catch (pipelineErr: any) {
-      console.error(`[Pipeline Error] ${pipelineErr.message}`);
+      console.error(`[Pipeline Error] [Trace: ${traceId}] ${pipelineErr.message}`);
       return { error: pipelineErr.message };
     }
   }
