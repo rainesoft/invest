@@ -427,7 +427,14 @@ serve(async (req) => {
                return e.impact === "High" && timeDiff > 0 && timeDiff <= thirtyMins;
             });
 
+            // --- MANUAL TRADING PAUSE ---
+            // User requested to pause all functions that can stop or kill live/pending trades.
+            // Temporarily disabling the Macro Breaker limit-order cancellation.
+            /*
             if (imminentHighImpactEvents.length > 0) {
+            */
+            if (false) {
+            // ----------------------------
                const affectedCurrencies = new Set(imminentHighImpactEvents.map((e: any) => e.currency));
                console.log(`[Macro Breaker] Imminent High-Impact events detected for: ${Array.from(affectedCurrencies).join(", ")}. Force-expiring soft pending orders.`);
                sendEvent({ type: 'progress', message: `[Macro Breaker] Imminent High-Impact events detected for ${Array.from(affectedCurrencies).join(", ")}. Force-canceling pending limit orders.` });

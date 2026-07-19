@@ -18,6 +18,11 @@ serve(async (req) => {
   try {
     const payload: WebhookPayload = await req.json();
 
+    // --- MANUAL TRADING PAUSE ---
+    // User requested to pause all functions that can stop or kill live trades.
+    return new Response("Auto-eject is currently PAUSED to allow for manual trading.", { status: 200 });
+    // ----------------------------
+
     if (payload.type !== "UPDATE") {
       return new Response("Ignored non-update webhook", { status: 200 });
     }
