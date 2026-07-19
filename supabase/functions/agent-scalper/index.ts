@@ -396,6 +396,20 @@ serve(async (req) => {
         console.log(`[Research Run] Starting pipeline for symbols: ${symbols.join(", ")}`);
         sendEvent({ type: 'progress', message: `Starting analysis pipeline for: ${symbols.join(", ")}` });
         
+        // Guard: Volatility Lockout
+        const { data: lockout } = await supabase
+          .from("market_context")
+          .select("id")
+          .eq("macro_bias", "VOLATILITY_LOCKOUT")
+          .gt("expires_at", new Date().toISOString())
+          .limit(1);
+
+        if (lockout && lockout.length > 0) {
+          console.log(`[Research Run] VOLATILITY LOCKOUT active — skipping technical analysis to avoid fundamental chaos`);
+          sendEvent({ type: 'progress', message: `[Guard] VOLATILITY LOCKOUT active — skipping technical evaluation.` });
+          return;
+        }
+        
         let allEvents = null;
         if (!newsContext) {
           sendEvent({ type: 'progress', message: `[Macro Data] Fetching global economic calendar...` });

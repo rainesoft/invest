@@ -4,6 +4,7 @@ import { fetchPaperBars, Bar } from "../../../packages/execution/index.ts";
 import { insertAuditLog } from "../../../packages/core/audit.ts";
 import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews } from "../../../packages/core/news.ts";
 import { getContextSnapshot, LogicContext } from "../../../packages/strategy/indicators.ts";
+import { validateGlobalSignal } from "../../../packages/strategy/riskManager.ts";
 import OpenAI from "npm:openai";
 import { z } from "npm:zod";
 
@@ -399,6 +400,20 @@ serve(async (req) => {
       console.log(`[Swing Pipeline] [Trace: ${traceId}] Starting for symbols: ${symbols.join(", ")}`);
       sendEvent({ type: "progress", message: `[Swing Pipeline] [Trace: ${traceId}] Starting macro Fibonacci analysis for: ${symbols.join(", ")}` });
 
+      // Guard: Volatility Lockout
+      const { data: lockout } = await supabase
+        .from("market_context")
+        .select("id")
+        .eq("macro_bias", "VOLATILITY_LOCKOUT")
+        .gt("expires_at", new Date().toISOString())
+        .limit(1);
+
+      if (lockout && lockout.length > 0) {
+        console.log(`[Swing Pipeline] [Trace: ${traceId}] VOLATILITY LOCKOUT active — skipping technical analysis to avoid fundamental chaos`);
+        sendEvent({ type: "progress", message: `[Guard] VOLATILITY LOCKOUT active — skipping technical evaluation.` });
+        return;
+      }
+
       // Fetch macro events once
       const allEvents = await fetchAllMacroEvents().catch(() => null);
 
@@ -440,6 +455,22 @@ serve(async (req) => {
 
           // === MARKET SNAPSHOT ===
           const snapshot = getContextSnapshot(timestamps, high, low, close);
+
+          // === ASSET ISOLATION (PYRAMIDING) GUARD ===
+          sendEvent({ type: "progress", message: `[Pre-AI Guard] Validating global signal constraints for ${symbol}...` });
+          const riskValidation = await validateGlobalSignal(supabase, symbol, snapshot);
+          if (!riskValidation.valid) {
+            console.log(`[Pre-AI Guard] [Trace: ${traceId}] REJECTED ${symbol}: ${riskValidation.reason}`);
+            sendEvent({ type: "progress", message: `[Pre-AI Guard] Skipped ${symbol}: Exposure constraints violated.` });
+            await insertAuditLog(supabase, {
+              actor_type: "SYSTEM",
+              action: "REJECTED_BY_RISK_PRE_AI",
+              entity_type: "swing_research",
+              payload_json: { symbol, reason: riskValidation.reason },
+            });
+            rejections.push({ symbol, reason: riskValidation.reason, layer: "Pre-AI Guard" });
+            continue;
+          }
 
           // Enrich with MTFA (weekly) if available
           try {
