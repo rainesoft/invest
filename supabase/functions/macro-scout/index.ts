@@ -302,7 +302,7 @@ serve(async (req) => {
       }
     }
 
-    }
+
 
     // === SENTIMENT SCOUT ===
     if (OPENAI_API_KEY) {
