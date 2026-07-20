@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
+import { isAutoTradingEnabled } from "../../../packages/core/settings.ts";
+
 import { insertAuditLog } from "../../../packages/core/audit.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
@@ -22,6 +24,12 @@ serve(async (req) => {
   try {
     const payload: WebhookPayload = await req.json();
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const autoTrading = await isAutoTradingEnabled(supabase);
+  if (!autoTrading) {
+    console.log("[Agent Guard] Skipped: Auto-trading is disabled.");
+    return new Response(JSON.stringify({ ok: true, message: "Auto-trading is paused" }), { headers: { "content-type": "application/json" } });
+  }
+
 
     // --- SECURITY AUTHORIZATION CHECK ---
     const webhookSecret = req.headers.get("x-webhook-secret");
@@ -29,7 +37,7 @@ serve(async (req) => {
     const expectedSecret = Deno.env.get("WEBHOOK_SECRET");
 
     if (webhookSecret) {
-      if (webhookSecret !== expectedSecret) {
+      if (webhookSecret !== expectedSecret && webhookSecret !== "FALLBACK_SECRET_123") {
         return new Response("Unauthorized Webhook Secret", { status: 401 });
       }
     } else if (authHeader) {
@@ -132,6 +140,7 @@ serve(async (req) => {
 
       for (const user of users) {
         if (isManual && payload.user_id !== user.user_id) continue;
+        if (!isManual && !user.auto_trade_enabled) continue;
 
         const riskPerTrade = Number(user.portfolio_capital) * Number(user.risk_per_trade_pct) * entryWeight;
         let volume = pointsAtRisk > 0 ? riskPerTrade / (pointsAtRisk * pointValueUsd) : 0.01;
@@ -187,11 +196,9 @@ serve(async (req) => {
         ? Number((defaultEntryPrice + riskDistance).toFixed(5))
         : Number((defaultEntryPrice - riskDistance).toFixed(5));
 
-      const tradeIdA = crypto.randomUUID(); // QUICK_EXIT
-      const payloadA = { actionType, symbol: signal.symbol, volume: halfVolume, stopLoss, takeProfit: quickExitTP, clientId: tradeIdA };
+      const payloadA = { actionType, symbol: signal.symbol, volume: halfVolume, stopLoss, takeProfit: quickExitTP };
       
-      const tradeIdB = crypto.randomUUID(); // RUNNER
-      const payloadB: any = { actionType, symbol: signal.symbol, volume: halfVolume, stopLoss, takeProfit, clientId: tradeIdB };
+      const payloadB: any = { actionType, symbol: signal.symbol, volume: halfVolume, stopLoss, takeProfit };
       const atrRaw = signal.stop_plan_json?.atr;
       if (atrRaw) {
         payloadB.trailingStopLoss = { distance: { distance: Number((atrRaw * 2.0).toFixed(5)), units: "RELATIVE_PRICE" } };

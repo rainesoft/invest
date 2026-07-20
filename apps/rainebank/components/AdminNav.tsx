@@ -3,6 +3,8 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { FileSearch, Zap, ArrowDownToLine, ArrowUpFromLine } from 'lucide-react';
+import AutoTradingToggle from './AutoTradingToggle';
+
 
 const TABS = [
   { href: '/admin/deposits',    label: 'Deposits',    Icon: ArrowDownToLine, activeColor: '#3b82f6', activeBg: 'rgba(59,130,246,0.1)' },
@@ -53,6 +55,7 @@ export default function AdminNav() {
           </Link>
         );
       })}
+      <AutoTradingToggle />
     </div>
   );
 }

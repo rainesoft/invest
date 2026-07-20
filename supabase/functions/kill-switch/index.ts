@@ -18,10 +18,6 @@ async function alpacaFetch(path: string, opts: RequestInit = {}) {
 }
 
 serve(async (_req) => {
-  // --- MANUAL TRADING PAUSE ---
-  // User requested to pause all functions that can stop or kill live trades.
-  return new Response(JSON.stringify({ ok: false, error: 'Kill switch is currently PAUSED to allow for manual trading.' }), { status: 200, headers: { 'content-type': 'application/json' } });
-  // ----------------------------
 
   const url = Deno.env.get('SUPABASE_URL');
   const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
