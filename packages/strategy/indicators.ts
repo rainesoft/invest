@@ -1,6 +1,7 @@
 import { EMA, RSI, ADX, ATR, BollingerBands } from 'technicalindicators';
 
 export type LogicContext = {
+  candlestick_pattern?: string;
   timestamp: string;
   current_price: number;
   ema_50: number | null;
@@ -67,6 +68,7 @@ export function calculatePivotPoints(high: number, low: number, close: number) {
 
 export function getContextSnapshot(
   timestamps: string[],
+  open: number[],
   high: number[],
   low: number[],
   close: number[]
@@ -91,6 +93,7 @@ export function getContextSnapshot(
       htf_support: [],
       htf_resistance: [],
       ltf_bos: 'NONE',
+      candlestick_pattern: 'NONE',
     };
   }
 
@@ -166,6 +169,22 @@ export function getContextSnapshot(
     }
   }
 
+  // Candlestick Pattern Evaluation
+  let candlestick_pattern = 'NONE';
+  if (close.length >= 3) {
+    const n = close.length;
+    const curr = { o: open[n-1], h: high[n-1], l: low[n-1], c: close[n-1] };
+    const prev = { o: open[n-2], h: high[n-2], l: low[n-2], c: close[n-2] };
+    const prev2 = { o: open[n-3], h: high[n-3], l: low[n-3], c: close[n-3] };
+    
+    if (isBullishEngulfing(prev, curr)) candlestick_pattern = 'BULLISH_ENGULFING';
+    else if (isBearishEngulfing(prev, curr)) candlestick_pattern = 'BEARISH_ENGULFING';
+    else if (isMorningStar(prev2, prev, curr)) candlestick_pattern = 'MORNING_STAR';
+    else if (isEveningStar(prev2, prev, curr)) candlestick_pattern = 'EVENING_STAR';
+    else if (isBullishRejection(prev, curr)) candlestick_pattern = 'BULLISH_REJECTION_PINBAR';
+    else if (isBearishRejection(prev, curr)) candlestick_pattern = 'BEARISH_REJECTION_PINBAR';
+  }
+
   return {
     timestamp,
     current_price,
@@ -182,5 +201,56 @@ export function getContextSnapshot(
     safe_short_stop_loss: safe_short_stop_loss ? Number(safe_short_stop_loss.toFixed(2)) : null,
     trend_alignment,
     ltf_bos,
+    candlestick_pattern,
   };
+}
+
+export function isBullishEngulfing(prev: any, curr: any) {
+  return (
+    prev.c < prev.o &&
+    curr.c > curr.o &&
+    curr.o <= prev.c &&
+    curr.c >= prev.o
+  );
+}
+
+export function isBearishEngulfing(prev: any, curr: any) {
+  return (
+    prev.c > prev.o &&
+    curr.c < curr.o &&
+    curr.o >= prev.c &&
+    curr.c <= prev.o
+  );
+}
+
+export function isMorningStar(prev2: any, prev1: any, curr: any) {
+  return (
+    prev2.c < prev2.o &&
+    Math.abs(prev1.c - prev1.o) < Math.abs(prev2.c - prev2.o) * 0.3 &&
+    curr.c > curr.o &&
+    curr.c > (prev2.c + prev2.o) / 2
+  );
+}
+
+export function isEveningStar(prev2: any, prev1: any, curr: any) {
+  return (
+    prev2.c > prev2.o &&
+    Math.abs(prev1.c - prev1.o) < Math.abs(prev2.c - prev2.o) * 0.3 &&
+    curr.c < curr.o &&
+    curr.c < (prev2.c + prev2.o) / 2
+  );
+}
+
+export function isBullishRejection(prev: any, curr: any) {
+  const body      = Math.abs(curr.c - curr.o);
+  const lowerWick = Math.min(curr.o, curr.c) - curr.l;
+  const isHammer  = lowerWick > body * 1.5 && curr.c > curr.o;
+  return isHammer;
+}
+
+export function isBearishRejection(prev: any, curr: any) {
+  const body      = Math.abs(curr.c - curr.o);
+  const upperWick = curr.h - Math.max(curr.o, curr.c);
+  const isStar    = upperWick > body * 1.5 && curr.c < curr.o;
+  return isStar;
 }

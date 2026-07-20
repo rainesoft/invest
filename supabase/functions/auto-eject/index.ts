@@ -2,6 +2,8 @@ import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
 import { insertAuditLog } from "../../../packages/core/audit.ts";
 import { cancelMetaApiOrder } from "../../../packages/execution/index.ts";
+import { isAutoTradingEnabled } from "../../../packages/core/settings.ts";
+
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -18,10 +20,12 @@ serve(async (req) => {
   try {
     const payload: WebhookPayload = await req.json();
 
-    // --- MANUAL TRADING PAUSE ---
-    // User requested to pause all functions that can stop or kill live trades.
-    return new Response("Auto-eject is currently PAUSED to allow for manual trading.", { status: 200 });
-    // ----------------------------
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    const autoTrading = await isAutoTradingEnabled(supabase);
+    if (!autoTrading) {
+      console.log("[Auto-Eject] Skipped: Auto-trading is disabled.");
+      return new Response("Auto-eject is currently PAUSED (Auto-Trading disabled)", { status: 200 });
+    }
 
     if (payload.type !== "UPDATE") {
       return new Response("Ignored non-update webhook", { status: 200 });
@@ -34,8 +38,6 @@ serve(async (req) => {
     if (signal.status !== "REJECTED" || (oldSignal && oldSignal.status === "REJECTED")) {
       return new Response("Signal is not newly rejected. Ignoring.", { status: 200 });
     }
-
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
     // Fetch all open user trades associated with this rejected signal
     const { data: openTrades, error: tradesError } = await supabase
