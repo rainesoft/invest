@@ -1,6 +1,13 @@
 -- 1. Unschedule old market-scout / agent-sniper if it still exists
-SELECT cron.unschedule('agent-sniper-poll');
-SELECT cron.unschedule('market-scout-poll');
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'agent-sniper-poll') THEN
+    PERFORM cron.unschedule('agent-sniper-poll');
+  END IF;
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'market-scout-poll') THEN
+    PERFORM cron.unschedule('market-scout-poll');
+  END IF;
+END $$;
 
 -- 2. Schedule agent-swing-poll every 4 hours on weekdays
 SELECT cron.schedule(
