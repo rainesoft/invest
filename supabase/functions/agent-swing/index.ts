@@ -3,7 +3,11 @@ import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2.108.2"
 import { fetchPaperBars, Bar } from "../../../packages/execution/index.ts";
 import { insertAuditLog } from "../../../packages/core/audit.ts";
 import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews } from "../../../packages/core/news.ts";
-import { getContextSnapshot, LogicContext } from "../../../packages/strategy/indicators.ts";
+import { isAutoTradingEnabled } from "../../../packages/core/settings.ts";
+
+import { revalidateOpportunity } from "../../../packages/strategy/revalidation.ts";
+
+import { getContextSnapshot, LogicContext, isBullishEngulfing, isBearishRejection } from "../../../packages/strategy/indicators.ts";
 import { validateGlobalSignal } from "../../../packages/strategy/riskManager.ts";
 import OpenAI from "npm:openai";
 import { z } from "npm:zod";
@@ -147,6 +151,20 @@ type SwingTrade = z.infer<typeof SwingTradeSchema>;
 // ============================================================
 // AI EVALUATOR
 // ============================================================
+
+// ============================================================
+// CANDLESTICK PATTERN RECOGNITION (From Agent-Sniper)
+// ============================================================
+
+
+
+
+
+// ============================================================
+// AI ACTIVE SIGNAL REVALIDATOR (From Agent-Scalper)
+// ============================================================
+
+
 async function evaluateSwingOpportunity(
   symbol: string,
   snapshot: LogicContext,
@@ -197,7 +215,8 @@ ${fibSummary}
 Extension Levels (profit targets):
 ${fibExtSummary}
 
-Current Price: $${snapshot.current_price?.toLocaleString()}
+Current Price: ${snapshot.current_price?.toLocaleString()}
+Candlestick Pattern: ${snapshot.candlestick_pattern}
 
 [MARKET SNAPSHOT — ${timeframe} Timeframe]
 ${JSON.stringify(snapshot, null, 2)}
@@ -208,12 +227,13 @@ ${macroContext || "No major macro events in the window."}
 [SWING TRADE RULES — READ CAREFULLY]
 
 1. FIBONACCI CONFLUENCE IS MANDATORY FOR S-TIER:
-   An S-Tier (confidence ≥ 90) setup REQUIRES at least 3 of the following to align:
-   - Price is at or within 0.5% of a key Fib level (38.2%, 50%, 61.8%, 78.6%)
+   An S-Tier (confidence >= 90) setup REQUIRES at least 3 of the following to align:
+   - Price is at or within 1.5% of a key Fib level (38.2%, 50%, 61.8%, 78.6%)
    - A daily/weekly structural support or resistance zone overlaps the Fib level
    - RSI is showing divergence or approaching oversold/overbought (< 35 or > 65)
-   - Macro fundamentals support the direction (central bank policy, geopolitical flows, commodity cycle)
-   - Higher timeframe EMA (daily 50 or 200) is in the same region as the Fib level
+   - Candlestick pattern confirms reversal (e.g. BULLISH_ENGULFING, MORNING_STAR, BEARISH_REJECTION_PINBAR at support/resistance)
+   - Macro fundamentals explicitly support the direction (MACRO SENTIMENT SCORE >= +5 for longs, or <= -5 for shorts)
+   - Higher timeframe (Weekly) EMA (50 or 200) is perfectly aligned with the Fib level (see weekly_ema_50 / weekly_ema_200 in snapshot)
    If fewer than 3 align, maximum confidence is A-Tier (85). Never inflate confidence.
 
 2. STOP LOSS PLACEMENT — SWING RULES:
@@ -230,7 +250,7 @@ ${macroContext || "No major macro events in the window."}
    - ALL THREE targets must be mathematically achievable from the entry
 
 4. R:R REQUIREMENTS FOR SWING:
-   - S-Tier (≥90 confidence): TP2 must yield minimum 1:3 R:R
+   - S-Tier (≥90 confidence): TP2 must yield minimum 1:2.5 R:R
    - A-Tier (80–89): TP2 must yield minimum 1:2 R:R
    - B-Tier (70–79): TP2 must yield minimum 1:1.5 R:R
    - If R:R to TP2 does not meet threshold, set recommended_direction to "NONE"
@@ -247,7 +267,48 @@ ${macroContext || "No major macro events in the window."}
    - If the price is in the middle of the Fib range with no clear level to anchor to, output recommended_direction = "NONE"
    - If the macro fundamentally contradicts the technical thesis, output "NONE"
 
-Output ONLY the raw JSON object — no markdown, no backticks, no explanation outside the JSON.`;
+8. DIRECTIONAL BIAS FILTERING (CRITICAL):
+   - If the Macro Sentiment Score is explicitly BEARISH (score < 0), you MUST REJECT any LONG technical setups and output "NONE" for recommended_direction, UNLESS you find a valid SHORT setup at HTF resistance (e.g. 61.8% Fib).
+   - If the Macro Sentiment Score is explicitly BULLISH (score > 0), you MUST REJECT any SHORT technical setups and output "NONE" for recommended_direction, UNLESS you find a valid LONG setup at HTF support.
+   - Confluence is non-negotiable for S-Tier. Do not output contradicting setups as A-Tier; reject them instead.
+
+9. LTF CONFIRMATION REQUIRED FOR S-TIER:
+   - Do not enter blindly at a HTF support/resistance level. An S-Tier setup REQUIRES a confirmed Lower Timeframe (LTF) Break of Structure (BOS) in your direction.
+   - For LONG setups, 'ltf_bos_bullish' MUST be true in the snapshot.
+   - For SHORT setups, 'ltf_bos_bearish' MUST be true in the snapshot.
+   - If LTF BOS confirmation is missing, downgrade confidence to A-Tier (max 85) or reject.
+
+Output ONLY the raw JSON object — no markdown, no backticks, no explanation outside the JSON. You MUST strictly adhere to the following JSON schema:
+
+{
+  "thought_process": "String. Step-by-step math and reasoning for entry, SL, and TP.",
+  "calculated_rr_to_tp1": 0.0,
+  "calculated_rr_to_tp2": 0.0,
+  "calculated_rr_to_tp3": 0.0,
+  "fibonacci_rationale": "String.",
+  "market_structure": "BULLISH_TREND | BEARISH_TREND | RANGING | DISTRIBUTION | ACCUMULATION",
+  "recommended_direction": "LONG | SHORT | NONE",
+  "strategy_applied": "FIB_RETRACEMENT_LONG | FIB_RETRACEMENT_SHORT | FIB_EXTENSION_TARGET | MACRO_REVERSAL_LONG | MACRO_REVERSAL_SHORT | RANGE_BOUNDARY | NONE",
+  "execution_parameters": {
+    "entry_type": "Buy Limit | Sell Limit | Buy Stop | Sell Stop | Market | NONE",
+    "suggested_entry_price": 0.0,
+    "suggested_stop_loss": 0.0,
+    "take_profit_1": 0.0,
+    "take_profit_2": 0.0,
+    "take_profit_3": 0.0
+  },
+  "confidence_score": 0,
+  "swing_rationale": {
+    "fib_entry_level": "String",
+    "structural_confirmation": "String",
+    "macro_alignment": "String",
+    "invalidation_level": "String",
+    "tp1_rationale": "String",
+    "tp2_rationale": "String",
+    "tp3_rationale": "String"
+  }
+}
+`;;
 
   const userPrompt = `Analyze ${symbol} on the ${timeframe} timeframe. The pre-computed Fibonacci levels are provided above. Identify the highest-probability swing trade setup if one exists. Calculate your R:R for all three TP levels in your thought_process before filling in the execution_parameters. Return the required JSON.`;
 
@@ -306,7 +367,7 @@ Output ONLY the raw JSON object — no markdown, no backticks, no explanation ou
       const rr = risk > 0 ? reward / risk : 0;
 
       let requiredRR = 1.5;
-      if (data.confidence_score >= 90) requiredRR = 3.0;
+      if (data.confidence_score >= 90) requiredRR = 2.5;
       else if (data.confidence_score >= 80) requiredRR = 2.0;
       else if (data.confidence_score >= 70) requiredRR = 1.5;
 
@@ -359,6 +420,7 @@ serve(async (req) => {
     Deno.env.get("SWING_SYMBOLS") ||
     "XAUUSD,XAGUSD,BTCUSD,UKOIL,EURUSD,GBPUSD,USDJPY,US30,NAS100";
   const symbols = symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean);
+  const newsContext = searchParams.get("news") ?? undefined;
 
   const url = Deno.env.get("SUPABASE_URL");
   const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -417,6 +479,99 @@ serve(async (req) => {
       // Fetch macro events once
       const allEvents = await fetchAllMacroEvents().catch(() => null);
 
+        // ==========================================
+        // PHASE 1: ACTIVE SIGNAL VALIDATION SWEEP
+        // ==========================================
+        console.log(`[Phase 1] Sweeping active APPROVED signals for revalidation...`);
+        sendEvent({ type: 'progress', message: `[Phase 1] Validating active signals against live market conditions...` });
+        
+        let metaApiFailedAlertSent = false;
+        const sendMetaApiAlert = async () => {
+          if (metaApiFailedAlertSent) return;
+          metaApiFailedAlertSent = true;
+          const botToken = Deno.env.get("TELEGRAM_BOT_TOKEN");
+          const chatId = Deno.env.get("TELEGRAM_CHAT_ID");
+          if (botToken && chatId) {
+            await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ chat_id: chatId, text: `🚨 *CRITICAL DATA FAILURE*\n\nMetaAPI broker feed failed to authenticate or connect.\n\nSignal generation for Forex/Crypto has been aborted to prevent execution misalignment. Please check your broker token.` })
+            }).catch(e => console.error("Failed to send telegram alert:", e));
+          }
+        };
+        
+        const { data: activeSignals } = await supabase
+          .from("trade_opportunities")
+          .select("*")
+          .eq("status", "APPROVED");
+
+        if (activeSignals && activeSignals.length > 0) {
+          for (const signal of activeSignals) {
+            try {
+              // 1. Math Validation (TTL)
+              const hoursElapsed = (Date.now() - new Date(signal.created_at).getTime()) / (1000 * 60 * 60);
+              if (hoursElapsed > 12) {
+                await supabase.from("trade_opportunities").update({ status: "EXPIRED", ai_risks: "Expired: 12h TTL exceeded without execution." }).eq("id", signal.id);
+                // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
+                console.log(`[Validation] EXPIRED ${signal.symbol}: 12h TTL expired.`);
+                continue;
+              }
+
+              // 2. Fetch Live Snapshot
+              const result = await fetchPaperBars(signal.symbol, signal.timeframe === '1d' ? '1D' : signal.timeframe, 100, supabase);
+              const snapshot = getContextSnapshot(
+                result.map((b: any) => b.t),
+                result.map((b: any) => b.o),
+                result.map((b: any) => b.h),
+                result.map((b: any) => b.l),
+                result.map((b: any) => b.c)
+              );
+
+              // 3. Math Validation (Stop Loss Hit)
+              const stopLoss = signal.stop_plan_json?.stop;
+              if (stopLoss) {
+                if ((signal.side === 'LONG' && snapshot.current_price <= stopLoss) || 
+                    (signal.side === 'SHORT' && snapshot.current_price >= stopLoss)) {
+                  await supabase.from("trade_opportunities").update({ status: "LOST", r_multiple: -1, ai_risks: "Technical Invalidation: Stop Loss crossed." }).eq("id", signal.id);
+                  // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
+                  console.log(`[Validation] LOST ${signal.symbol}: Stop loss crossed by live price.`);
+                  continue;
+                }
+              }
+
+              // 4. Fundamental / AI Revalidation
+              let currentContext = newsContext;
+              if (!currentContext) {
+                const headlines = await fetchRealtimeNews(signal.symbol);
+                currentContext = generateMacroContext(signal.symbol, allEvents, headlines);
+              }
+              
+              const evalResult = await revalidateOpportunity(signal, snapshot, currentContext);
+              
+              if (evalResult.action === "REJECT") {
+                await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Invalidated by AI Risk Officer: ${evalResult.reason}` }).eq("id", signal.id);
+                // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
+                console.log(`[Validation] REJECTED ${signal.symbol} by AI: ${evalResult.reason}`);
+              } else if (evalResult.action === "TAKE_PROFIT") {
+                // For scalping, if AI decides to secure profits early, we mark it as WON (or REJECTED with profit info) 
+                // Since 'REJECTED' triggers auto-eject, we can update it to REJECTED but state it's a profit take.
+                // Wait, if we mark it as REJECTED, it triggers auto-eject to close the live positions.
+                await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Profit Secured by AI Risk Officer: ${evalResult.reason}` }).eq("id", signal.id);
+                // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
+                console.log(`[Validation] TAKE_PROFIT ${signal.symbol} by AI: ${evalResult.reason}`);
+              } else {
+                console.log(`[Validation] MAINTAIN ${signal.symbol}: Thesis remains intact.`);
+              }
+            } catch (err: any) {
+               console.error(`[Validation Error] Failed to revalidate ${signal.symbol}:`, err.message);
+               if (err.message === "META_API_FAILURE") {
+                 await sendMetaApiAlert();
+               }
+            }
+          }
+        }
+
+
       for (const symbol of symbols) {
         try {
           sendEvent({ type: "progress", message: `[${symbol}] Fetching ${lookback} daily bars...` });
@@ -438,6 +593,7 @@ serve(async (req) => {
 
           sendEvent({ type: "progress", message: `[${symbol}] ${bars.length} bars loaded. Computing Fibonacci levels...` });
 
+          const open = bars.map((b) => b.o);
           const timestamps = bars.map((b) => b.t);
           const high = bars.map((b) => b.h);
           const low = bars.map((b) => b.l);
@@ -454,7 +610,7 @@ serve(async (req) => {
           });
 
           // === MARKET SNAPSHOT ===
-          const snapshot = getContextSnapshot(timestamps, high, low, close);
+          const snapshot = getContextSnapshot(timestamps, open, high, low, close);
 
           // === ASSET ISOLATION (PYRAMIDING) GUARD ===
           sendEvent({ type: "progress", message: `[Pre-AI Guard] Validating global signal constraints for ${symbol}...` });
@@ -478,6 +634,7 @@ serve(async (req) => {
             if (weeklyBars.length > 10) {
               const weeklySnap = getContextSnapshot(
                 weeklyBars.map((b) => b.t),
+                weeklyBars.map((b) => b.o),
                 weeklyBars.map((b) => b.h),
                 weeklyBars.map((b) => b.l),
                 weeklyBars.map((b) => b.c),
@@ -491,9 +648,68 @@ serve(async (req) => {
             console.warn(`[${symbol}] [Trace: ${traceId}] Weekly MTFA fetch failed, continuing without it.`);
           }
 
-          // === MACRO CONTEXT ===
+          // Enrich with LTF (1H or 30m) for BOS confirmation
+          try {
+            const ltfTimeframe = timeframe.toLowerCase() === "1d" ? "1h" : "30m";
+            const ltfBars = await fetchPaperBars(symbol, ltfTimeframe, 100, supabase);
+            if (ltfBars.length > 20) {
+              const ltfSnap = getContextSnapshot(
+                ltfBars.map((b) => b.t),
+                ltfBars.map((b) => b.o),
+                ltfBars.map((b) => b.h),
+                ltfBars.map((b) => b.l),
+                ltfBars.map((b) => b.c),
+              );
+              (snapshot as any).ltf_timeframe = ltfTimeframe;
+              (snapshot as any).ltf_trend = ltfSnap.trend_alignment;
+              (snapshot as any).ltf_bos_bullish = ltfSnap.bos_bullish;
+              (snapshot as any).ltf_bos_bearish = ltfSnap.bos_bearish;
+            }
+          } catch (err: any) {
+            console.warn(`[${symbol}] [Trace: ${traceId}] LTF fetch failed, continuing without it: ${err.message}`);
+          }
+
+          // === MACRO CONTEXT & SENTIMENT SCORING ===
           const headlines = await fetchRealtimeNews(symbol).catch(() => []);
-          const macroContext = generateMacroContext(symbol, allEvents, headlines);
+          
+          let sentimentScore = 0;
+          if (headlines && headlines.length > 0) {
+            try {
+              const openaiKey = Deno.env.get("OPENAI_API_KEY");
+              const azureKey = Deno.env.get("AZURE_OPENAI_API_KEY");
+              let sentimentOpenAI: OpenAI;
+              if (openaiKey) {
+                sentimentOpenAI = new OpenAI({ apiKey: openaiKey });
+              } else if (azureKey) {
+                sentimentOpenAI = new OpenAI({
+                  apiKey: azureKey,
+                  baseURL: `${Deno.env.get("AZURE_OPENAI_ENDPOINT")}/openai/deployments/${Deno.env.get("AZURE_OPENAI_DEPLOYMENT")}`,
+                  defaultQuery: { "api-version": Deno.env.get("AZURE_OPENAI_API_VERSION") || "2023-07-01-preview" },
+                  defaultHeaders: { "api-key": azureKey },
+                });
+              } else {
+                throw new Error("No OpenAI or Azure OpenAI keys found");
+              }
+
+              const sentimentResponse = await sentimentOpenAI.chat.completions.create({
+                model: "gpt-4o-mini", // fast model for sentiment
+                messages: [
+                  { role: "system", content: "You are a quantitative news analyst. Score the following headlines for the given financial asset strictly from -10 (extremely bearish) to +10 (extremely bullish). Output ONLY the integer score." },
+                  { role: "user", content: `Asset: ${symbol}\nHeadlines:\n${headlines.join('\n')}` }
+                ],
+                temperature: 0
+              });
+
+              const parsedScore = parseInt(sentimentResponse.choices[0].message?.content?.trim() || "0", 10);
+              if (!isNaN(parsedScore)) sentimentScore = parsedScore;
+              sendEvent({ type: "progress", message: `[${symbol}] Sentiment Score: ${sentimentScore}/10` });
+            } catch (err: any) {
+              console.error(`[Sentiment Error] Failed to evaluate sentiment for ${symbol}: ${err.message}`);
+            }
+          }
+
+          let macroContext = generateMacroContext(symbol, allEvents, headlines);
+          macroContext += `\n\nMACRO SENTIMENT SCORE: ${sentimentScore} / 10`;
 
           // === HISTORICAL MEMORY ===
           const { data: pastTrades } = await supabase

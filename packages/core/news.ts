@@ -9,6 +9,45 @@ export interface FFEvent {
 
 export async function fetchRealtimeNews(symbol: string): Promise<string[] | null> {
   try {
+    // 1. Check if we should use Targeted Fundamental Data Providers (Tavily)
+    const TAVILY_API_KEY = Deno.env.get("TAVILY_API_KEY");
+    if (TAVILY_API_KEY) {
+      let tavilyQuery = "";
+      if (symbol.includes("OIL")) {
+        tavilyQuery = "EIA crude oil inventories, API stockpile data, OPEC+ statements, global oil supply demand";
+      } else if (symbol.includes("XAU") || symbol.includes("XAG")) {
+        tavilyQuery = "Gold Silver macroeconomic drivers, inflation data, central bank gold buying, safe haven demand";
+      } else if (symbol.includes("BTC") || symbol.includes("ETH")) {
+        tavilyQuery = "Bitcoin Ethereum ETF flows, regulatory news, crypto institutional adoption, halving impact";
+      }
+
+      if (tavilyQuery) {
+        console.log(`[News] Using Targeted Fundamental Data Provider (Tavily) for ${symbol}`);
+        const res = await fetch("https://api.tavily.com/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_key: TAVILY_API_KEY,
+            query: `Latest market context and specific data points for: ${tavilyQuery}`,
+            search_depth: "advanced",
+            include_answer: true,
+            days: 3
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          let context = data.answer || "";
+          if (data.results && data.results.length > 0) {
+            context += "\n\nSources Context:\n" + data.results.slice(0, 3).map((r: any) => `- ${r.title}: ${r.content}`).join("\n");
+          }
+          if (context) return [context];
+        } else {
+          console.warn(`[News] Tavily fallback to RSS. Status: ${res.status}`);
+        }
+      }
+    }
+
+    // 2. Fallback to generic Google News RSS
     // Map symbols to good search terms
     let query = symbol;
     if (symbol.includes("US30") || symbol.includes("NAS") || symbol.includes("SPX")) {
