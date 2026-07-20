@@ -29,10 +29,3 @@ SELECT cron.schedule(
     end;
     $$
 );
-
--- 3. Restore the app.webhook_secret and url settings that were cleared
-ALTER DATABASE postgres SET "app.webhook_secret" TO 'FALLBACK_SECRET_123';
-ALTER DATABASE postgres SET "app.supabase_url" TO 'https://ktezlusdkqlfdwqrldtn.supabase.co';
-
--- 4. Reload configuration (optional but good practice)
--- Not strictly required in some environments but helps
