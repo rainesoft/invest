@@ -1,30 +1,19 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@lib/supabase';
 import { Terminal, ArrowRight, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import Logo from '@components/Logo';
 
-export default function LoginPage() {
+export default function UpdatePasswordPage() {
   const router = useRouter();
-  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [isLogin, setIsLogin] = useState(true);
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-
-  useEffect(() => {
-    const checkAuth = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (data?.session) {
-        router.push('/dashboard');
-      }
-    };
-    checkAuth();
-  }, [router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,30 +21,25 @@ export default function LoginPage() {
     setError('');
     setSuccess('');
 
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
+      setLoading(false);
+      return;
+    }
+
     try {
-      if (isLogin) {
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (signInError) throw signInError;
-        router.refresh();
+      const { error: updateError } = await supabase.auth.updateUser({
+        password: password,
+      });
+      if (updateError) throw updateError;
+      
+      setSuccess('Password updated successfully. Redirecting to your vault...');
+      setTimeout(() => {
         router.push('/dashboard');
-      } else {
-        const { error: signUpError } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            emailRedirectTo: `${window.location.origin}/auth/callback?next=/dashboard`,
-          },
-        });
-        if (signUpError) throw signUpError;
-        setSuccess('Check your email to confirm your account, or login directly.');
-        setIsLogin(true);
-      }
+      }, 2000);
     } catch (err: any) {
-      console.error("Login Error Caught:", err);
-      setError(err.message || 'An error occurred during authentication.');
+      console.error("Update Password Error:", err);
+      setError(err.message || 'An error occurred while updating the password.');
     } finally {
       setLoading(false);
     }
@@ -74,7 +58,7 @@ export default function LoginPage() {
         overflow: 'hidden',
       }}
     >
-      {/* Background Gradients (Matches Landing Page) */}
+      {/* Background Gradients */}
       <div style={{
         position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
         background: 'radial-gradient(circle at 15% 15%, rgba(37, 99, 235, 0.1) 0%, transparent 40%), radial-gradient(circle at 85% 85%, rgba(74, 222, 128, 0.05) 0%, transparent 40%)',
@@ -133,7 +117,7 @@ export default function LoginPage() {
               color: '#fff'
             }}
           >
-            {isLogin ? 'Access the Vault' : 'Initialize Account'}
+            Update Security Key
           </h2>
           <p
             style={{
@@ -143,9 +127,7 @@ export default function LoginPage() {
               fontSize: '15px',
             }}
           >
-            {isLogin
-              ? 'Authenticate to view the immutable ledger.'
-              : 'Join RaineBank for real-time alpha signals.'}
+            Enter a new passphrase for your vault.
           </p>
 
           {error && (
@@ -183,42 +165,6 @@ export default function LoginPage() {
           <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             <div>
               <label
-                htmlFor="email"
-                style={{
-                  display: 'block',
-                  fontSize: '13px',
-                  fontWeight: 600,
-                  marginBottom: '8px',
-                  color: '#9ca3af',
-                }}
-              >
-                INSTITUTIONAL EMAIL
-              </label>
-              <input
-                id="email"
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="operator@fund.com"
-                style={{
-                  width: '100%',
-                  padding: '14px 16px',
-                  backgroundColor: '#0a0a0a',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                  borderRadius: '12px',
-                  color: 'white',
-                  fontSize: '15px',
-                  outline: 'none',
-                  transition: 'border-color 0.2s',
-                }}
-                onFocus={(e) => (e.target.style.borderColor = '#38bdf8')}
-                onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.1)')}
-              />
-            </div>
-
-            <div>
-              <label
                 htmlFor="password"
                 style={{
                   display: 'block',
@@ -228,7 +174,7 @@ export default function LoginPage() {
                   color: '#9ca3af',
                 }}
               >
-                PASSPHRASE
+                NEW PASSPHRASE
               </label>
               <input
                 id="password"
@@ -251,20 +197,42 @@ export default function LoginPage() {
                 onFocus={(e) => (e.target.style.borderColor = '#38bdf8')}
                 onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.1)')}
               />
-              
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
-                <Link 
-                  href="/forgot-password"
-                  style={{
-                    color: '#38bdf8',
-                    fontSize: '13px',
-                    textDecoration: 'none',
-                    fontWeight: 500,
-                  }}
-                >
-                  Forgot Password?
-                </Link>
-              </div>
+            </div>
+
+            <div>
+              <label
+                htmlFor="confirmPassword"
+                style={{
+                  display: 'block',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  marginBottom: '8px',
+                  color: '#9ca3af',
+                }}
+              >
+                CONFIRM PASSPHRASE
+              </label>
+              <input
+                id="confirmPassword"
+                type="password"
+                required
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="••••••••"
+                style={{
+                  width: '100%',
+                  padding: '14px 16px',
+                  backgroundColor: '#0a0a0a',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: '12px',
+                  color: 'white',
+                  fontSize: '15px',
+                  outline: 'none',
+                  transition: 'border-color 0.2s',
+                }}
+                onFocus={(e) => (e.target.style.borderColor = '#38bdf8')}
+                onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.1)')}
+              />
             </div>
 
             <button
@@ -297,42 +265,13 @@ export default function LoginPage() {
             >
               {loading ? (
                 <Loader2 className="animate-spin" size={20} />
-              ) : isLogin ? (
-                <>
-                  Unlock Ledger <ArrowRight size={18} />
-                </>
               ) : (
                 <>
-                  Initialize Profile <ArrowRight size={18} />
+                  Commit Security Change <ArrowRight size={18} />
                 </>
               )}
             </button>
           </form>
-
-          <div style={{ marginTop: '32px', textAlign: 'center' }}>
-            <button
-              type="button"
-              onClick={() => {
-                setIsLogin(!isLogin);
-                setError('');
-                setSuccess('');
-              }}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: '#9ca3af',
-                fontSize: '14px',
-                cursor: 'pointer',
-                textDecoration: 'none',
-              }}
-              onMouseOver={(e) => (e.currentTarget.style.color = '#fff')}
-              onMouseOut={(e) => (e.currentTarget.style.color = '#9ca3af')}
-            >
-              {isLogin
-                ? "Don't have an account? Create one."
-                : 'Already an operator? Authenticate here.'}
-            </button>
-          </div>
         </div>
       </div>
     </div>

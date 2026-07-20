@@ -1,30 +1,18 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@lib/supabase';
-import { Terminal, ArrowRight, Loader2 } from 'lucide-react';
+import { Terminal, ArrowRight, Loader2, ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 import Logo from '@components/Logo';
 
-export default function LoginPage() {
+export default function ForgotPasswordPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [isLogin, setIsLogin] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-
-  useEffect(() => {
-    const checkAuth = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (data?.session) {
-        router.push('/dashboard');
-      }
-    };
-    checkAuth();
-  }, [router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,29 +21,15 @@ export default function LoginPage() {
     setSuccess('');
 
     try {
-      if (isLogin) {
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (signInError) throw signInError;
-        router.refresh();
-        router.push('/dashboard');
-      } else {
-        const { error: signUpError } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            emailRedirectTo: `${window.location.origin}/auth/callback?next=/dashboard`,
-          },
-        });
-        if (signUpError) throw signUpError;
-        setSuccess('Check your email to confirm your account, or login directly.');
-        setIsLogin(true);
-      }
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth/callback?next=/update-password`,
+      });
+      if (resetError) throw resetError;
+      
+      setSuccess('Recovery link dispatched. Check your institutional email.');
     } catch (err: any) {
-      console.error("Login Error Caught:", err);
-      setError(err.message || 'An error occurred during authentication.');
+      console.error("Password Reset Error:", err);
+      setError(err.message || 'An error occurred during password recovery.');
     } finally {
       setLoading(false);
     }
@@ -74,7 +48,7 @@ export default function LoginPage() {
         overflow: 'hidden',
       }}
     >
-      {/* Background Gradients (Matches Landing Page) */}
+      {/* Background Gradients */}
       <div style={{
         position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
         background: 'radial-gradient(circle at 15% 15%, rgba(37, 99, 235, 0.1) 0%, transparent 40%), radial-gradient(circle at 85% 85%, rgba(74, 222, 128, 0.05) 0%, transparent 40%)',
@@ -133,7 +107,7 @@ export default function LoginPage() {
               color: '#fff'
             }}
           >
-            {isLogin ? 'Access the Vault' : 'Initialize Account'}
+            Recover Ledger Access
           </h2>
           <p
             style={{
@@ -143,9 +117,7 @@ export default function LoginPage() {
               fontSize: '15px',
             }}
           >
-            {isLogin
-              ? 'Authenticate to view the immutable ledger.'
-              : 'Join RaineBank for real-time alpha signals.'}
+            Enter your email to receive a recovery link.
           </p>
 
           {error && (
@@ -217,56 +189,6 @@ export default function LoginPage() {
               />
             </div>
 
-            <div>
-              <label
-                htmlFor="password"
-                style={{
-                  display: 'block',
-                  fontSize: '13px',
-                  fontWeight: 600,
-                  marginBottom: '8px',
-                  color: '#9ca3af',
-                }}
-              >
-                PASSPHRASE
-              </label>
-              <input
-                id="password"
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                style={{
-                  width: '100%',
-                  padding: '14px 16px',
-                  backgroundColor: '#0a0a0a',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                  borderRadius: '12px',
-                  color: 'white',
-                  fontSize: '15px',
-                  outline: 'none',
-                  transition: 'border-color 0.2s',
-                }}
-                onFocus={(e) => (e.target.style.borderColor = '#38bdf8')}
-                onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.1)')}
-              />
-              
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
-                <Link 
-                  href="/forgot-password"
-                  style={{
-                    color: '#38bdf8',
-                    fontSize: '13px',
-                    textDecoration: 'none',
-                    fontWeight: 500,
-                  }}
-                >
-                  Forgot Password?
-                </Link>
-              </div>
-            </div>
-
             <button
               type="submit"
               disabled={loading}
@@ -297,26 +219,17 @@ export default function LoginPage() {
             >
               {loading ? (
                 <Loader2 className="animate-spin" size={20} />
-              ) : isLogin ? (
-                <>
-                  Unlock Ledger <ArrowRight size={18} />
-                </>
               ) : (
                 <>
-                  Initialize Profile <ArrowRight size={18} />
+                  Dispatch Magic Link <ArrowRight size={18} />
                 </>
               )}
             </button>
           </form>
 
           <div style={{ marginTop: '32px', textAlign: 'center' }}>
-            <button
-              type="button"
-              onClick={() => {
-                setIsLogin(!isLogin);
-                setError('');
-                setSuccess('');
-              }}
+            <Link 
+              href="/login"
               style={{
                 background: 'none',
                 border: 'none',
@@ -324,14 +237,13 @@ export default function LoginPage() {
                 fontSize: '14px',
                 cursor: 'pointer',
                 textDecoration: 'none',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px'
               }}
-              onMouseOver={(e) => (e.currentTarget.style.color = '#fff')}
-              onMouseOut={(e) => (e.currentTarget.style.color = '#9ca3af')}
             >
-              {isLogin
-                ? "Don't have an account? Create one."
-                : 'Already an operator? Authenticate here.'}
-            </button>
+              <ArrowLeft size={16} /> Return to Login
+            </Link>
           </div>
         </div>
       </div>

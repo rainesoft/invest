@@ -19,26 +19,36 @@ type Opportunity = {
 };
 
 function parseAnalysisText(text: string) {
-  const match = text.match(/^\[(.*?-Tier)\] \[(.*?) -> (.*?)\]/);
+  const agentMatch = text.match(/^\[(SWING|SCALPER|SNIPER|NEWS)\]/i);
+  const agent = agentMatch ? agentMatch[1].toUpperCase() : null;
+  
+  let cleanText = text;
+  if (agentMatch) {
+    cleanText = cleanText.substring(agentMatch[0].length).trim();
+  }
+
+  const match = cleanText.match(/^\[(.*?-Tier)\]\s*\[(.*?)\s*(?:->|→)\s*(.*?)\]/);
   if (!match) {
-    const fallbackMatch = text.match(/^\[(.*?) -> (.*?)\]/);
-    if (!fallbackMatch) return { tier: null, structure: null, strategy: null, content: text };
+    const fallbackMatch = cleanText.match(/^\[(.*?)\s*(?:->|→)\s*(.*?)\]/);
+    if (!fallbackMatch) return { agent, tier: null, structure: null, strategy: null, content: cleanText };
     return {
+      agent,
       tier: null,
       structure: fallbackMatch[1],
       strategy: fallbackMatch[2],
-      content: text.replace(fallbackMatch[0], '').trim()
+      content: cleanText.replace(fallbackMatch[0], '').trim()
     };
   }
   return {
+    agent,
     tier: match[1],
     structure: match[2],
     strategy: match[3],
-    content: text.replace(match[0], '').trim()
+    content: cleanText.replace(match[0], '').trim()
   };
 }
 
-function TrendBadge({ tier, structure, strategy }: { tier: string | null, structure: string | null, strategy: string | null }) {
+function TrendBadge({ agent, tier, structure, strategy }: { agent: string | null, tier: string | null, structure: string | null, strategy: string | null }) {
   if (!structure) return null;
 
   let label = 'NONE';
@@ -61,6 +71,11 @@ function TrendBadge({ tier, structure, strategy }: { tier: string | null, struct
 
   return (
     <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap' }}>
+      {agent && (
+        <div style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 800 }}>
+          {agent}
+        </div>
+      )}
       {tier && (
         <div style={{ background: tierBg, color: tierColor, padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 800 }}>
           {tier}

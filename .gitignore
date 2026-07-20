@@ -58,3 +58,4 @@ supabase/config.toml
 scratch/
 .env*
 docs/
+temp/
