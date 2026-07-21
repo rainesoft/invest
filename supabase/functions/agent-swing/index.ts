@@ -126,6 +126,10 @@ const SwingTradeSchema = z.object({
     "FIB_EXTENSION_TARGET",
     "MACRO_REVERSAL_LONG",
     "MACRO_REVERSAL_SHORT",
+    "MACRO_MOMENTUM_BREAKOUT_LONG",
+    "MACRO_MOMENTUM_BREAKOUT_SHORT",
+    "LIQUIDITY_SWEEP_LONG",
+    "LIQUIDITY_SWEEP_SHORT",
     "RANGE_BOUNDARY",
     "NONE",
   ]),
@@ -220,60 +224,41 @@ ${macroContext || "No major macro events in the window."}
 
 [SWING TRADE RULES — READ CAREFULLY]
 
-1. FIBONACCI & SMC CONFLUENCE IS MANDATORY FOR S-TIER:
+1. FIBONACCI & SMC CONFLUENCE:
    An S-Tier (confidence >= 90) setup REQUIRES at least 3 of the following to align:
-   - Price is at or within 1.5% of a key Fib level (38.2%, 50%, 61.8%, 78.6%)
-   - SMART MONEY CONCEPTS (SMC): Price has just mitigated a Fair Value Gap (FVG) or swept liquidity into an Order Block (OB).
-   - A daily/weekly structural support or resistance zone overlaps the Fib level
-   - RSI is showing divergence or approaching oversold/overbought (< 35 or > 65)
-   - Candlestick pattern confirms reversal (e.g. BULLISH_ENGULFING, MORNING_STAR, BEARISH_REJECTION_PINBAR at support/resistance)
-   - Macro fundamentals explicitly support the direction (e.g., High-impact events or breaking news align with the technical bias)
-   - Higher timeframe (Weekly) EMA (50 or 200) is perfectly aligned with the Fib level (see weekly_ema_50 / weekly_ema_200 in snapshot)
-   If fewer than 3 align, maximum confidence is A-Tier (85). Never inflate confidence.
+   - Price is at or within 1.5% of a key Fib level
+   - SMART MONEY CONCEPTS (SMC): Price has mitigated a FVG or swept liquidity into an OB
+   - A daily/weekly structural support/resistance zone overlaps the Fib level
+   - RSI divergence or approaching oversold/overbought
+   - Macro fundamentals explicitly support the direction
 
-2. STOP LOSS PLACEMENT — SWING RULES:
-   - Place SL BELOW the next significant Fib level or structural support (for longs)
-   - Place SL ABOVE the next significant Fib level or structural resistance (for shorts)
-   - Minimum SL distance: 1.5× daily ATR. Do not set stops tighter than this.
-   - Maximum SL distance: 8% of entry price (swing trades can breathe)
-   - For precious metals (XAUUSD, XAGUSD): Maximum SL is 10% of entry price
+2. DYNAMIC LTF STOP-LOSS COMPRESSION (CRITICAL FOR S-TIER):
+   - DO NOT use the Daily ATR or a wide Daily swing low for your Stop Loss.
+   - You MUST scan the LTF timeframe (1H or 30m) provided in the snapshot. Find the nearest SMC Order Block (ltf_bullish_ob_nearest / ltf_bearish_ob_nearest) or FVG.
+   - Anchor your Stop Loss directly behind the LTF Order Block. This compresses the risk by 80%, instantly transforming a 1:1 trade into a massive 1:5.0 S-Tier setup.
 
-3. TAKE PROFIT STRUCTURE — THREE TARGETS:
-   - TP1 (Conservative, 40% position close): Next Fib level in direction of trade
-   - TP2 (Primary, 35% position close): Second major Fib level or structural zone
-   - TP3 (Runner, 25% position close): Fib extension or psychological round number
-   - ALL THREE targets must be mathematically achievable from the entry
+3. MOMENTUM BREAKOUT STRATEGIES (IGNORING FIBS):
+   - If the MACRO SENTIMENT SCORE is > 8 (Extremely Bullish) or < -8 (Extremely Bearish), you are authorized to IGNORE Fibonacci retracements.
+   - In a massive fundamental run, price will not pull back to 61.8%.
+   - In this state, approve a MACRO_MOMENTUM_BREAKOUT_LONG or SHORT trade. Buy/sell the breakout of structural resistance/support using a tighter trailing ATR stop instead of waiting for a deep pullback.
 
-4. R:R REQUIREMENTS FOR SWING:
-   - S-Tier (≥90 confidence): TP2 must yield minimum 1:2.0 R:R
-   - A-Tier (80–89): TP2 must yield minimum 1:1.5 R:R
-   - B-Tier (70–79): TP2 must yield minimum 1:1.2 R:R
+4. LIQUIDITY SWEEP "SNIPER" MODE (TURTLESOUP):
+   - Institutional algorithms buy below support after retail stops are hunted.
+   - If you detect a Liquidity Sweep (ltf_liquidity_sweep_bullish or ltf_liquidity_sweep_bearish is true) where price pierced a Daily low/high and immediately closed back inside the range (wick rejection), flag this as an IMMEDIATE S-Tier reversal.
+   - Jump in before the retail market reacts.
 
-5. MACRO SENSITIVITY: 
-   If trading XAUUSD (Gold), XAGUSD (Silver), or UKOIL (Oil) and the recent news context contains high-impact geopolitical events or central bank rate decisions, you MUST reject the trade unless you are explicitly originating a momentum breakout setup directly aligned with the macro catalyst.
-   - If R:R to TP2 does not meet threshold, set recommended_direction to "NONE"
+5. KELLY CRITERION OVERRIDE VS RIGID R:R:
+   - Provide your honest 'probability_estimate' (1-99) of the trade hitting TP2.
+   - Standard requirement is 1:2.0 R:R for S-Tier.
+   - HOWEVER, if the trade has an exceptionally high Win Probability (e.g., 90%), the system will apply a Kelly Criterion heuristic. An R:R of 1:1.5 with 90% probability will be automatically approved as S-Tier because the Expected Value is massive.
 
-5. COUNTER-TREND IS ALLOWED FOR SWING:
-   - A mean-reversion long in a bearish market IS valid if price has reached a major Fib level (61.8% or 78.6%)
-   - A counter-trend trade requires macro alignment: even if short-term bearish, the macro must support the reversal direction
-   - Counter-trend setups cap at A-Tier (88 confidence max) unless ALL 5 confluence factors align
+6. DIRECTIONAL BIAS FILTERING:
+   - If the Macro Sentiment actively contradicts your technical setup, DOWNGRADE the setup to B-Tier or REJECT.
 
-6. FOMC / HIGH-IMPACT EVENTS:
-   - If a FOMC meeting is within 10 days and the trade direction depends on rate policy, reduce confidence by 10 points and note the risk.
-
-7. NEVER FORCE A TRADE:
-   - If the price is in the middle of the Fib range with no clear level to anchor to, output recommended_direction = "NONE"
-
-8. DIRECTIONAL BIAS FILTERING (CRITICAL):
-   - If the Macro Sentiment Score actively contradicts your technical setup (e.g. Bearish macro but Bullish technicals at support), you must NOT output an S-Tier or A-Tier signal.
-   - Instead, DOWNGRADE the setup to B-Tier (confidence between 70-79). Do not output "NONE" if the technicals are perfectly valid.
-   - Confluence is non-negotiable for S-Tier and A-Tier. Contradicting setups are strictly B-Tier.
-
-9. LTF CONFIRMATION & DYNAMIC SCALING FOR S-TIER:
-   - Do not enter blindly at a HTF support/resistance level. An S-Tier setup REQUIRES a confirmed Lower Timeframe (LTF) Break of Structure (BOS) or LTF SMC confluence in your direction.
-   - Use the LTF SMC features (e.g., ltf_bullish_ob_nearest, ltf_liquidity_sweep) from the snapshot to find a tighter entry and place your Stop Loss directly behind the LTF Order Block or FVG, rather than a wide Daily swing low.
-   - This dynamic timeframe scaling will naturally compress your Stop Loss and boost your Risk:Reward beyond the 1:2.5 S-Tier threshold.
-   - If LTF BOS or LTF SMC confirmation is missing, downgrade confidence to A-Tier (max 85) or reject.`;
+7. TAKE PROFIT STRUCTURE — THREE TARGETS:
+   - TP1 (Conservative): Next Fib level or structure
+   - TP2 (Primary): Second major Fib level or structural zone
+   - TP3 (Runner): Fib extension or psychological round number`;
 
   console.log(`[Responses API] Submitting ${symbol} analysis...`);
   
@@ -303,12 +288,13 @@ ${macroContext || "No major macro events in the window."}
             order_type: { type: "string" },
             direction: { type: "string" },
             entry_price: { type: "number" },
-            stop_loss: { type: "number" }
+            stop_loss: { type: "number" },
+            probability_estimate: { type: "number", description: "Estimated win probability 1-99" }
           },
           required: [
             "confidence_score", "recommended_direction", "fib_entry_level", "structural_confirmation",
             "market_structure", "strategy_applied", "suggested_entry_price", "suggested_stop_loss",
-            "take_profit_2", "rationale"
+            "take_profit_2", "rationale", "probability_estimate"
           ]
         }
       },
@@ -406,18 +392,22 @@ ${macroContext || "No major macro events in the window."}
         const risk = Math.abs(entry - sl);
         const reward = Math.abs(entry - tp2);
         const rr = risk > 0 ? reward / risk : 0;
+        
+        const prob = (args.probability_estimate || 50) / 100;
+        // Kelly / Expected Value check: EV = (Probability * Reward) - (LossProb * Risk)
+        const expectedValueR = (prob * rr) - ((1 - prob) * 1);
 
         let requiredRR = 1.5;
-        if (data.confidence_score >= 90) requiredRR = 2.5;
-        else if (data.confidence_score >= 80) requiredRR = 2.0;
-        else if (data.confidence_score >= 70) requiredRR = 1.5;
+        if (data.confidence_score >= 90) requiredRR = 2.0;
+        else if (data.confidence_score >= 80) requiredRR = 1.5;
+        else if (data.confidence_score >= 70) requiredRR = 1.2;
 
-        if (rr < requiredRR - 0.1) {
+        if (rr < requiredRR - 0.1 && expectedValueR < 0.5) {
           // It didn't meet the rules, force reject
-          console.warn(`[Swing Guard] AI approved but R:R of 1:${rr.toFixed(2)} fails requirement of 1:${requiredRR}. Rejecting.`);
+          console.warn(`[Swing Guard] AI approved but R:R of 1:${rr.toFixed(2)} and EV of ${expectedValueR.toFixed(2)} fails requirement. Rejecting.`);
           return {
             recommended_direction: "NONE",
-            fibonacci_rationale: `Rejected post-AI: TP2 R:R of 1:${rr.toFixed(2)} does not meet requirement of 1:${requiredRR}`,
+            fibonacci_rationale: `Rejected post-AI: TP2 R:R of 1:${rr.toFixed(2)} and EV ${expectedValueR.toFixed(2)} does not meet requirements`,
             confidence_score: 0
           } as any;
         }
@@ -872,7 +862,7 @@ serve(async (req) => {
                if (!rawEntry) rawEntry = snapshot.current_price;
                if (!rawSL) rawSL = evaluation.recommended_direction === "LONG" ? snapshot.safe_long_stop_loss : snapshot.safe_short_stop_loss;
                
-               await supabase.from("shadow_ledger").insert({
+               const { error: shadowErr } = await supabase.from("shadow_ledger").insert({
                   symbol: symbol,
                   timeframe: timeframe.toLowerCase(),
                   side: evaluation.recommended_direction,
@@ -880,7 +870,10 @@ serve(async (req) => {
                   take_profit: rawTP || null,
                   stop_loss: rawSL || null,
                   status: "PENDING"
-               }).catch(err => console.error(`[Shadow Ledger] Failed to insert raw signal for ${symbol}: ${err.message}`));
+               });
+               if (shadowErr) {
+                 console.error(`[Shadow Ledger] Failed to insert raw signal for ${symbol}: ${shadowErr.message}`);
+               }
             }
           } catch (err: any) {
             console.error(`[AI Error] [Trace: ${traceId}] ${symbol}: ${err.message}`);
