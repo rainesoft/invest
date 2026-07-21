@@ -1,10 +1,27 @@
 import { ThemeProvider } from '@components/ThemeProvider';
 import VaultNavbar from '@components/VaultNavbar';
 import { supabaseServer } from '@lib/supabase-server';
+import { redirect } from 'next/navigation';
 
 export default async function VaultLayout({ children }: { children: React.ReactNode }) {
   const supabase = supabaseServer();
   const { data: { user } } = await supabase.auth.getUser();
+  
+  if (!user) {
+    redirect('/login');
+  }
+
+  // Enforce Onboarding
+  const { data: riskSettings } = await supabase
+    .from('user_risk_settings')
+    .select('telegram_chat_id')
+    .eq('user_id', user.id)
+    .single();
+
+  if (!riskSettings || !riskSettings.telegram_chat_id) {
+    redirect('/onboarding');
+  }
+
   const isAdmin = user?.email === 'david@rainesoft.com';
 
   return (

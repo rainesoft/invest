@@ -45,12 +45,44 @@ export default function PricingSlider({ isLoggedIn }: PricingSliderProps) {
         </li>
       </ul>
 
-      <Link href={isLoggedIn ? "/dashboard" : "/login"} style={{
-        background: '#fff', color: '#000', padding: '16px', borderRadius: '100px',
-        textDecoration: 'none', fontSize: '15px', fontWeight: 600, textAlign: 'center'
-      }}>
-        {isLoggedIn ? "Upgrade to Pro" : "Get Started"}
-      </Link>
+      {isLoggedIn ? (
+        <button 
+          onClick={async (e) => {
+            const btn = e.currentTarget;
+            btn.innerText = 'Redirecting...';
+            btn.style.opacity = '0.7';
+            try {
+              const res = await fetch('/api/checkout/subscribe', { method: 'POST' });
+              const data = await res.json();
+              if (data.authorization_url) {
+                window.location.href = data.authorization_url;
+              } else {
+                alert(data.error || 'Failed to initialize checkout');
+                btn.innerText = 'Upgrade to Pro';
+                btn.style.opacity = '1';
+              }
+            } catch(err) {
+              alert('Network error');
+              btn.innerText = 'Upgrade to Pro';
+              btn.style.opacity = '1';
+            }
+          }}
+          style={{
+            background: '#fff', color: '#000', padding: '16px', borderRadius: '100px',
+            textDecoration: 'none', fontSize: '15px', fontWeight: 600, textAlign: 'center',
+            border: 'none', cursor: 'pointer', outline: 'none'
+          }}
+        >
+          Upgrade to Pro
+        </button>
+      ) : (
+        <Link href="/login" style={{
+          background: '#fff', color: '#000', padding: '16px', borderRadius: '100px',
+          textDecoration: 'none', fontSize: '15px', fontWeight: 600, textAlign: 'center'
+        }}>
+          Get Started
+        </Link>
+      )}
     </div>
   );
 }

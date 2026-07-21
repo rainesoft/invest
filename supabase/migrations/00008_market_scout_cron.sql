@@ -1,42 +1,46 @@
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Migration: 00008_market_scout_cron.sql
--- Schedules the market-scout edge function via pg_cron.
+-- Schedules the agent-sniper edge function via pg_cron.
 --
--- Schedule:  Every 5 minutes from 20:00–00:00 UTC, Sunday–Friday
---            (covers Asian open 22:00 SAST and London pre-open)
+-- This script creates a cron job that runs every 5 minutes during
+-- specific active hours (22:00 - 23:00) on weekdays (Sunday-Friday).
 --
--- TO DELETE after setups close:
---   SELECT cron.unschedule('market-scout-poll');
--- ─────────────────────────────────────────────────────────────────────────────
+-- Note: To completely remove this job later, you would run:
+--   SELECT cron.unschedule('agent-sniper-poll');
 
--- Enable pg_cron (idempotent)
+-- 1. Ensure pg_net is available (required for http_post)
+CREATE EXTENSION IF NOT EXISTS pg_net;
+
+-- 2. Ensure pg_cron is available
 CREATE EXTENSION IF NOT EXISTS pg_cron;
-GRANT USAGE ON SCHEMA cron TO postgres;
 
--- Remove any existing schedule with this name first (idempotent re-run)
-SELECT cron.unschedule('market-scout-poll') 
+-- 3. Safely unschedule if it exists so we can recreate it
+SELECT cron.unschedule('agent-sniper-poll') 
 WHERE EXISTS (
-  SELECT 1 FROM cron.job WHERE jobname = 'market-scout-poll'
+  SELECT 1 FROM cron.job WHERE jobname = 'agent-sniper-poll'
 );
 
--- Schedule: every 5 minutes during active trading window (20:00–23:59 UTC)
--- Runs Sunday (0) through Friday (5) — covers market open through US close
+-- 4. Schedule the cron job
 SELECT cron.schedule(
-  'market-scout-poll',
-  '*/5 20-23 * * 0-5',
+  'agent-sniper-poll',
+  '*/5 22-23 * * 0-5',
   $$
-  SELECT net.http_post(
-    url     := current_setting('app.supabase_url') || '/functions/v1/market-scout',
-    headers := jsonb_build_object(
-      'Content-Type',      'application/json',
-      'x-webhook-secret',  current_setting('app.webhook_secret')
-    ),
-    body    := '{}'::jsonb
-  );
+  declare
+    url text;
+    api_key text;
+    req_id bigint;
+  begin
+    -- Retrieve configurations set via SQL parameters or use hardcoded URL
+    url     := current_setting('app.supabase_url') || '/functions/v1/agent-sniper';
+    api_key := current_setting('app.supabase_anon_key');
+    
+    select net.http_post(
+      url := url,
+      headers := jsonb_build_object('Authorization', 'Bearer ' || api_key)
+    ) into req_id;
+  end;
   $$
 );
 
--- Confirm the schedule was created
-SELECT jobid, jobname, schedule, command 
-FROM cron.job 
-WHERE jobname = 'market-scout-poll';
+-- 5. (Optional) Check the scheduled job
+-- SELECT * FROM cron.job WHERE jobname = 'agent-sniper-poll';

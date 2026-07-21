@@ -1,6 +1,7 @@
 import { EMA, RSI, ADX, ATR, BollingerBands } from 'technicalindicators';
 
 export type LogicContext = {
+  candlestick_pattern?: string;
   timestamp: string;
   current_price: number;
   ema_50: number | null;
@@ -22,6 +23,14 @@ export type LogicContext = {
   mtfa_ema_50?: number | null;
   mtfa_ema_200?: number | null;
   mtfa_trend?: 'BULLISH' | 'BEARISH' | 'CHOP';
+  
+  // SMC (Smart Money Concepts)
+  bullish_fvg_nearest?: number | null;
+  bearish_fvg_nearest?: number | null;
+  bullish_ob_nearest?: number | null;
+  bearish_ob_nearest?: number | null;
+  liquidity_sweep_bullish?: boolean;
+  liquidity_sweep_bearish?: boolean;
 };
 
 export function calculateFractals(high: number[], low: number[]) {
@@ -65,8 +74,114 @@ export function calculatePivotPoints(high: number, low: number, close: number) {
   };
 }
 
+export function detectFVG(open: number[], high: number[], low: number[], close: number[]) {
+  let bullish_fvg_nearest: number | null = null;
+  let bearish_fvg_nearest: number | null = null;
+  
+  const n = high.length;
+  const lookback = Math.min(30, n);
+  
+  for (let i = n - 2; i >= n - lookback; i--) {
+    // Bullish FVG: low of i > high of i-2
+    if (i >= 2 && low[i] > high[i-2] && close[i-1] > open[i-1]) {
+      const gapTop = low[i];
+      const gapBottom = high[i-2];
+      let filled = false;
+      for (let j = i + 1; j < n; j++) {
+        if (low[j] <= gapBottom) filled = true;
+      }
+      if (!filled && !bullish_fvg_nearest) {
+        bullish_fvg_nearest = gapTop;
+      }
+    }
+    
+    // Bearish FVG: high of i < low of i-2
+    if (i >= 2 && high[i] < low[i-2] && close[i-1] < open[i-1]) {
+      const gapBottom = high[i];
+      const gapTop = low[i-2];
+      let filled = false;
+      for (let j = i + 1; j < n; j++) {
+        if (high[j] >= gapTop) filled = true;
+      }
+      if (!filled && !bearish_fvg_nearest) {
+        bearish_fvg_nearest = gapBottom;
+      }
+    }
+  }
+  return { bullish_fvg_nearest, bearish_fvg_nearest };
+}
+
+export function detectOrderBlocks(open: number[], high: number[], low: number[], close: number[]) {
+  let bullish_ob_nearest: number | null = null;
+  let bearish_ob_nearest: number | null = null;
+  
+  const n = close.length;
+  const lookback = Math.min(30, n);
+  
+  for (let i = n - 2; i >= n - lookback; i--) {
+    const body = Math.abs(close[i] - open[i]);
+    const prevBody = Math.abs(close[i-1] - open[i-1]);
+    
+    // Bullish OB
+    if (i >= 1 && close[i] > open[i] && body > prevBody * 1.5 && close[i-1] < open[i-1]) {
+      const obHigh = high[i-1];
+      let mitigated = false;
+      for (let j = i + 1; j < n; j++) {
+        if (low[j] <= obHigh) mitigated = true;
+      }
+      if (!mitigated && !bullish_ob_nearest) {
+        bullish_ob_nearest = obHigh;
+      }
+    }
+    
+    // Bearish OB
+    if (i >= 1 && close[i] < open[i] && body > prevBody * 1.5 && close[i-1] > open[i-1]) {
+      const obLow = low[i-1];
+      let mitigated = false;
+      for (let j = i + 1; j < n; j++) {
+        if (high[j] >= obLow) mitigated = true;
+      }
+      if (!mitigated && !bearish_ob_nearest) {
+        bearish_ob_nearest = obLow;
+      }
+    }
+  }
+  return { bullish_ob_nearest, bearish_ob_nearest };
+}
+
+export function detectLiquiditySweeps(
+  high: number[], low: number[], close: number[], open: number[],
+  bullish_fractals: {index: number, price: number}[],
+  bearish_fractals: {index: number, price: number}[]
+) {
+  let liquidity_sweep_bullish = false;
+  let liquidity_sweep_bearish = false;
+  
+  const n = close.length;
+  if (n < 5) return { liquidity_sweep_bullish, liquidity_sweep_bearish };
+  
+  const currentLow = low[n-1];
+  const currentHigh = high[n-1];
+  const currentClose = close[n-1];
+  const currentOpen = open[n-1];
+  
+  for (const frac of bullish_fractals.slice(-3)) {
+    if (currentLow < frac.price && Math.max(currentClose, currentOpen) > frac.price) {
+      liquidity_sweep_bullish = true;
+    }
+  }
+  
+  for (const frac of bearish_fractals.slice(-3)) {
+    if (currentHigh > frac.price && Math.min(currentClose, currentOpen) < frac.price) {
+      liquidity_sweep_bearish = true;
+    }
+  }
+  return { liquidity_sweep_bullish, liquidity_sweep_bearish };
+}
+
 export function getContextSnapshot(
   timestamps: string[],
+  open: number[],
   high: number[],
   low: number[],
   close: number[]
@@ -91,6 +206,13 @@ export function getContextSnapshot(
       htf_support: [],
       htf_resistance: [],
       ltf_bos: 'NONE',
+      candlestick_pattern: 'NONE',
+      bullish_fvg_nearest: null,
+      bearish_fvg_nearest: null,
+      bullish_ob_nearest: null,
+      bearish_ob_nearest: null,
+      liquidity_sweep_bullish: false,
+      liquidity_sweep_bearish: false,
     };
   }
 
@@ -102,6 +224,11 @@ export function getContextSnapshot(
   const ltf_bos = detectBOS(close, bullish_fractals, bearish_fractals);
   const recent_swing_high = bearish_fractals.length > 0 ? bearish_fractals[bearish_fractals.length - 1].price : null;
   const recent_swing_low = bullish_fractals.length > 0 ? bullish_fractals[bullish_fractals.length - 1].price : null;
+
+  // SMC Calculations
+  const { bullish_fvg_nearest, bearish_fvg_nearest } = detectFVG(open, high, low, close);
+  const { bullish_ob_nearest, bearish_ob_nearest } = detectOrderBlocks(open, high, low, close);
+  const { liquidity_sweep_bullish, liquidity_sweep_bearish } = detectLiquiditySweeps(high, low, close, open, bullish_fractals, bearish_fractals);
 
   // Calculate indicators
   const ema50 = EMA.calculate({ period: 50, values: close });
@@ -157,13 +284,29 @@ export function getContextSnapshot(
     const emaSpread = Math.abs(current_ema_50 - current_ema_200) / current_ema_200;
     
     // 1. ADX Method: Trend strength is too weak
-    if (current_adx_14 !== null && current_adx_14 < 25) {
+    if (current_adx_14 !== null && current_adx_14 < 20) {
       trend_alignment = 'CHOP';
     } 
-    // 2. EMA Distance Method: MAs are tangling (less than 0.5% apart)
-    else if (emaSpread < 0.005) {
+    // 2. EMA Distance Method: MAs are tangling (less than 0.1% apart)
+    else if (emaSpread < 0.001) {
       trend_alignment = 'CHOP';
     }
+  }
+
+  // Candlestick Pattern Evaluation
+  let candlestick_pattern = 'NONE';
+  if (close.length >= 3) {
+    const n = close.length;
+    const curr = { o: open[n-1], h: high[n-1], l: low[n-1], c: close[n-1] };
+    const prev = { o: open[n-2], h: high[n-2], l: low[n-2], c: close[n-2] };
+    const prev2 = { o: open[n-3], h: high[n-3], l: low[n-3], c: close[n-3] };
+    
+    if (isBullishEngulfing(prev, curr)) candlestick_pattern = 'BULLISH_ENGULFING';
+    else if (isBearishEngulfing(prev, curr)) candlestick_pattern = 'BEARISH_ENGULFING';
+    else if (isMorningStar(prev2, prev, curr)) candlestick_pattern = 'MORNING_STAR';
+    else if (isEveningStar(prev2, prev, curr)) candlestick_pattern = 'EVENING_STAR';
+    else if (isBullishRejection(prev, curr)) candlestick_pattern = 'BULLISH_REJECTION_PINBAR';
+    else if (isBearishRejection(prev, curr)) candlestick_pattern = 'BEARISH_REJECTION_PINBAR';
   }
 
   return {
@@ -182,5 +325,62 @@ export function getContextSnapshot(
     safe_short_stop_loss: safe_short_stop_loss ? Number(safe_short_stop_loss.toFixed(2)) : null,
     trend_alignment,
     ltf_bos,
+    candlestick_pattern,
+    bullish_fvg_nearest,
+    bearish_fvg_nearest,
+    bullish_ob_nearest,
+    bearish_ob_nearest,
+    liquidity_sweep_bullish,
+    liquidity_sweep_bearish,
   };
+}
+
+export function isBullishEngulfing(prev: any, curr: any) {
+  return (
+    prev.c < prev.o &&
+    curr.c > curr.o &&
+    curr.o <= prev.c &&
+    curr.c >= prev.o
+  );
+}
+
+export function isBearishEngulfing(prev: any, curr: any) {
+  return (
+    prev.c > prev.o &&
+    curr.c < curr.o &&
+    curr.o >= prev.c &&
+    curr.c <= prev.o
+  );
+}
+
+export function isMorningStar(prev2: any, prev1: any, curr: any) {
+  return (
+    prev2.c < prev2.o &&
+    Math.abs(prev1.c - prev1.o) < Math.abs(prev2.c - prev2.o) * 0.3 &&
+    curr.c > curr.o &&
+    curr.c > (prev2.c + prev2.o) / 2
+  );
+}
+
+export function isEveningStar(prev2: any, prev1: any, curr: any) {
+  return (
+    prev2.c > prev2.o &&
+    Math.abs(prev1.c - prev1.o) < Math.abs(prev2.c - prev2.o) * 0.3 &&
+    curr.c < curr.o &&
+    curr.c < (prev2.c + prev2.o) / 2
+  );
+}
+
+export function isBullishRejection(prev: any, curr: any) {
+  const body      = Math.abs(curr.c - curr.o);
+  const lowerWick = Math.min(curr.o, curr.c) - curr.l;
+  const isHammer  = lowerWick > body * 1.5 && curr.c > curr.o;
+  return isHammer;
+}
+
+export function isBearishRejection(prev: any, curr: any) {
+  const body      = Math.abs(curr.c - curr.o);
+  const upperWick = curr.h - Math.max(curr.o, curr.c);
+  const isStar    = upperWick > body * 1.5 && curr.c < curr.o;
+  return isStar;
 }

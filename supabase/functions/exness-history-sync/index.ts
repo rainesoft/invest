@@ -26,16 +26,12 @@ serve(async (req) => {
 
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // 1. Fetch live BYOB users
-    const { data: users, error: usersError } = await supabase
-      .from("user_risk_settings")
-      .select("*")
-      .eq("is_live_execution_enabled", true)
-      .not("meta_api_token", "is", null)
-      .not("meta_api_account_id", "is", null);
-
-    if (usersError || !users) {
-      return new Response("Failed to fetch users", { status: 500 });
+    // PAMM Architecture: Fetch history from the Master Account
+    const masterToken = Deno.env.get("META_API_TOKEN");
+    const masterAccountId = Deno.env.get("META_API_ACCOUNT_ID");
+    
+    if (!masterToken || !masterAccountId) {
+      return new Response("Missing Master META_API credentials in ENV", { status: 500 });
     }
 
     const report = [];
@@ -44,106 +40,96 @@ serve(async (req) => {
     const startTime = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
     const endTime = new Date().toISOString();
 
-    for (const user of users) {
-      const userToken = user.meta_api_token;
-      const userAccountId = user.meta_api_account_id;
-      const userId = user.user_id;
+    // Fetch all open trades across the entire PAMM
+    const { data: openTrades, error: openTradesError } = await supabase
+      .from("user_trades")
+      .select("id, user_id, volume, symbol, meta_api_order_id, status, trade_type, opportunity_id, risk_amount")
+      .in("status", ["OPEN", "PENDING"])
+      .not("meta_api_order_id", "is", null);
 
-      // Check if user has any OPEN or PENDING trades (a pending limit order might have filled and closed rapidly)
-      const { data: openTrades, error: openTradesError } = await supabase
-        .from("user_trades")
-        .select("id, symbol, meta_api_order_id, status, trade_type, opportunity_id, risk_amount")
-        .eq("user_id", userId)
-        .in("status", ["OPEN", "PENDING"]);
+    if (openTradesError || !openTrades || openTrades.length === 0) {
+      return new Response("No open trades to sync", { status: 200 });
+    }
 
-      if (openTradesError || !openTrades || openTrades.length === 0) {
-        continue;
+    console.log(`[History Sync] Found ${openTrades.length} open trades across PAMM vaults. Fetching Master history...`);
+    
+    const historyUrl = `${baseUrl}/users/current/accounts/${masterAccountId}/history-deals/time/${startTime}/${endTime}`;
+    
+    let historyDeals = [];
+    try {
+      const historyResponse = await fetch(historyUrl, {
+        headers: { "auth-token": masterToken },
+      });
+
+      if (!historyResponse.ok) {
+        const err = await historyResponse.text();
+        console.error(`[History Sync] Master failed to fetch history: ${err}`);
+        return new Response("Failed to fetch Master history", { status: 500 });
       }
 
-      console.log(`[History Sync] Processing user ${userId} with ${openTrades.length} open trades...`);
-      
-      const historyUrl = `${baseUrl}/users/current/accounts/${userAccountId}/history-deals/time/${startTime}/${endTime}`;
-      
-      let historyDeals = [];
-      try {
-        const historyResponse = await fetch(historyUrl, {
-          headers: { "auth-token": userToken },
-        });
+      historyDeals = await historyResponse.json();
+    } catch (e) {
+      console.error(`[History Sync] Master fetch exception: ${e}`);
+      return new Response("Exception fetching Master history", { status: 500 });
+    }
 
-        if (!historyResponse.ok) {
-          const err = await historyResponse.text();
-          console.error(`[History Sync] User ${userId} failed to fetch history: ${err}`);
-          continue;
+    // Filter for closing deals (where entryType is DEAL_ENTRY_OUT)
+    const closingDeals = historyDeals.filter((deal: any) => deal.entryType === "DEAL_ENTRY_OUT");
+
+    const resolvedTrades = [];
+
+    for (const trade of openTrades) {
+      // The positionId on the closing deal matches our meta_api_order_id (which was the original opening order id)
+      const closingDeal = closingDeals.find((deal: any) => String(deal.positionId) === String(trade.meta_api_order_id));
+
+      if (closingDeal) {
+        const masterProfitUsd = Number(closingDeal.profit) || 0;
+        const masterVolume = Number(closingDeal.volume) || 1;
+        
+        // Calculate proportional profit for this specific user
+        const userProfitUsd = (Number(trade.volume) / masterVolume) * masterProfitUsd;
+
+        const isWin = userProfitUsd > 0;
+        const finalStatus = isWin ? "WON" : "LOST";
+        
+        const closePrice = closingDeal.price;
+        const closedAt = closingDeal.time;
+
+        console.log(`[History Sync] Trade ${trade.meta_api_order_id} for User ${trade.user_id} resolved as ${finalStatus} with $${userProfitUsd.toFixed(2)} profit`);
+
+        await supabase
+          .from("user_trades")
+          .update({
+            status: finalStatus,
+            profit_usd: userProfitUsd,
+            close_price: closePrice,
+            closed_at: closedAt
+          })
+          .eq("id", trade.id);
+
+        // --- DRAWDOWN BREAKER: UPDATE PORTFOLIO CAPITAL & HWM ---
+        const { data: userRisk } = await supabase
+          .from("user_risk_settings")
+          .select("portfolio_capital, high_water_mark_equity")
+          .eq("user_id", trade.user_id)
+          .single();
+          
+        if (userRisk) {
+            const newCapital = Number(userRisk.portfolio_capital) + userProfitUsd;
+            const newHighWaterMark = Math.max(Number(userRisk.high_water_mark_equity) || 0, newCapital);
+            
+            await supabase
+              .from("user_risk_settings")
+              .update({
+                  portfolio_capital: newCapital,
+                  high_water_mark_equity: newHighWaterMark
+              })
+              .eq("user_id", trade.user_id);
+              
+            console.log(`[History Sync] Updated User ${trade.user_id} Capital to $${newCapital.toFixed(2)}. HWM: $${newHighWaterMark.toFixed(2)}`);
         }
 
-        historyDeals = await historyResponse.json();
-      } catch (e) {
-        console.error(`[History Sync] User ${userId} fetch exception: ${e}`);
-        continue;
-      }
-
-      // Filter for closing deals (where entryType is DEAL_ENTRY_OUT)
-      const closingDeals = historyDeals.filter((deal: any) => deal.entryType === "DEAL_ENTRY_OUT");
-
-      const resolvedTrades = [];
-
-      for (const trade of openTrades) {
-        if (!trade.meta_api_order_id) continue;
-
-        // The positionId on the closing deal matches our meta_api_order_id (which was the original opening order id)
-        const closingDeal = closingDeals.find((deal: any) => String(deal.positionId) === String(trade.meta_api_order_id));
-
-        if (closingDeal) {
-          const profitUsd = closingDeal.profit; // Note: if account is not USD, this might need conversion, but typically MT5 returns account currency
-          const closePrice = closingDeal.price;
-          const closedAt = closingDeal.time;
-          
-          const finalStatus = profitUsd > 0 ? "WON" : "LOST";
-
-          console.log(`[History Sync] Trade ${trade.meta_api_order_id} resolved as ${finalStatus} with $${profitUsd} profit.`);
-
-          await supabase
-            .from("user_trades")
-            .update({
-              status: finalStatus,
-              profit_usd: profitUsd,
-              close_price: closePrice,
-              closed_at: closedAt
-            })
-            .eq("id", trade.id);
-
-          // VIRTUAL PAMM REPLICATION
-          // If this is the Master Account resolving a trade, we must replicate this outcome 
-          // to all virtual retail trades attached to the same opportunity_id.
-          const roiMult = profitUsd / trade.risk_amount; // e.g. made +$100 on $1000 risk = +0.10 ROI
-
-          // Fetch all open virtual trades for this opportunity
-          const { data: virtualTrades } = await supabase
-            .from("user_trades")
-            .select("id, risk_amount")
-            .eq("opportunity_id", trade.opportunity_id)
-            .eq("trade_type", trade.trade_type)
-            .in("status", ["PAPER_OPEN", "PENDING", "OPEN"])
-            .neq("id", trade.id);
-
-          if (virtualTrades && virtualTrades.length > 0) {
-            console.log(`[History Sync] Replicating Master PnL to ${virtualTrades.length} virtual trades...`);
-            
-            for (const vTrade of virtualTrades) {
-              const vProfit = Number((vTrade.risk_amount * roiMult).toFixed(2));
-              await supabase
-                .from("user_trades")
-                .update({
-                  status: finalStatus,
-                  profit_usd: vProfit,
-                  close_price: closePrice,
-                  closed_at: closedAt
-                })
-                .eq("id", vTrade.id);
-            }
-          }
-
-          resolvedTrades.push({ id: trade.id, finalStatus, profitUsd });
+        resolvedTrades.push({ id: trade.id, finalStatus });
 
           // --- Breakeven Trigger ---
           // When a QUICK_EXIT leg closes in profit, automatically move the companion RUNNER
@@ -154,7 +140,7 @@ serve(async (req) => {
             const { data: runnerTrade } = await supabase
               .from("user_trades")
               .select("id, meta_api_order_id")
-              .eq("user_id", userId)
+              .eq("user_id", trade.user_id)
               .eq("opportunity_id", trade.opportunity_id)
               .eq("trade_type", "RUNNER")
               .eq("status", "OPEN")
@@ -163,15 +149,15 @@ serve(async (req) => {
             if (runnerTrade?.meta_api_order_id) {
               try {
                 // Fetch the live position to get openPrice and current takeProfit
-                const posUrl = `${baseUrl}/users/current/accounts/${userAccountId}/positions/${runnerTrade.meta_api_order_id}`;
-                const posRes = await fetch(posUrl, { headers: { "auth-token": userToken } });
+                const posUrl = `${baseUrl}/users/current/accounts/${masterAccountId}/positions/${runnerTrade.meta_api_order_id}`;
+                const posRes = await fetch(posUrl, { headers: { "auth-token": masterToken } });
 
                 if (posRes.ok) {
                   const pos = await posRes.json();
                   const breakevenSL = Number(pos.openPrice);
                   const existingTP = Number(pos.takeProfit);
 
-                  const modifyUrl = `${baseUrl}/users/current/accounts/${userAccountId}/trade`;
+                  const modifyUrl = `${baseUrl}/users/current/accounts/${masterAccountId}/trade`;
                   const modifyPayload = {
                     actionType: "POSITION_MODIFY",
                     positionId: runnerTrade.meta_api_order_id,
@@ -181,7 +167,7 @@ serve(async (req) => {
 
                   const modifyRes = await fetch(modifyUrl, {
                     method: "POST",
-                    headers: { "auth-token": userToken, "Content-Type": "application/json" },
+                    headers: { "auth-token": masterToken, "Content-Type": "application/json" },
                     body: JSON.stringify(modifyPayload),
                   });
 
@@ -204,12 +190,10 @@ serve(async (req) => {
         }
       }
       
-      report.push({ user_id: userId, resolved: resolvedTrades });
-    }
+      report.push({ resolved: resolvedTrades });
 
     return new Response(JSON.stringify({
       success: true,
-      processed_users: users.length,
       report: report
     }), {
       status: 200,

@@ -71,8 +71,8 @@ serve(async (req) => {
       }
     }
 
-    // 3. Trigger research-run asynchronously so we don't block the MQL5 EA
-    const researchUrl = `${supabaseUrl}/functions/v1/research-run?symbols=${symbol}&timeframe=${timeframe}`;
+    // 3. Trigger agent-scalper asynchronously so we don't block the MQL5 EA
+    const researchUrl = `${supabaseUrl}/functions/v1/agent-scalper?symbols=${symbol}&timeframe=${timeframe}`;
     fetch(researchUrl, {
       method: "POST",
       headers: {
@@ -80,7 +80,7 @@ serve(async (req) => {
         "Authorization": `Bearer ${supabaseKey}`
       },
       body: JSON.stringify({ timeframe })
-    }).catch(e => console.error("Failed to trigger research-run:", e));
+    }).catch(e => console.error("Failed to trigger agent-scalper:", e));
 
     return new Response(JSON.stringify({ status: "success", message: `Saved ${bars.length} bars and triggered research for ${symbol}` }), {
       headers: { "Content-Type": "application/json" }

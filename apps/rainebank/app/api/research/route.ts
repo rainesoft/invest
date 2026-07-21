@@ -23,7 +23,7 @@ export async function POST(req: Request) {
       params.append('timeframe', timeframe);
     }
 
-    const res = await fetch(`${fnUrl}/research-run?${params.toString()}`, {
+    const res = await fetch(`${fnUrl}/agent-scalper?${params.toString()}`, {
       headers: { Authorization: `Bearer ${key}` },
     });
 

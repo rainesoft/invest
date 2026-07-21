@@ -1,0 +1,31 @@
+-- 1. Unschedule old market-scout / agent-sniper if it still exists
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'agent-sniper-poll') THEN
+    PERFORM cron.unschedule('agent-sniper-poll');
+  END IF;
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'market-scout-poll') THEN
+    PERFORM cron.unschedule('market-scout-poll');
+  END IF;
+END $$;
+
+-- 2. Schedule agent-swing-poll every 4 hours on weekdays
+SELECT cron.schedule(
+    'agent-swing-poll',
+    '0 */4 * * 1-5',
+    $$
+    declare
+        url text;
+        api_key text;
+        req_id bigint;
+    begin
+        url := current_setting('app.supabase_url', true) || '/functions/v1/agent-swing';
+        api_key := current_setting('app.supabase_anon_key', true);
+        
+        select net.http_post(
+            url := url,
+            headers := jsonb_build_object('Authorization', 'Bearer ' || api_key)
+        ) into req_id;
+    end;
+    $$
+);

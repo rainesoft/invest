@@ -202,7 +202,10 @@ export default function VaultDashboard() {
       {/* Header section */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '40px', flexWrap: 'wrap', gap: '16px' }}>
         <div>
-          <h1 style={{ fontSize: '36px', fontWeight: 800, color: '#fff', letterSpacing: '-1px', margin: 0 }}>The Vault</h1>
+          <h1 style={{ fontSize: '36px', fontWeight: 800, color: '#fff', letterSpacing: '-1px', margin: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <Activity size={36} color="#38bdf8" />
+            The Vault
+          </h1>
           <p style={{ color: '#9ca3af', fontSize: '15px', marginTop: '8px' }}>Immutable execution ledger and system metrics.</p>
         </div>
         {!isPro ? (
@@ -335,13 +338,13 @@ export default function VaultDashboard() {
 
       {/* Ledger Table Section */}
       <div style={{
-        background: '#1a1a1a',
-        border: '1px solid #333',
-        borderRadius: '16px',
+        background: '#111',
+        border: '1px solid rgba(255,255,255,0.05)',
+        borderRadius: '24px',
         overflow: 'hidden',
         marginBottom: '40px'
       }}>
-        <div style={{ padding: '20px 24px', borderBottom: '1px solid #333' }}>
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
           <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: '#fff' }}>Execution Log</h3>
         </div>
         
@@ -362,7 +365,7 @@ export default function VaultDashboard() {
               </thead>
               <tbody>
                 {signals.map((t) => (
-                  <tr key={t.id} style={{ borderTop: '1px solid #333', transition: 'background 0.2s' }}>
+                  <tr key={t.id} style={{ borderTop: '1px solid rgba(255,255,255,0.02)', transition: 'background 0.2s', cursor: 'default' }} onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'} onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
                     <td style={{ padding: '16px 24px', color: '#fff', fontWeight: 600 }}>{t.symbol}</td>
                     <td style={{ padding: '16px 24px' }}>
                       {t.side === 'LONG' || t.side === 'BUY' ? (

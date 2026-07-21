@@ -251,6 +251,20 @@ export default function LoginPage() {
                 onFocus={(e) => (e.target.style.borderColor = '#38bdf8')}
                 onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.1)')}
               />
+              
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
+                <Link 
+                  href="/forgot-password"
+                  style={{
+                    color: '#38bdf8',
+                    fontSize: '13px',
+                    textDecoration: 'none',
+                    fontWeight: 500,
+                  }}
+                >
+                  Forgot Password?
+                </Link>
+              </div>
             </div>
 
             <button

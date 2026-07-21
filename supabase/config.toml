@@ -334,10 +334,10 @@ s3_access_key = "env(S3_ACCESS_KEY)"
 s3_secret_key = "env(S3_SECRET_KEY)"
 
 # Trigger the Alpha Engine every 30 minutes
-[functions.research-run]
+[functions.agent-scalper]
 verify_jwt = false
 
-# [functions.research-run.schedule]
+# [functions.agent-scalper.schedule]
 # cron = "0 * * * *"
 
 # Trigger the Outcome Simulator at 2 and 32 past the hour
@@ -369,8 +369,8 @@ verify_jwt = false
 # cron = "0 12 * * *"
 
 # Swing Fibonacci Engine: Daily macro swing signal generation at 07:00 UTC (before London open)
-# Cron is registered directly in pg_cron: cron.schedule('swing-research-run-daily', '0 7 * * *', ...)
-[functions.swing-research-run]
+# Cron is registered directly in pg_cron: cron.schedule('agent-swing-daily', '0 7 * * *', ...)
+[functions.agent-swing]
 verify_jwt = false
 
 [functions.process-retries]
