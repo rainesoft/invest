@@ -2,19 +2,18 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+import { supabase } from '@lib/supabase';
 
 export default function OnboardingPage() {
   const router = useRouter();
-  const supabase = createClientComponentClient();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [waitingForBot, setWaitingForBot] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user) setUserId(user.id);
+    supabase.auth.getUser().then((res: any) => {
+      if (res.data && res.data.user) setUserId(res.data.user.id);
     });
   }, [supabase.auth]);
 
