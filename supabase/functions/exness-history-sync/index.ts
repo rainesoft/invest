@@ -43,7 +43,7 @@ serve(async (req) => {
     // Fetch all open trades across the entire PAMM
     const { data: openTrades, error: openTradesError } = await supabase
       .from("user_trades")
-      .select("id, symbol, meta_api_order_id, status, trade_type, opportunity_id, risk_amount")
+      .select("id, user_id, volume, symbol, meta_api_order_id, status, trade_type, opportunity_id, risk_amount")
       .in("status", ["OPEN", "PENDING"])
       .not("meta_api_order_id", "is", null);
 
@@ -83,24 +83,51 @@ serve(async (req) => {
       const closingDeal = closingDeals.find((deal: any) => String(deal.positionId) === String(trade.meta_api_order_id));
 
       if (closingDeal) {
-        const profitUsd = closingDeal.profit;
-        const isWin = profitUsd > 0;
+        const masterProfitUsd = Number(closingDeal.profit) || 0;
+        const masterVolume = Number(closingDeal.volume) || 1;
+        
+        // Calculate proportional profit for this specific user
+        const userProfitUsd = (Number(trade.volume) / masterVolume) * masterProfitUsd;
+
+        const isWin = userProfitUsd > 0;
         const finalStatus = isWin ? "WON" : "LOST";
         
         const closePrice = closingDeal.price;
         const closedAt = closingDeal.time;
 
-        console.log(`[History Sync] Trade ${trade.meta_api_order_id} resolved as ${finalStatus} with $${profitUsd} profit`);
+        console.log(`[History Sync] Trade ${trade.meta_api_order_id} for User ${trade.user_id} resolved as ${finalStatus} with $${userProfitUsd.toFixed(2)} profit`);
 
         await supabase
           .from("user_trades")
           .update({
             status: finalStatus,
-            profit_usd: profitUsd,
+            profit_usd: userProfitUsd,
             close_price: closePrice,
             closed_at: closedAt
           })
           .eq("id", trade.id);
+
+        // --- DRAWDOWN BREAKER: UPDATE PORTFOLIO CAPITAL & HWM ---
+        const { data: userRisk } = await supabase
+          .from("user_risk_settings")
+          .select("portfolio_capital, high_water_mark_equity")
+          .eq("user_id", trade.user_id)
+          .single();
+          
+        if (userRisk) {
+            const newCapital = Number(userRisk.portfolio_capital) + userProfitUsd;
+            const newHighWaterMark = Math.max(Number(userRisk.high_water_mark_equity) || 0, newCapital);
+            
+            await supabase
+              .from("user_risk_settings")
+              .update({
+                  portfolio_capital: newCapital,
+                  high_water_mark_equity: newHighWaterMark
+              })
+              .eq("user_id", trade.user_id);
+              
+            console.log(`[History Sync] Updated User ${trade.user_id} Capital to $${newCapital.toFixed(2)}. HWM: $${newHighWaterMark.toFixed(2)}`);
+        }
 
         resolvedTrades.push({ id: trade.id, finalStatus });
 
