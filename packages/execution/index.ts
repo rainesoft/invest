@@ -306,25 +306,44 @@ export async function fetchPaperBars(
         .order('ts', { ascending: false })
         .limit(limit);
         
-      // If we have cached bars that are recent (e.g., within 24h depending on timeframe, but we trust the EA push)
+      // If we have cached bars, ensure they are not stale before using them
       if (cachedBars && cachedBars.length > 0) {
-        // Reverse because we want oldest first for the indicator logic
-        return cachedBars.reverse().map((b: any) => ({
-          t: b.ts, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v
-        }));
+        const latestTs = new Date(cachedBars[0].ts).getTime();
+        const now = new Date().getTime();
+        
+        let maxAgeMs = 12 * 60 * 60 * 1000; // default 12h
+        if (timeframe.includes('m')) maxAgeMs = 2 * 60 * 60 * 1000;
+        if (timeframe.includes('h')) maxAgeMs = 6 * 60 * 60 * 1000;
+        if (timeframe.includes('d')) maxAgeMs = 72 * 60 * 60 * 1000; // 72h to cover weekends
+
+        if (now - latestTs < maxAgeMs) {
+          // Reverse because we want oldest first for the indicator logic
+          return cachedBars.reverse().map((b: any) => ({
+            t: b.ts, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v
+          }));
+        } else {
+          console.log(`[Cache Stale] ${symbol} ${timeframe} data is ${Math.round((now - latestTs) / 3600000)}h old. Falling back to MetaApi.`);
+        }
       }
     }
 
     if (settings.active_broker === 'METAAPI') {
       // Normalize timeframe to lowercase MT5 format required by the Market Data API
-      const tfNorm = timeframe.toLowerCase(); // e.g. '1D' → '1d', '1H' → '1h'
+      let tfNorm = timeframe.toLowerCase(); // e.g. '1D' → '1d', '1H' → '1h'
+      if (tfNorm.startsWith('m') && tfNorm.length > 1 && !isNaN(Number(tfNorm[1]))) {
+        tfNorm = tfNorm.replace('m', '') + 'm'; // 'm5' -> '5m'
+      } else if (tfNorm.startsWith('h') && tfNorm.length > 1) {
+        tfNorm = tfNorm.replace('h', '') + 'h'; // 'h1' -> '1h'
+      } else if (tfNorm.startsWith('d') && tfNorm.length > 1) {
+        tfNorm = tfNorm.replace('d', '') + 'd'; // 'd1' -> '1d'
+      }
       const res = await metaApiMarketDataFetch(
         `/historical-market-data/symbols/${symbol}/timeframes/${tfNorm}/candles?limit=${limit}`,
         settings.meta_api_token,
         settings.meta_api_account_id
       );
       
-      return (res || []).map((c: any) => ({
+      const bars = (res || []).map((c: any) => ({
         t: c.time,
         o: c.open,
         h: c.high,
@@ -332,6 +351,29 @@ export async function fetchPaperBars(
         c: c.close,
         v: c.tickVolume || c.volume || 0,
       }));
+
+      if (bars.length > 0 && supabase) {
+        (async () => {
+          try {
+            const rows = bars.map((b: any) => ({
+              symbol,
+              timeframe: tfNorm,
+              ts: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v,
+              revision: 0, hash: `${b.t}_${b.o}_${b.c}`,
+            }));
+            const CHUNK = 200;
+            for (let i = 0; i < rows.length; i += CHUNK) {
+              await supabase.from('market_data_pti').upsert(
+                rows.slice(i, i + CHUNK),
+                { onConflict: 'symbol,timeframe,ts', ignoreDuplicates: true }
+              );
+            }
+          } catch (e) {
+            console.warn(`[Cache Write-back] Failed for ${symbol}: ${e}`);
+          }
+        })();
+      }
+      return bars;
     }
 
     // ── PERMANENT METAAPI FALLBACK ───────────────────────────────────────────
@@ -344,7 +386,15 @@ export async function fetchPaperBars(
 
     if (envToken && envAccountId) {
       try {
-        const tfNorm = timeframe.toLowerCase();
+        let tfNorm = timeframe.toLowerCase();
+        if (tfNorm.startsWith('m') && tfNorm.length > 1 && !isNaN(Number(tfNorm[1]))) {
+          tfNorm = tfNorm.replace('m', '') + 'm'; // 'm5' -> '5m'
+        } else if (tfNorm.startsWith('h') && tfNorm.length > 1) {
+          tfNorm = tfNorm.replace('h', '') + 'h'; // 'h1' -> '1h'
+        } else if (tfNorm.startsWith('d') && tfNorm.length > 1) {
+          tfNorm = tfNorm.replace('d', '') + 'd'; // 'd1' -> '1d'
+        }
+        
         const res = await metaApiMarketDataFetch(
           `/historical-market-data/symbols/${symbol}/timeframes/${tfNorm}/candles?limit=${limit}`,
           envToken,
