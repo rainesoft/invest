@@ -209,7 +209,7 @@ CREATE OR REPLACE FUNCTION "public"."handle_rejected_signal"() RETURNS "trigger"
 BEGIN
   IF NEW.status = 'REJECTED' AND OLD.status != 'REJECTED' THEN
     PERFORM net.http_post(
-      url:='https://ktezlusdkqlfdwqrldtn.supabase.co/functions/v1/auto-eject',
+      url:='https://ktezlusdkqlfdwqrldtn.supabase.co/functions/v1/agent-kill-switch',
       headers:=jsonb_build_object(
         'Content-Type', 'application/json',
         'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key', true)
@@ -453,7 +453,7 @@ begin
   );
 
   select net.http_post(
-    url := webhook_url || '/auto-eject',
+    url := webhook_url || '/agent-kill-switch',
     body := payload,
     headers := jsonb_build_object('Content-Type', 'application/json', 'x-webhook-secret', secret_val)
   ) into request_id;
