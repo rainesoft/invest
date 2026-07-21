@@ -1,6 +1,5 @@
-import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
-import { cookies } from 'next/headers';
-import { NextResponse } from 'next/response';
+import { NextResponse } from 'next/server';
+import { supabaseServer } from '@lib/supabase-server';
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY!;
 const ALPHA_PLAN_CODE = process.env.NEXT_PUBLIC_PAYSTACK_ALPHA_PLAN_CODE!;
@@ -10,7 +9,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Server misconfiguration: missing Paystack keys' }, { status: 500 });
   }
 
-  const supabase = createRouteHandlerClient({ cookies });
+  const supabase = supabaseServer();
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user || !user.email) {
