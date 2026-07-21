@@ -95,167 +95,121 @@ const TradeEvaluationSchema = z.object({
 
 async function evaluateOpportunity(symbol: string, snapshot: LogicContext & { agent_context?: any[] }, timeframe: string, historicalMemory: string) {
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
-  const azureKey = Deno.env.get("AZURE_OPENAI_API_KEY");
+  if (!openaiKey) throw new Error("No OpenAI key found");
+
+  const headers = {
+    "Authorization": `Bearer ${openaiKey}`,
+    "Content-Type": "application/json"
+  };
+
+  console.log(`[Responses API] Submitting ${symbol} analysis...`);
   
-  let openai: OpenAI;
-  if (openaiKey) {
-    openai = new OpenAI({ apiKey: openaiKey });
-  } else if (azureKey) {
-    openai = new OpenAI({
-      apiKey: azureKey,
-      baseURL: `${Deno.env.get("AZURE_OPENAI_ENDPOINT")}/openai/deployments/${Deno.env.get("AZURE_OPENAI_DEPLOYMENT")}`,
-      defaultQuery: { "api-version": Deno.env.get("AZURE_OPENAI_API_VERSION") || "2023-07-01-preview" },
-      defaultHeaders: { "api-key": azureKey }
-    });
-  } else {
-    throw new Error("No OpenAI or Azure OpenAI keys found");
-  }
-
-  const systemPrompt = `You are an Aggressive Intraday Scalper for an institutional trading desk. You respond EXCLUSIVELY in raw JSON.
-
-[HISTORICAL PERFORMANCE CALIBRATION]
-Review your past decisions on this asset to calibrate your current bias. If you notice a recent losing streak or repeated rejections for the same structural reason, you MUST act defensively and adjust your confidence and action thresholds.
-${historicalMemory || "No historical data available for this asset yet."}
-
-[RISK EVALUATION RULES]
-1. DYNAMIC STRATEGY SELECTION & TREND ALIGNMENT: Identify the market structure accurately. 
-   - Strict Trend Definition: If price is below BOTH the 50 EMA and 200 EMA, the market has a BEARISH bias. If price is above BOTH EMAs, it has a BULLISH bias. Do NOT label a market as "NONE" (ranging) if it is trading cleanly on one side of both EMAs.
-   - If trending heavily (Price > 50 & 200 EMA), prioritize MOMENTUM_CONTINUATION setups using minor retracements. 
-   - If the market is in a true CHOP or RANGE regime (trend_alignment is CHOP), you MUST prioritize BREAKOUT setups using Buy Stop / Sell Stop orders just outside the range boundaries, OR high-probability MEAN_REVERSION setups targeting the range boundaries.
-2. BREAK OF STRUCTURE (BOS) EXECUTION TIMING: You are provided with the \`ltf_bos\` flag which deterministically tracks 5-bar fractal structure breaks on the execution timeframe.
-   - If \`ltf_bos\` is 'BULLISH' and the \`htf_trend\` is BULLISH, this is a confirmed Pullback Entry. You MUST originate a LONG trade targeting the next resistance level.
-   - If \`ltf_bos\` is 'BEARISH' and the \`htf_trend\` is BEARISH, you MUST originate a SHORT trade targeting the next support level.
-   - If \`ltf_bos\` is 'NONE', the structure has not broken yet. Do not guess the reversal. You MUST originate a pending Limit Order at the nearest structural floor/ceiling instead of a Market order.
-3. STOP LOSS SIZING & VOLATILITY (ATR): The snapshot provides \`safe_long_stop_loss\`, \`safe_short_stop_loss\`, and \`atr_14\`. 
-   - TIGHT LOCAL STRUCTURE: You MUST optimize your stop loss for the specific timeframe you are evaluating. Place the stop loss tight behind the immediate local structure.
-   - MANDATORY ATR PADDING: Your \`suggested_stop_loss\` MUST be mathematically padded by exactly \`1.0 * atr_14\` beyond the structural invalidation point (for Crypto pairs like BTCUSD, use \`2.0 * atr_14\`) to avoid liquidity sweeps!
-   - MAX STOP LOSS LIMIT: Your calculated stop loss MUST NEVER exceed a distance of \`2.0 * atr_14\` from the suggested entry price (or \`3.0 * atr_14\` for Crypto assets).
-4. CONFIDENCE-WEIGHTED R:R (RISK TO REWARD) ENFORCEMENT: 
-   - The required Risk/Reward ratio depends on your generated \`confidence_score\`:
-     * S-Tier (90-100 confidence): Minimum 1:1.2 R:R
-     * A-Tier (80-89 confidence): Minimum 1:1.3 R:R
-     * B-Tier (70-79 confidence): Minimum 1:1.5 R:R
-   - Before outputting your JSON, mathematically verify that \`abs(Entry - TP) / abs(Entry - SL)\` meets the required threshold for your confidence tier.
-   - [CRITICAL MATH RULE]: If your initial structural TP does not yield the required R:R against your SL, you MUST aggressively adjust your trade setup to pass the math. You must extend your TP to the next higher-timeframe liquidity pool, or tighten your SL (while still maintaining at least 1.0 ATR padding) so that the mathematical R:R strictly exceeds the minimum threshold.
-   - Only if you absolutely cannot find a logical structure to stretch the R:R to the minimum should you set \`recommended_direction\` to "NONE".
-5. RANGING MARKETS & BREAKOUTS (MANDATORY RULE):
-   - If the market is RANGING (price between 50 and 200 EMAs), a 'recommended_direction' of NONE is STRICTLY FORBIDDEN unless R:R fails.
-   - You MUST always identify the nearest Swing High and Swing Low. Based on the dominant macro bias or HTF trend, place EITHER a Buy Stop 0.1% above the Swing High OR a Sell Stop 0.1% below the Swing Low. Do not place both.
-   - [MACRO-ALIGNED MEAN REVERSION]: When forced to use MEAN_REVERSION in a range, you MUST align the direction of the trade with the underlying fundamental macro bias provided in the context.
-6. FUNDAMENTAL MACRO OVERRIDE (COMMODITIES & FOREX): Technical EMAs are SECONDARY to dominant macro narratives and active supply/demand shocks.
-   - If the \`fundamental_context\` headlines reference overwhelming macro drivers (e.g., active military conflicts, aggressive rate hike rhetoric), this OVERRIDES technical ranging/chop classifications.
-   - ANY trade setup you generate (even inside a range) MUST align with this macro bias.
-7. MULTI-TIMEFRAME CONFLUENCE (MTFA): You are provided with the HTF (Higher Timeframe) trend. 
-   - You MUST align your direction with the HTF trend. If HTF is BEARISH, you only look for SHORT entries on the LTF.
-   - Counter-trend trades are only allowed if the setup is A-Tier and R:R > 1.2.
-8. SWING TRADER FIBONACCI CONFLUENCE (CRITICAL — READ CAREFULLY):
-   The snapshot may include an \`agent_context\` array from longer-timeframe specialist agents.
-   This is pre-computed institutional analysis — treat it as senior analyst guidance.
-   - DIRECTION ALIGNMENT: If \`agent_context\` contains a SWING_TRADER entry and its \`macro_bias\` matches your intended trade direction → add +5 to your confidence_score before outputting.
-   - FIBONACCI LEVEL ALIGNMENT: If your \`suggested_entry_price\` is within 0.3% of any price in \`agent_context[].key_levels.fib_levels\` → add +8 to your confidence_score. This is multi-timeframe Fibonacci confluence — the highest-quality signal in institutional trading.
-   - COUNTER-TREND PENALTY: If you are trading LONG but the SWING_TRADER macro_bias is BEARISH, or trading SHORT but macro_bias is BULLISH → subtract 10 from your confidence_score and require minimum A-Tier (80) confidence to proceed.
-   - INVALIDATION AWARENESS: If the \`invalidation_price\` field is set and your proposed stop loss is BEYOND it in the wrong direction, you must acknowledge this structural conflict in your thought_process.
-
-[REQUIRED OUTPUT FORMAT]
-You must output a single, valid JSON object matching the exact schema below. You MUST use the \`thought_process\` key FIRST to calculate your math and R:R before defining the trade parameters. If you don't calculate the R:R in text first, the numbers will be invalid.
-Output strictly the JSON object. Do not wrap your response in markdown formatting or backticks.
-
-{
-  "thought_process": "Briefly evaluate the EMAs, state the LTF BOS, calculate the Entry, SL, TP, and verify the R:R ratio mathematically BEFORE returning parameters.",
-  "calculated_rr": 0.0,
-  "technical_audit": {
-    "current_price": 0.0,
-    "ema_50": 0.0,
-    "ema_200": 0.0,
-    "price_position": "ABOVE_BOTH | BELOW_BOTH | BETWEEN_EMAS",
-    "ltf_bos": "BULLISH | BEARISH | NONE"
-  },
-  "market_structure": "BULLISH_TREND | BEARISH_TREND | RANGING | BREAKOUT",
-  "recommended_direction": "LONG | SHORT | NONE",
-  "strategy_applied": "PULLBACK | MOMENTUM_CONTINUATION | MEAN_REVERSION | BREAKOUT | NONE",
-  "execution_parameters": {
-    "entry_type": "Buy Limit | Sell Limit | Buy Stop | Sell Stop | Market | NONE",
-    "suggested_entry_price": 0.0,
-    "suggested_stop_loss": 0.0,
-    "suggested_take_profit": 0.0
-  },
-  "confidence_score": 0,
-  "institutional_rationale": {
-    "directional_bias": "...",
-    "execution_trigger": "...",
-    "invalidation_point": "...",
-    "take_profit_target": "...",
-    "fundamental_alignment": "..."
-  }
-}
-
-Current Market Context:
-${JSON.stringify(snapshot, null, 2)}`;
-
-  let messages = [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: `Evaluate the raw market data for ${symbol} on the ${timeframe} timeframe at current price ${snapshot.current_price} and autonomously originate the highest probability trade setup, if any. Return the required JSON object execution profile.` }
-  ];
-
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: messages as any,
-      response_format: { type: "json_object" },
-      temperature: 0.1
-    });
-
-    const content = response.choices[0].message.content;
-    if (!content) throw new Error("No content returned from AI");
-    
-    // 0. Native JSON Parsing
-    let parsedJson;
-    try {
-      parsedJson = JSON.parse(content);
-    } catch (e: any) {
-      console.warn(`[Validation] Attempt ${attempt} failed JSON.parse. Retrying...`);
-      messages.push({ role: "assistant", content });
-      messages.push({ role: "user", content: `Your response was not valid JSON: ${e.message}. Please respond EXCLUSIVELY with the raw JSON object.` });
-      continue;
-    }
-
-    // 1. Zod Parsing
-    const parsed = TradeEvaluationSchema.safeParse(parsedJson);
-    if (!parsed.success) {
-      console.warn(`[Validation] Attempt ${attempt} failed Zod schema parsing. Retrying...`);
-      messages.push({ role: "assistant", content });
-      messages.push({ role: "user", content: `Your JSON failed validation: ${parsed.error.message}. Please fix the structure and try again. Ensure all required fields are present and correctly typed.` });
-      continue;
-    }
-
-    const data = parsed.data;
-
-    // 2. R:R Mathematical Verification
-    if (data.recommended_direction !== "NONE" && data.execution_parameters.suggested_entry_price && data.execution_parameters.suggested_stop_loss && data.execution_parameters.suggested_take_profit) {
-      const entry = data.execution_parameters.suggested_entry_price;
-      const sl = data.execution_parameters.suggested_stop_loss;
-      const tp = data.execution_parameters.suggested_take_profit;
-      
-      const risk = Math.abs(entry - sl);
-      const reward = Math.abs(entry - tp);
-      const rr = risk > 0 ? reward / risk : 0;
-      
-      let requiredRR = 1.5;
-      if (data.confidence_score >= 90) requiredRR = 1.2;
-      else if (data.confidence_score >= 80) requiredRR = 1.3;
-      
-      if (rr < requiredRR - 0.05) { // Adding small epsilon tolerance
-        console.warn(`[Validation] Attempt ${attempt} failed R:R math (R:R=${rr.toFixed(2)}, Required=${requiredRR}). Retrying...`);
-        messages.push({ role: "assistant", content });
-        messages.push({ role: "user", content: `Your suggested trade yields a Risk/Reward ratio of 1:${rr.toFixed(2)}, but your confidence score of ${data.confidence_score} requires a minimum R:R of 1:${requiredRR}. You MUST either tighten your stop loss, extend your take profit target, or change recommended_direction to "NONE".` });
-        continue;
+  const body = {
+    model: "gpt-4o",
+    input: `Evaluate the raw market data for ${symbol} on the ${timeframe} timeframe at current price ${snapshot.current_price} and autonomously originate the highest probability trade setup, if any. Return the required execution profile using the provided tools.\n\nHistorical Memory:\n${historicalMemory || "None"}\n\nCurrent Market Context:\n${JSON.stringify(snapshot, null, 2)}`,
+    tools: [
+      {
+        type: "function",
+        name: "approve_trade",
+        description: "Submit this action when the trade meets all criteria and confluence.",
+        parameters: {
+          type: "object",
+          properties: {
+            confidence_score: { type: "number", description: "Score 0-100" },
+            recommended_direction: { type: "string", enum: ["LONG", "SHORT"] },
+            structural_confirmation: { type: "string" },
+            market_structure: { type: "string" },
+            strategy_applied: { type: "string" },
+            suggested_entry_price: { type: "number" },
+            suggested_stop_loss: { type: "number" },
+            suggested_take_profit: { type: "number" },
+            rationale: { type: "string" },
+            order_type: { type: "string" },
+            direction: { type: "string" },
+            entry_price: { type: "number" },
+            stop_loss: { type: "number" },
+            take_profit: { type: "number" }
+          },
+          required: [
+            "confidence_score", "recommended_direction", "structural_confirmation",
+            "market_structure", "strategy_applied", "suggested_entry_price", "suggested_stop_loss",
+            "suggested_take_profit", "rationale"
+          ]
+        }
+      },
+      {
+        type: "function",
+        name: "reject_trade",
+        description: "Submit this action when the trade contradicts macro bias or is technically weak.",
+        parameters: {
+          type: "object",
+          properties: {
+            reason: { type: "string" }
+          },
+          required: ["reason"]
+        }
       }
-    }
+    ]
+  };
 
-    return data;
-  }
+  const responseRes = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body)
+  });
+
+  const responseData = await responseRes.json();
   
-  throw new Error(`AI failed to provide a valid JSON response after 3 attempts. Last Warning: ${messages[messages.length - 1]?.content}`);
+  if (responseData.error) {
+    throw new Error(`Responses API Error: ${responseData.error.message}`);
+  }
+
+  const output = responseData.output;
+  if (!output || output.length === 0) {
+    throw new Error("No output returned from Responses API");
+  }
+
+  // Look for a function_call in the output array
+  const toolCall = output.find((item: any) => item.type === "function_call");
+
+  if (!toolCall) {
+    throw new Error(`No tool call returned from AI. Full output: ${JSON.stringify(output)}`);
+  }
+
+  console.log(`[Responses API] Tool called: ${toolCall.name}`);
+  const args = JSON.parse(toolCall.arguments);
+
+  if (toolCall.name === "reject_trade") {
+    return {
+      recommended_direction: "NONE",
+      institutional_rationale: { directional_bias: args.reason },
+      confidence_score: 0
+    };
+  }
+
+  if (toolCall.name === "approve_trade") {
+      return {
+        thought_process: args.rationale,
+        market_structure: args.market_structure,
+        recommended_direction: args.direction || args.recommended_direction,
+        strategy_applied: args.strategy_applied,
+        execution_parameters: {
+          entry_type: args.order_type,
+          suggested_entry_price: args.entry_price || args.suggested_entry_price,
+          suggested_stop_loss: args.stop_loss || args.suggested_stop_loss,
+          suggested_take_profit: args.take_profit || args.suggested_take_profit
+        },
+        confidence_score: args.confidence_score,
+        institutional_rationale: {
+          directional_bias: args.rationale,
+          execution_trigger: "",
+          invalidation_point: "",
+          take_profit_target: "",
+          fundamental_alignment: ""
+        }
+      };
+    }
+  throw new Error(`Unexpected tool call: ${toolCall.name}`);
 }
 
 
@@ -555,6 +509,7 @@ serve(async (req) => {
                 const result = await fetchPaperBars(symbol, '1D', 100, supabase);
                 const dailySnapshot = getContextSnapshot(
                   result.map((b: any) => b.t),
+                  result.map((b: any) => b.o),
                   result.map((b: any) => b.h),
                   result.map((b: any) => b.l),
                   result.map((b: any) => b.c)
@@ -574,6 +529,7 @@ serve(async (req) => {
                 const mtfaResult = await fetchPaperBars(symbol, mtfaTf, 100, supabase);
                 const mtfaSnapshot = getContextSnapshot(
                   mtfaResult.map((b: any) => b.t),
+                  mtfaResult.map((b: any) => b.o),
                   mtfaResult.map((b: any) => b.h),
                   mtfaResult.map((b: any) => b.l),
                   mtfaResult.map((b: any) => b.c)
@@ -591,6 +547,7 @@ serve(async (req) => {
 
             const rawSnapshot = getContextSnapshot(
               bars.map((b) => b.t),
+              bars.map((b) => b.o),
               bars.map((b) => b.h),
               bars.map((b) => b.l),
               bars.map((b) => b.c)
@@ -937,6 +894,37 @@ serve(async (req) => {
 
               // Execution is now entirely delegated to the exness-executor webhook, 
               // which automatically listens for INSERTs with status: 'APPROVED'.
+              // FALLBACK: In case the DB webhook fails, we manually invoke the trade agent
+              try {
+                await supabase.functions.invoke('agent-trade', {
+                  body: {
+                    type: "INSERT",
+                    table: "trade_opportunities",
+                    record: {
+                      id: data.id,
+                      symbol,
+                      side: dbSide,
+                      timeframe: timeframe.toLowerCase(),
+                      status: "APPROVED",
+                      entry_plan_json: {
+                        price: entry_price,
+                        order_type: order_type,
+                        scaled_entries: evaluation.execution_parameters?.scaled_entries || null
+                      },
+                      stop_plan_json: { stop: stop_loss, initial: stop_loss, atr: snapshot.atr_14 },
+                      take_profit_json: { tp: take_profit },
+                      risk_summary: `RSI ${snapshot.rsi_14}`,
+                      confidence: confidence_score,
+                      ai_summary: institutional_rationale,
+                      ai_risks: "Managed by AI Risk Officer",
+                      model_id: modelId,
+                      model_version: modelVersion,
+                    }
+                  }
+                });
+              } catch (e) {
+                console.error(`[Agent Trade] Fallback invocation failed for ${symbol}:`, e);
+              }
 
               results.push({ 
                 symbol, 
@@ -963,7 +951,7 @@ serve(async (req) => {
             sendEvent({ type: 'progress', message: `[System Error] ${globalErr.message}` });
             rejections.push({
               symbol,
-              reason: `System Error: ${globalErr.message}`,
+              reason: `System Error: ${globalErr.stack}`,
               layer: "System"
             });
             return;
