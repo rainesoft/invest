@@ -84,7 +84,7 @@ serve(async (req) => {
       return match ? `${match[1]}-Tier` : null;
     })();
 
-    if (!isManual && (signalTier === "B-Tier" || signalTier === "C-Tier")) {
+    if (!isManual && signalTier === "C-Tier") {
       console.log(`[PAMM Router] Skipping PAMM execution for ${signalTier} signal.`);
       // We skip executing on the Master broker. B-Tier will still trigger a Telegram broadcast via its own webhook.
       return new Response(`Skipped execution for ${signalTier}`, { status: 200 });
@@ -140,9 +140,10 @@ serve(async (req) => {
 
       for (const user of users) {
         if (isManual && payload.user_id !== user.user_id) continue;
-        if (!isManual && !user.auto_trade_enabled) continue;
 
-        const riskPerTrade = Number(user.portfolio_capital) * Number(user.risk_per_trade_pct) * entryWeight;
+        let tierRiskModifier = 1.0;
+        if (signalTier === "B-Tier") tierRiskModifier = 0.5;
+        const riskPerTrade = Number(user.portfolio_capital) * Number(user.risk_per_trade_pct) * entryWeight * tierRiskModifier;
         let volume = pointsAtRisk > 0 ? riskPerTrade / (pointsAtRisk * pointValueUsd) : 0.01;
         volume = Math.max(0.01, Math.round(volume * 100) / 100);
         
@@ -186,38 +187,39 @@ serve(async (req) => {
     let masterOrderId: string | null = null;
     let masterError: string | null = null;
 
+    // Split into Quick Exit and Runner for PAMM master account
+    const halfVolume = Math.max(0.01, Math.round((totalMasterVolume / 2) * 100) / 100);
+    const riskDistance = Math.abs(defaultEntryPrice - stopLoss);
+    const quickExitTP = signal.side === "LONG"
+      ? Number((defaultEntryPrice + riskDistance).toFixed(5))
+      : Number((defaultEntryPrice - riskDistance).toFixed(5));
+
+    const payloadA: any = { actionType, symbol: signal.symbol, volume: halfVolume, stopLoss, takeProfit: quickExitTP };
+    const payloadB: any = { actionType, symbol: signal.symbol, volume: halfVolume, stopLoss, takeProfit };
+
     if (!isMarketOrder) {
-      masterStatus = "PENDING";
-    } else {
-      // Split into Quick Exit and Runner for PAMM master account
-      const halfVolume = Math.max(0.01, Math.round((totalMasterVolume / 2) * 100) / 100);
-      const riskDistance = Math.abs(defaultEntryPrice - stopLoss);
-      const quickExitTP = signal.side === "LONG"
-        ? Number((defaultEntryPrice + riskDistance).toFixed(5))
-        : Number((defaultEntryPrice - riskDistance).toFixed(5));
+      payloadA.openPrice = defaultEntryPrice;
+      payloadB.openPrice = defaultEntryPrice;
+    }
 
-      const payloadA = { actionType, symbol: signal.symbol, volume: halfVolume, stopLoss, takeProfit: quickExitTP };
+    const atrRaw = signal.stop_plan_json?.atr;
+    if (atrRaw) {
+      payloadB.trailingStopLoss = { distance: { distance: Number((atrRaw * 2.0).toFixed(5)), units: "RELATIVE_PRICE" } };
+    }
+
+    try {
+      const resA = await fetch(metaApiUrl, { method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" }, body: JSON.stringify(payloadA) });
+      const resB = await fetch(metaApiUrl, { method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" }, body: JSON.stringify(payloadB) });
       
-      const payloadB: any = { actionType, symbol: signal.symbol, volume: halfVolume, stopLoss, takeProfit };
-      const atrRaw = signal.stop_plan_json?.atr;
-      if (atrRaw) {
-        payloadB.trailingStopLoss = { distance: { distance: Number((atrRaw * 2.0).toFixed(5)), units: "RELATIVE_PRICE" } };
+      if (resA.ok && resB.ok) {
+        masterStatus = isMarketOrder ? "OPEN" : "PENDING";
+        const dataA = await resA.json();
+        masterOrderId = dataA.orderId || "EXECUTED";
+      } else {
+        masterError = await resA.text() + " | " + await resB.text();
       }
-
-      try {
-        const resA = await fetch(metaApiUrl, { method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" }, body: JSON.stringify(payloadA) });
-        const resB = await fetch(metaApiUrl, { method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" }, body: JSON.stringify(payloadB) });
-        
-        if (resA.ok && resB.ok) {
-          masterStatus = "OPEN";
-          const dataA = await resA.json();
-          masterOrderId = dataA.orderId || "EXECUTED";
-        } else {
-          masterError = await resA.text() + " | " + await resB.text();
-        }
-      } catch (e: any) {
-        masterError = e.message;
-      }
+    } catch (e: any) {
+      masterError = e.message;
     }
 
     // --- DISTRIBUTE VIRTUAL LEDGER ENTRIES TO USERS ---

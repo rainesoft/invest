@@ -23,6 +23,14 @@ export type LogicContext = {
   mtfa_ema_50?: number | null;
   mtfa_ema_200?: number | null;
   mtfa_trend?: 'BULLISH' | 'BEARISH' | 'CHOP';
+  
+  // SMC (Smart Money Concepts)
+  bullish_fvg_nearest?: number | null;
+  bearish_fvg_nearest?: number | null;
+  bullish_ob_nearest?: number | null;
+  bearish_ob_nearest?: number | null;
+  liquidity_sweep_bullish?: boolean;
+  liquidity_sweep_bearish?: boolean;
 };
 
 export function calculateFractals(high: number[], low: number[]) {
@@ -66,6 +74,111 @@ export function calculatePivotPoints(high: number, low: number, close: number) {
   };
 }
 
+export function detectFVG(open: number[], high: number[], low: number[], close: number[]) {
+  let bullish_fvg_nearest: number | null = null;
+  let bearish_fvg_nearest: number | null = null;
+  
+  const n = high.length;
+  const lookback = Math.min(30, n);
+  
+  for (let i = n - 2; i >= n - lookback; i--) {
+    // Bullish FVG: low of i > high of i-2
+    if (i >= 2 && low[i] > high[i-2] && close[i-1] > open[i-1]) {
+      const gapTop = low[i];
+      const gapBottom = high[i-2];
+      let filled = false;
+      for (let j = i + 1; j < n; j++) {
+        if (low[j] <= gapBottom) filled = true;
+      }
+      if (!filled && !bullish_fvg_nearest) {
+        bullish_fvg_nearest = gapTop;
+      }
+    }
+    
+    // Bearish FVG: high of i < low of i-2
+    if (i >= 2 && high[i] < low[i-2] && close[i-1] < open[i-1]) {
+      const gapBottom = high[i];
+      const gapTop = low[i-2];
+      let filled = false;
+      for (let j = i + 1; j < n; j++) {
+        if (high[j] >= gapTop) filled = true;
+      }
+      if (!filled && !bearish_fvg_nearest) {
+        bearish_fvg_nearest = gapBottom;
+      }
+    }
+  }
+  return { bullish_fvg_nearest, bearish_fvg_nearest };
+}
+
+export function detectOrderBlocks(open: number[], high: number[], low: number[], close: number[]) {
+  let bullish_ob_nearest: number | null = null;
+  let bearish_ob_nearest: number | null = null;
+  
+  const n = close.length;
+  const lookback = Math.min(30, n);
+  
+  for (let i = n - 2; i >= n - lookback; i--) {
+    const body = Math.abs(close[i] - open[i]);
+    const prevBody = Math.abs(close[i-1] - open[i-1]);
+    
+    // Bullish OB
+    if (i >= 1 && close[i] > open[i] && body > prevBody * 1.5 && close[i-1] < open[i-1]) {
+      const obHigh = high[i-1];
+      let mitigated = false;
+      for (let j = i + 1; j < n; j++) {
+        if (low[j] <= obHigh) mitigated = true;
+      }
+      if (!mitigated && !bullish_ob_nearest) {
+        bullish_ob_nearest = obHigh;
+      }
+    }
+    
+    // Bearish OB
+    if (i >= 1 && close[i] < open[i] && body > prevBody * 1.5 && close[i-1] > open[i-1]) {
+      const obLow = low[i-1];
+      let mitigated = false;
+      for (let j = i + 1; j < n; j++) {
+        if (high[j] >= obLow) mitigated = true;
+      }
+      if (!mitigated && !bearish_ob_nearest) {
+        bearish_ob_nearest = obLow;
+      }
+    }
+  }
+  return { bullish_ob_nearest, bearish_ob_nearest };
+}
+
+export function detectLiquiditySweeps(
+  high: number[], low: number[], close: number[], open: number[],
+  bullish_fractals: {index: number, price: number}[],
+  bearish_fractals: {index: number, price: number}[]
+) {
+  let liquidity_sweep_bullish = false;
+  let liquidity_sweep_bearish = false;
+  
+  const n = close.length;
+  if (n < 5) return { liquidity_sweep_bullish, liquidity_sweep_bearish };
+  
+  const currentLow = low[n-1];
+  const currentHigh = high[n-1];
+  const currentClose = close[n-1];
+  const currentOpen = open[n-1];
+  
+  for (const frac of bullish_fractals.slice(-3)) {
+    if (currentLow < frac.price && Math.max(currentClose, currentOpen) > frac.price) {
+      liquidity_sweep_bullish = true;
+    }
+  }
+  
+  for (const frac of bearish_fractals.slice(-3)) {
+    if (currentHigh > frac.price && Math.min(currentClose, currentOpen) < frac.price) {
+      liquidity_sweep_bearish = true;
+    }
+  }
+  return { liquidity_sweep_bullish, liquidity_sweep_bearish };
+}
+
 export function getContextSnapshot(
   timestamps: string[],
   open: number[],
@@ -94,6 +207,12 @@ export function getContextSnapshot(
       htf_resistance: [],
       ltf_bos: 'NONE',
       candlestick_pattern: 'NONE',
+      bullish_fvg_nearest: null,
+      bearish_fvg_nearest: null,
+      bullish_ob_nearest: null,
+      bearish_ob_nearest: null,
+      liquidity_sweep_bullish: false,
+      liquidity_sweep_bearish: false,
     };
   }
 
@@ -105,6 +224,11 @@ export function getContextSnapshot(
   const ltf_bos = detectBOS(close, bullish_fractals, bearish_fractals);
   const recent_swing_high = bearish_fractals.length > 0 ? bearish_fractals[bearish_fractals.length - 1].price : null;
   const recent_swing_low = bullish_fractals.length > 0 ? bullish_fractals[bullish_fractals.length - 1].price : null;
+
+  // SMC Calculations
+  const { bullish_fvg_nearest, bearish_fvg_nearest } = detectFVG(open, high, low, close);
+  const { bullish_ob_nearest, bearish_ob_nearest } = detectOrderBlocks(open, high, low, close);
+  const { liquidity_sweep_bullish, liquidity_sweep_bearish } = detectLiquiditySweeps(high, low, close, open, bullish_fractals, bearish_fractals);
 
   // Calculate indicators
   const ema50 = EMA.calculate({ period: 50, values: close });
@@ -202,6 +326,12 @@ export function getContextSnapshot(
     trend_alignment,
     ltf_bos,
     candlestick_pattern,
+    bullish_fvg_nearest,
+    bearish_fvg_nearest,
+    bullish_ob_nearest,
+    bearish_ob_nearest,
+    liquidity_sweep_bullish,
+    liquidity_sweep_bearish,
   };
 }
 

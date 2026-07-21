@@ -174,21 +174,12 @@ async function evaluateSwingOpportunity(
   macroContext: string,
 ): Promise<SwingTrade> {
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
-  const azureKey = Deno.env.get("AZURE_OPENAI_API_KEY");
+  if (!openaiKey) throw new Error("No OpenAI key found");
 
-  let openai: OpenAI;
-  if (openaiKey) {
-    openai = new OpenAI({ apiKey: openaiKey });
-  } else if (azureKey) {
-    openai = new OpenAI({
-      apiKey: azureKey,
-      baseURL: `${Deno.env.get("AZURE_OPENAI_ENDPOINT")}/openai/deployments/${Deno.env.get("AZURE_OPENAI_DEPLOYMENT")}`,
-      defaultQuery: { "api-version": Deno.env.get("AZURE_OPENAI_API_VERSION") || "2023-07-01-preview" },
-      defaultHeaders: { "api-key": azureKey },
-    });
-  } else {
-    throw new Error("No OpenAI or Azure OpenAI keys found");
-  }
+  const headers = {
+    "Authorization": `Bearer ${openaiKey}`,
+    "Content-Type": "application/json"
+  };
 
   // Format Fib levels for AI consumption
   const fibSummary = fib.levels
@@ -198,9 +189,7 @@ async function evaluateSwingOpportunity(
     .map((l) => `  ${l.label} → $${l.price.toLocaleString()}`)
     .join("\n");
 
-  const systemPrompt = `You are a Senior Institutional Swing Trader and Fibonacci Analyst. You specialize in identifying high-confluence, multi-week positional setups using Fibonacci retracement/extension levels, macro alignment, and multi-timeframe structure.
-
-You respond EXCLUSIVELY in raw JSON. You are NOT a scalper. Minimum trade duration is 3-10 days.
+  const userContent = `Analyze ${symbol} on the ${timeframe} timeframe. Identify the highest-probability swing trade setup if one exists. Calculate your R:R for all three TP levels in your thought_process before filling in the execution_parameters. Return the required execution profile using the provided tools.
 
 [HISTORICAL PERFORMANCE FOR ${symbol}]
 ${historicalMemory || "No historical data available for this asset yet."}
@@ -226,9 +215,10 @@ ${macroContext || "No major macro events in the window."}
 
 [SWING TRADE RULES — READ CAREFULLY]
 
-1. FIBONACCI CONFLUENCE IS MANDATORY FOR S-TIER:
+1. FIBONACCI & SMC CONFLUENCE IS MANDATORY FOR S-TIER:
    An S-Tier (confidence >= 90) setup REQUIRES at least 3 of the following to align:
    - Price is at or within 1.5% of a key Fib level (38.2%, 50%, 61.8%, 78.6%)
+   - SMART MONEY CONCEPTS (SMC): Price has just mitigated a Fair Value Gap (FVG) or swept liquidity into an Order Block (OB).
    - A daily/weekly structural support or resistance zone overlaps the Fib level
    - RSI is showing divergence or approaching oversold/overbought (< 35 or > 65)
    - Candlestick pattern confirms reversal (e.g. BULLISH_ENGULFING, MORNING_STAR, BEARISH_REJECTION_PINBAR at support/resistance)
@@ -265,126 +255,168 @@ ${macroContext || "No major macro events in the window."}
 
 7. NEVER FORCE A TRADE:
    - If the price is in the middle of the Fib range with no clear level to anchor to, output recommended_direction = "NONE"
-   - If the macro fundamentally contradicts the technical thesis, output "NONE"
 
 8. DIRECTIONAL BIAS FILTERING (CRITICAL):
-   - If the Macro Sentiment Score is explicitly BEARISH (score < 0), you MUST REJECT any LONG technical setups and output "NONE" for recommended_direction, UNLESS you find a valid SHORT setup at HTF resistance (e.g. 61.8% Fib).
-   - If the Macro Sentiment Score is explicitly BULLISH (score > 0), you MUST REJECT any SHORT technical setups and output "NONE" for recommended_direction, UNLESS you find a valid LONG setup at HTF support.
-   - Confluence is non-negotiable for S-Tier. Do not output contradicting setups as A-Tier; reject them instead.
+   - If the Macro Sentiment Score actively contradicts your technical setup (e.g. Bearish macro but Bullish technicals at support), you must NOT output an S-Tier or A-Tier signal.
+   - Instead, DOWNGRADE the setup to B-Tier (confidence between 70-79). Do not output "NONE" if the technicals are perfectly valid.
+   - Confluence is non-negotiable for S-Tier and A-Tier. Contradicting setups are strictly B-Tier.
 
-9. LTF CONFIRMATION REQUIRED FOR S-TIER:
-   - Do not enter blindly at a HTF support/resistance level. An S-Tier setup REQUIRES a confirmed Lower Timeframe (LTF) Break of Structure (BOS) in your direction.
-   - For LONG setups, 'ltf_bos_bullish' MUST be true in the snapshot.
-   - For SHORT setups, 'ltf_bos_bearish' MUST be true in the snapshot.
-   - If LTF BOS confirmation is missing, downgrade confidence to A-Tier (max 85) or reject.
+9. LTF CONFIRMATION & DYNAMIC SCALING FOR S-TIER:
+   - Do not enter blindly at a HTF support/resistance level. An S-Tier setup REQUIRES a confirmed Lower Timeframe (LTF) Break of Structure (BOS) or LTF SMC confluence in your direction.
+   - Use the LTF SMC features (e.g., ltf_bullish_ob_nearest, ltf_liquidity_sweep) from the snapshot to find a tighter entry and place your Stop Loss directly behind the LTF Order Block or FVG, rather than a wide Daily swing low.
+   - This dynamic timeframe scaling will naturally compress your Stop Loss and boost your Risk:Reward beyond the 1:2.5 S-Tier threshold.
+   - If LTF BOS or LTF SMC confirmation is missing, downgrade confidence to A-Tier (max 85) or reject.`;
 
-Output ONLY the raw JSON object — no markdown, no backticks, no explanation outside the JSON. You MUST strictly adhere to the following JSON schema:
-
-{
-  "thought_process": "String. Step-by-step math and reasoning for entry, SL, and TP.",
-  "calculated_rr_to_tp1": 0.0,
-  "calculated_rr_to_tp2": 0.0,
-  "calculated_rr_to_tp3": 0.0,
-  "fibonacci_rationale": "String.",
-  "market_structure": "BULLISH_TREND | BEARISH_TREND | RANGING | DISTRIBUTION | ACCUMULATION",
-  "recommended_direction": "LONG | SHORT | NONE",
-  "strategy_applied": "FIB_RETRACEMENT_LONG | FIB_RETRACEMENT_SHORT | FIB_EXTENSION_TARGET | MACRO_REVERSAL_LONG | MACRO_REVERSAL_SHORT | RANGE_BOUNDARY | NONE",
-  "execution_parameters": {
-    "entry_type": "Buy Limit | Sell Limit | Buy Stop | Sell Stop | Market | NONE",
-    "suggested_entry_price": 0.0,
-    "suggested_stop_loss": 0.0,
-    "take_profit_1": 0.0,
-    "take_profit_2": 0.0,
-    "take_profit_3": 0.0
-  },
-  "confidence_score": 0,
-  "swing_rationale": {
-    "fib_entry_level": "String",
-    "structural_confirmation": "String",
-    "macro_alignment": "String",
-    "invalidation_level": "String",
-    "tp1_rationale": "String",
-    "tp2_rationale": "String",
-    "tp3_rationale": "String"
-  }
-}
-`;;
-
-  const userPrompt = `Analyze ${symbol} on the ${timeframe} timeframe. The pre-computed Fibonacci levels are provided above. Identify the highest-probability swing trade setup if one exists. Calculate your R:R for all three TP levels in your thought_process before filling in the execution_parameters. Return the required JSON.`;
-
-  let messages: any[] = [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: userPrompt },
-  ];
-
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages,
-      response_format: { type: "json_object" },
-      temperature: 0.15,
-    });
-
-    const content = response.choices[0].message.content;
-    if (!content) throw new Error("No content returned from AI");
-
-    let parsedJson: any;
-    try {
-      parsedJson = JSON.parse(content);
-    } catch (e: any) {
-      messages.push({ role: "assistant", content });
-      messages.push({
-        role: "user",
-        content: `Your response was not valid JSON: ${e.message}. Respond ONLY with the raw JSON object.`,
-      });
-      continue;
-    }
-
-    const parsed = SwingTradeSchema.safeParse(parsedJson);
-    if (!parsed.success) {
-      messages.push({ role: "assistant", content });
-      messages.push({
-        role: "user",
-        content: `Your JSON failed schema validation: ${parsed.error.message}. Fix all issues and resubmit.`,
-      });
-      continue;
-    }
-
-    const data = parsed.data;
-
-    // Verify R:R math independently for TP2 (primary target)
-    if (
-      data.recommended_direction !== "NONE" &&
-      data.execution_parameters.suggested_entry_price &&
-      data.execution_parameters.suggested_stop_loss &&
-      data.execution_parameters.take_profit_2
-    ) {
-      const entry = data.execution_parameters.suggested_entry_price;
-      const sl = data.execution_parameters.suggested_stop_loss;
-      const tp2 = data.execution_parameters.take_profit_2;
-      const risk = Math.abs(entry - sl);
-      const reward = Math.abs(entry - tp2);
-      const rr = risk > 0 ? reward / risk : 0;
-
-      let requiredRR = 1.5;
-      if (data.confidence_score >= 90) requiredRR = 2.5;
-      else if (data.confidence_score >= 80) requiredRR = 2.0;
-      else if (data.confidence_score >= 70) requiredRR = 1.5;
-
-      if (rr < requiredRR - 0.1) {
-        messages.push({ role: "assistant", content });
-        messages.push({
-          role: "user",
-          content: `Your TP2 yields a R:R of 1:${rr.toFixed(2)}, but your confidence of ${data.confidence_score} requires a minimum R:R of 1:${requiredRR} to TP2. You must either widen your TP2 target, tighten your stop loss, or lower your confidence score. Recalculate and resubmit.`,
-        });
-        continue;
+  console.log(`[Responses API] Submitting ${symbol} analysis...`);
+  
+  const body = {
+    model: "gpt-4o",
+    input: userContent,
+    tools: [
+      {
+        type: "function",
+        name: "approve_trade",
+        description: "Submit this action when the trade meets all criteria and confluence.",
+        parameters: {
+          type: "object",
+          properties: {
+            confidence_score: { type: "number", description: "Score 0-100" },
+            recommended_direction: { type: "string", enum: ["LONG", "SHORT"] },
+            fib_entry_level: { type: "string", description: "e.g. 61.8% or 78.6%" },
+            structural_confirmation: { type: "string" },
+            market_structure: { type: "string" },
+            strategy_applied: { type: "string" },
+            suggested_entry_price: { type: "number" },
+            suggested_stop_loss: { type: "number" },
+            take_profit_1: { type: "number" },
+            take_profit_2: { type: "number" },
+            take_profit_3: { type: "number" },
+            rationale: { type: "string" },
+            order_type: { type: "string" },
+            direction: { type: "string" },
+            entry_price: { type: "number" },
+            stop_loss: { type: "number" }
+          },
+          required: [
+            "confidence_score", "recommended_direction", "fib_entry_level", "structural_confirmation",
+            "market_structure", "strategy_applied", "suggested_entry_price", "suggested_stop_loss",
+            "take_profit_2", "rationale"
+          ]
+        }
+      },
+      {
+        type: "function",
+        name: "reject_trade",
+        description: "Submit this action when the trade contradicts macro bias or is technically weak.",
+        parameters: {
+          type: "object",
+          properties: {
+            reason: { type: "string" }
+          },
+          required: ["reason"]
+        }
       }
-    }
+    ]
+  };
 
-    return data;
+  const responseRes = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body)
+  });
+
+  const responseData = await responseRes.json();
+  
+  if (responseData.error) {
+    throw new Error(`Responses API Error: ${responseData.error.message}`);
   }
 
-  throw new Error("Swing AI failed to produce valid JSON after 3 attempts");
+  const output = responseData.output;
+  if (!output || output.length === 0) {
+    throw new Error("No output returned from Responses API");
+  }
+
+  // Look for a function_call in the output array
+  const toolCall = output.find((item: any) => item.type === "function_call");
+
+  if (!toolCall) {
+    throw new Error(`No tool call returned from AI. Full output: ${JSON.stringify(output)}`);
+  }
+
+  console.log(`[Responses API] Tool called: ${toolCall.name}`);
+  const args = JSON.parse(toolCall.arguments);
+
+  if (toolCall.name === "reject_trade") {
+    return {
+      recommended_direction: "NONE",
+      fibonacci_rationale: args.reason,
+      confidence_score: 0
+    } as any;
+  }
+
+  if (toolCall.name === "approve_trade") {
+      const data: SwingTrade = {
+        thought_process: args.rationale,
+        calculated_rr_to_tp1: null,
+        calculated_rr_to_tp2: null,
+        calculated_rr_to_tp3: null,
+        fibonacci_rationale: args.fib_entry_level || "",
+        market_structure: args.market_structure,
+        recommended_direction: args.direction || args.recommended_direction,
+        strategy_applied: args.strategy_applied,
+        execution_parameters: {
+          entry_type: args.order_type,
+          suggested_entry_price: args.entry_price || args.suggested_entry_price,
+          suggested_stop_loss: args.stop_loss || args.suggested_stop_loss,
+          take_profit_1: args.take_profit_1,
+          take_profit_2: args.take_profit_2,
+          take_profit_3: args.take_profit_3
+        },
+        confidence_score: args.confidence_score,
+        swing_rationale: {
+          fib_entry_level: args.fib_entry_level || "",
+          structural_confirmation: args.structural_confirmation || "",
+          macro_alignment: "",
+          invalidation_level: "",
+          tp1_rationale: "",
+          tp2_rationale: "",
+          tp3_rationale: ""
+        }
+      };
+
+      // Verify R:R math independently for TP2 (primary target)
+      if (
+        data.recommended_direction !== "NONE" &&
+        data.execution_parameters.suggested_entry_price &&
+        data.execution_parameters.suggested_stop_loss &&
+        data.execution_parameters.take_profit_2
+      ) {
+        const entry = data.execution_parameters.suggested_entry_price;
+        const sl = data.execution_parameters.suggested_stop_loss;
+        const tp2 = data.execution_parameters.take_profit_2;
+        const risk = Math.abs(entry - sl);
+        const reward = Math.abs(entry - tp2);
+        const rr = risk > 0 ? reward / risk : 0;
+
+        let requiredRR = 1.5;
+        if (data.confidence_score >= 90) requiredRR = 2.5;
+        else if (data.confidence_score >= 80) requiredRR = 2.0;
+        else if (data.confidence_score >= 70) requiredRR = 1.5;
+
+        if (rr < requiredRR - 0.1) {
+          // It didn't meet the rules, force reject
+          console.warn(`[Swing Guard] AI approved but R:R of 1:${rr.toFixed(2)} fails requirement of 1:${requiredRR}. Rejecting.`);
+          return {
+            recommended_direction: "NONE",
+            fibonacci_rationale: `Rejected post-AI: TP2 R:R of 1:${rr.toFixed(2)} does not meet requirement of 1:${requiredRR}`,
+            confidence_score: 0
+          } as any;
+        }
+      }
+
+      return data;
+    }
+  throw new Error(`Unexpected tool call: ${toolCall.name}`);
 }
 
 // ============================================================
@@ -662,8 +694,16 @@ serve(async (req) => {
               );
               (snapshot as any).ltf_timeframe = ltfTimeframe;
               (snapshot as any).ltf_trend = ltfSnap.trend_alignment;
-              (snapshot as any).ltf_bos_bullish = ltfSnap.bos_bullish;
-              (snapshot as any).ltf_bos_bearish = ltfSnap.bos_bearish;
+              (snapshot as any).ltf_bos_bullish = ltfSnap.ltf_bos === 'BULLISH';
+              (snapshot as any).ltf_bos_bearish = ltfSnap.ltf_bos === 'BEARISH';
+              
+              // Map LTF SMC Context
+              (snapshot as any).ltf_bullish_fvg_nearest = ltfSnap.bullish_fvg_nearest;
+              (snapshot as any).ltf_bearish_fvg_nearest = ltfSnap.bearish_fvg_nearest;
+              (snapshot as any).ltf_bullish_ob_nearest = ltfSnap.bullish_ob_nearest;
+              (snapshot as any).ltf_bearish_ob_nearest = ltfSnap.bearish_ob_nearest;
+              (snapshot as any).ltf_liquidity_sweep_bullish = ltfSnap.liquidity_sweep_bullish;
+              (snapshot as any).ltf_liquidity_sweep_bearish = ltfSnap.liquidity_sweep_bearish;
             }
           } catch (err: any) {
             console.warn(`[${symbol}] [Trace: ${traceId}] LTF fetch failed, continuing without it: ${err.message}`);
@@ -901,7 +941,7 @@ serve(async (req) => {
           ].filter(Boolean).join(" | ");
 
           let order_type = evaluation.recommended_direction === "LONG" ? "BUY MARKET" : "SELL MARKET";
-          if (Math.abs(entry - currentPrice) / currentPrice > 0.002) {
+          if (Math.abs(entry - currentPrice) / currentPrice > 0.0001) {
             if (evaluation.recommended_direction === "LONG") {
               order_type = entry < currentPrice ? "BUY LIMIT" : "BUY STOP";
             } else {
@@ -948,6 +988,37 @@ serve(async (req) => {
           }
 
           console.log(`[Swing] [Trace: ${traceId}] APPROVED ${symbol} — ID: ${dbData.id} | ${tier} | R:R 1:${rrToTp2.toFixed(1)} to TP2`);
+          sendEvent({
+            type: "progress",
+            message: `[Success] Opportunity generated for ${symbol}`,
+          });
+          
+          // FALLBACK: In case the DB webhook fails, we manually invoke the trade agent
+          try {
+            await supabase.functions.invoke('agent-trade', {
+              body: {
+                type: "INSERT",
+                table: "trade_opportunities",
+                record: {
+                  id: dbData.id,
+                  symbol,
+                  side: evaluation.recommended_direction,
+                  timeframe: timeframe.toLowerCase(),
+                  status: "APPROVED",
+                  entry_plan_json: { price: entry, order_type, scaled_entries: null },
+                  stop_plan_json: { stop: sl, initial: sl, atr: snapshot.atr_14 },
+                  take_profit_json: { tp: tp2, tp1, tp2_json: tp2, tp3 },
+                  risk_summary: `RSI ${snapshot.rsi_14} | ATR ${snapshot.atr_14}`,
+                  confidence,
+                  ai_summary: aiSummary,
+                  ai_risks: "Managed by Swing AI Risk Officer",
+                  trace_id: traceId,
+                }
+              }
+            });
+          } catch (e) {
+            console.error(`[Agent Trade] Fallback invocation failed for ${symbol}:`, e);
+          }
           sendEvent({
             type: "progress",
             message: `[${symbol}] ✅ SWING SIGNAL APPROVED — ${tier} | Entry: $${entry.toLocaleString()} | SL: $${sl.toLocaleString()} | TP2: $${tp2.toLocaleString()} | R:R 1:${rrToTp2.toFixed(1)}`,

@@ -139,3 +139,152 @@ export async function validateUserExposure(
   return { valid: true };
 }
 
+// ============================================================================
+// AI Risk Guardrail (formerly Devil's Advocate)
+// ============================================================================
+
+export interface AIRiskContext {
+  symbol: string;
+  side: "BUY" | "SELL" | "LONG" | "SHORT";
+  price: number;
+  setup_label: string;
+  macro_bias: string;
+  fib_narrative?: string;
+  technical_reasons: string;
+}
+
+export interface AIRiskValidationResult {
+  approved: boolean;
+  reason: string;
+}
+
+/**
+ * Validates a signal qualitatively using an LLM (Responses API) to check for 
+ * fundamental or structural contradictions before execution.
+ */
+export async function validateSignalWithAI(
+  supabase: SupabaseClient,
+  context: AIRiskContext,
+  traceId: string
+): Promise<AIRiskValidationResult> {
+  console.log(`[Risk Manager] [Trace: ${traceId}] AI Risk Check for ${context.side} on ${context.symbol}...`);
+  
+  // Try to use Deno.env (for Edge Functions) or process.env (for local tests)
+  let openaiKey = "";
+  try {
+    openaiKey = Deno.env.get("OPENAI_API_KEY") || "";
+  } catch {
+    // @ts-ignore
+    openaiKey = process?.env?.OPENAI_API_KEY || "";
+  }
+
+  if (!openaiKey) {
+    console.warn(`[Risk Manager] [Trace: ${traceId}] No AI keys found. Bypassing AI check.`);
+    return { approved: true, reason: "Bypassed: No AI configuration" };
+  }
+
+  const headers = {
+    "Authorization": `Bearer ${openaiKey}`,
+    "Content-Type": "application/json"
+  };
+
+  const userContent = `
+PROPOSED TRADE:
+Symbol: ${context.symbol}
+Action: ${context.side}
+Current Price: $${context.price}
+Setup: ${context.setup_label}
+Technical Basis: ${context.technical_reasons}
+
+MARKET CONTEXT:
+Macro Bias: ${context.macro_bias}
+Fibonacci / Structure Narrative: ${context.fib_narrative || "None available"}
+
+Analyze this trade and return your verdict.
+  `;
+
+  try {
+    console.log(`[Responses API] [Risk Manager] Submitting ${context.symbol} AI analysis...`);
+    
+    const body = {
+      model: "gpt-4o",
+      input: userContent,
+      tools: [
+        {
+          type: "function",
+          name: "approve_trade",
+          description: "Submit this action when the trade seems reasonable and doesn't contradict macro bias.",
+          parameters: {
+            type: "object",
+            properties: {
+              reason: { type: "string" }
+            },
+            required: ["reason"]
+          }
+        },
+        {
+          type: "function",
+          name: "reject_trade",
+          description: "Submit this action when the trade contradicts macro bias or is technically weak.",
+          parameters: {
+            type: "object",
+            properties: {
+              reason: { type: "string" }
+            },
+            required: ["reason"]
+          }
+        }
+      ]
+    };
+
+    const responseRes = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body)
+    });
+
+    const responseData = await responseRes.json();
+    
+    if (responseData.error) {
+      throw new Error(`Responses API Error: ${responseData.error.message}`);
+    }
+
+    const output = responseData.output;
+    if (!output || output.length === 0) {
+      throw new Error("No output returned from Responses API");
+    }
+
+    // Look for a function_call in the output array
+    const toolCall = output.find((item: any) => item.type === "function_call");
+
+    if (!toolCall) {
+      throw new Error(`No tool call returned from AI. Full output: ${JSON.stringify(output)}`);
+    }
+
+    console.log(`[Responses API] [Risk Manager] Tool called: ${toolCall.name}`);
+    const args = JSON.parse(toolCall.arguments);
+    
+    const result = {
+      approved: toolCall.name === "approve_trade",
+      reason: args.reason || "No reason provided."
+    };
+    
+    // Log verdict to DB
+    await supabase.from("agent_verdicts").insert({
+      trace_id: traceId,
+      agent_persona: "RISK_MANAGER_AI",
+      symbol: context.symbol,
+      action: context.side,
+      verdict_approved: result.approved,
+      verdict_reason: result.reason,
+      context_json: context
+    });
+
+    console.log(`[Risk Manager] [Trace: ${traceId}] Verdict for ${context.symbol}: ${result.approved ? 'APPROVED' : 'REJECTED'} - ${result.reason}`);
+    return result;
+  } catch (error: any) {
+    console.error(`[Risk Manager] [Trace: ${traceId}] Error during AI analysis:`, error.message);
+    // Fail-open strategy to not block trades if AI fails
+    return { approved: true, reason: `Bypassed: AI Error - ${error.message}` };
+  }
+}
