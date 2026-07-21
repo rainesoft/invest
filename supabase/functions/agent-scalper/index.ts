@@ -106,7 +106,19 @@ async function evaluateOpportunity(symbol: string, snapshot: LogicContext & { ag
   
   const body = {
     model: "gpt-4o",
-    input: `Evaluate the raw market data for ${symbol} on the ${timeframe} timeframe at current price ${snapshot.current_price} and autonomously originate the highest probability trade setup, if any. Return the required execution profile using the provided tools.\n\nHistorical Memory:\n${historicalMemory || "None"}\n\nCurrent Market Context:\n${JSON.stringify(snapshot, null, 2)}`,
+    input: `Evaluate the raw market data for ${symbol} on the ${timeframe} timeframe at current price ${snapshot.current_price} and autonomously originate the highest probability trade setup, if any. Return the required execution profile using the provided tools.
+    
+CRITICAL RULES:
+1. If the market is in a momentum trend, follow standard trend continuation rules.
+2. If the market is ranging (trend_alignment is CHOP), you MUST look for MEAN_REVERSION setups. Buy near the lower Bollinger Band (bb_lower) or sell near the upper Bollinger Band (bb_upper) if corroborated by RSI extremes (e.g., RSI < 35 for LONG, RSI > 65 for SHORT).
+3. For MEAN_REVERSION, set your take_profit near the opposite Bollinger Band or SMA.
+4. MACRO SENSITIVITY: If trading XAUUSD (Gold) or UKOIL (Oil) and the recent news context contains high-impact geopolitical events or central bank rate decisions, you MUST reject the trade unless you are explicitly originating a momentum breakout setup directly aligned with the macro catalyst.
+
+Historical Memory:
+${historicalMemory || "None"}
+
+Current Market Context:
+${JSON.stringify(snapshot, null, 2)}`,
     tools: [
       {
         type: "function",
@@ -149,7 +161,8 @@ async function evaluateOpportunity(symbol: string, snapshot: LogicContext & { ag
           required: ["reason"]
         }
       }
-    ]
+    ],
+    tool_choice: "required"
   };
 
   const responseRes = await fetch("https://api.openai.com/v1/responses", {
@@ -232,7 +245,7 @@ serve(async (req) => {
       reqBody = await req.json();
     } catch (e) {}
   }
-  const timeframe = (reqBody as any).timeframe ?? searchParams.get("timeframe") ?? (isCron ? "1H" : "1D");
+  const timeframe = (reqBody as any).timeframe ?? searchParams.get("timeframe") ?? (isCron ? "30m" : "30m");
   const modelId = searchParams.get("model_id") ?? undefined;
   const modelVersion = searchParams.get("model_version") ?? undefined;
   const newsContext = searchParams.get("news") ?? undefined;
@@ -294,8 +307,13 @@ serve(async (req) => {
         
         let allEvents = null;
         if (!newsContext) {
-          sendEvent({ type: 'progress', message: `[Macro Data] Fetching global economic calendar...` });
-          allEvents = await fetchAllMacroEvents();
+          sendEvent({ type: 'progress', message: `[Macro Oracle] Reading global economic calendar from Central Oracle...` });
+          const { data: oracleData } = await supabase.from("system_settings").select("value").eq("key", "macro_oracle_context").single();
+          if (oracleData && oracleData.value) {
+            allEvents = oracleData.value;
+          } else {
+            allEvents = await fetchAllMacroEvents(); // Fallback
+          }
 
           if (allEvents && allEvents.length > 0) {
             // ==========================================
@@ -380,7 +398,7 @@ serve(async (req) => {
               }
 
               // 2. Fetch Live Snapshot
-              const result = await fetchPaperBars(signal.symbol, signal.timeframe, 100, supabase);
+              const result = await fetchPaperBars(signal.symbol, signal.timeframe, 300, supabase);
               const snapshot = getContextSnapshot(
                 result.map((b: any) => b.t),
                 result.map((b: any) => b.h),
@@ -432,6 +450,51 @@ serve(async (req) => {
           }
         }
         // ==========================================
+        // PHASE 1B: RUNNER HANDOFF (SCALP -> SWING)
+        // ==========================================
+        console.log(`[Phase 1B] Scanning active scalps for +2.0R Runner Handoff...`);
+        const { data: openScalps } = await supabase
+          .from("user_trades")
+          .select("*, trade_opportunities!inner(*)")
+          .eq("status", "OPEN")
+          .eq("trade_opportunities.source", "agent-scalper");
+
+        if (openScalps && openScalps.length > 0) {
+           for (const trade of openScalps) {
+              const opp = trade.trade_opportunities;
+              const entryPrice = opp?.entry_plan_json?.price || opp?.entry_plan_json?.entry_price || opp?.entry_plan_json?.limit_price;
+              const stopLoss = opp?.stop_plan_json?.stop;
+              
+              if (entryPrice && stopLoss) {
+                 const riskDistance = Math.abs(entryPrice - stopLoss);
+                 if (riskDistance > 0) {
+                    try {
+                        const result = await fetchPaperBars(trade.symbol, opp.timeframe || "5Min", 10, supabase);
+                        if (result && result.length > 0) {
+                           const currentPrice = result[result.length - 1].c;
+                           let rMultiple = 0;
+                           if (trade.side === "LONG") rMultiple = (currentPrice - entryPrice) / riskDistance;
+                           else rMultiple = (entryPrice - currentPrice) / riskDistance;
+    
+                           if (rMultiple >= 2.0) {
+                              console.log(`[Runner Handoff] ${trade.symbol} hit +${rMultiple.toFixed(2)}R! Handing off to Execution Desk...`);
+                              sendEvent({ type: 'progress', message: `[Runner Handoff] Scalp on ${trade.symbol} reached +2.0R. Sending to Execution Desk for Break-Even adjustment.` });
+                              
+                              const webhookUrl = (Deno.env.get("SUPABASE_URL") || "").replace(/\/$/, "") + "/functions/v1/agent-trade";
+                              await fetch(webhookUrl, {
+                                 method: "POST",
+                                 headers: { "Content-Type": "application/json", "x-webhook-secret": Deno.env.get("WEBHOOK_SECRET") || "FALLBACK_SECRET_123" },
+                                 body: JSON.stringify({ action: "RUNNER_HANDOFF", trade_id: trade.id })
+                              }).catch(e => console.error("Failed to ping agent-trade:", e));
+                           }
+                        }
+                    } catch (e) {
+                        console.error("[Runner Handoff] Failed to check price for", trade.symbol, e.message);
+                    }
+                 }
+              }
+           }
+        }
 
         const chunkSize = 10;
         for (let i = 0; i < symbols.length; i += chunkSize) {
@@ -450,12 +513,36 @@ serve(async (req) => {
               payload_json: { symbol, timeframe, model_id: modelId, model_version: modelVersion },
             });
 
+            // --- LAYER 0: MACRO BLACKOUT WINDOW ---
+            if (["XAUUSD", "XAGUSD", "BTCUSD"].includes(symbol) && allEvents) {
+              const nowMs = Date.now();
+              const thirtyMins = 30 * 60 * 1000;
+              const blackoutEvents = allEvents.filter((e: any) => {
+                 if (e.impact !== "High" || e.country !== "USD") return false;
+                 const eventTime = new Date(e.date).getTime();
+                 const timeDiff = Math.abs(eventTime - nowMs);
+                 return timeDiff <= thirtyMins;
+              });
+
+              if (blackoutEvents.length > 0) {
+                 const evNames = blackoutEvents.map((e: any) => e.title).join(", ");
+                 console.log(`[Layer 0] Macro Blackout Window Active: Halting ${symbol} due to ${evNames}`);
+                 sendEvent({ type: 'progress', message: `[Layer 0] Macro Blackout Window Active: Halting ${symbol} due to High-Impact USD event within ±30m.` });
+                 rejections.push({
+                   symbol,
+                   reason: `Macro Blackout Window: Halting origination due to High-Impact USD event within ±30m (${evNames})`,
+                   layer: "Layer 0"
+                 });
+                 return; // Halt this execution completely for this symbol
+              }
+            }
+
             let bars: Bar[];
             let source: string;
             try {
               console.log(`[Data Fetch] Fetching market data for ${symbol}...`);
               sendEvent({ type: 'progress', message: `[Data Fetch] Fetching historical price data for ${symbol}...` });
-              const result = await fetchPaperBars(symbol, timeframe, 100, supabase);
+              const result = await fetchPaperBars(symbol, timeframe, 300, supabase);
               bars = result;
               source = "Broker API";
             } catch (err: any) {
@@ -506,7 +593,7 @@ serve(async (req) => {
 
             if (timeframe !== '1D') {
               try {
-                const result = await fetchPaperBars(symbol, '1D', 100, supabase);
+                const result = await fetchPaperBars(symbol, '1D', 300, supabase);
                 const dailySnapshot = getContextSnapshot(
                   result.map((b: any) => b.t),
                   result.map((b: any) => b.o),
@@ -526,7 +613,7 @@ serve(async (req) => {
                 
                 // Fetch MTFA (1H or 4H) for confluence
                 const mtfaTf = timeframe === '15Min' ? '1H' : '4H';
-                const mtfaResult = await fetchPaperBars(symbol, mtfaTf, 100, supabase);
+                const mtfaResult = await fetchPaperBars(symbol, mtfaTf, 300, supabase);
                 const mtfaSnapshot = getContextSnapshot(
                   mtfaResult.map((b: any) => b.t),
                   mtfaResult.map((b: any) => b.o),
@@ -671,6 +758,27 @@ serve(async (req) => {
               console.log(`[Layer B: Cognitive Guard] Requesting AI evaluation for ${symbol}...`);
               sendEvent({ type: 'progress', message: `[Layer B: AI Risk Officer] Evaluating institutional rationale and key levels for ${snapshot.trend_alignment} setup...` });
               evaluation = await evaluateOpportunity(symbol, snapshot, timeframe, historicalMemory);
+              
+              // --- SHADOW LEDGER: Log raw AI prediction instantly ---
+              if (evaluation && evaluation.recommended_direction !== "NONE") {
+                 let rawEntry = Number(evaluation.execution_parameters?.suggested_entry_price);
+                 let rawTP = Number(evaluation.execution_parameters?.suggested_take_profit);
+                 let rawSL = Number(evaluation.execution_parameters?.suggested_stop_loss);
+                 
+                 // Fallback to snapshot if AI omitted them
+                 if (!rawEntry) rawEntry = snapshot.current_price;
+                 if (!rawSL) rawSL = evaluation.recommended_direction === "LONG" ? snapshot.safe_long_stop_loss : snapshot.safe_short_stop_loss;
+                 
+                 await supabase.from("shadow_ledger").insert({
+                    symbol: symbol,
+                    timeframe: timeframe.toLowerCase(),
+                    side: evaluation.recommended_direction,
+                    entry_price: rawEntry,
+                    take_profit: rawTP || null,
+                    stop_loss: rawSL || null,
+                    status: "PENDING"
+                 }).catch(err => console.error(`[Shadow Ledger] Failed to insert raw signal for ${symbol}: ${err.message}`));
+              }
             } catch (err: any) {
               console.error(`[Layer B Error] AI evaluation failed for ${symbol}: ${err.message}`);
               sendEvent({ type: 'progress', message: `[Layer B: AI Risk Officer] Evaluation failed: ${err.message}` });
@@ -825,8 +933,39 @@ serve(async (req) => {
             const riskRewardRatio = riskPoints > 0 ? (rewardPoints / riskPoints) : 0;
             
             let deskRequiredRR = 1.5;
-            if (confidence_score >= 90) deskRequiredRR = 2.0;
-            else if (confidence_score >= 80) deskRequiredRR = 1.75;
+            if (symbol === 'XAGUSD' || symbol === 'UKOIL') {
+              deskRequiredRR = 1.0; // Lower threshold due to high volatility and wider stops
+            } else {
+              if (confidence_score >= 90) deskRequiredRR = 2.0;
+              else if (confidence_score >= 80) deskRequiredRR = 1.75;
+            }
+
+            // --- Regime Enforcement ---
+            if (snapshot.trend_alignment === "CHOP") {
+              if (evaluation.strategy_applied !== "MEAN_REVERSION" && confidence_score < 90) {
+                console.log(`[Layer C: Execution Desk] REJECTED ${symbol}: Structural Regime Mismatch (Attempting non-mean-reversion in CHOP).`);
+                sendEvent({ type: 'progress', message: `[Layer C: Execution Desk] REJECTED: Structural Regime Mismatch in CHOP.` });
+                rejections.push({
+                  symbol,
+                  reason: `Structural Regime Mismatch: The market is in a CHOP regime, but the AI proposed a ${evaluation.strategy_applied} strategy. Only MEAN_REVERSION is structurally permitted in chop unless confidence is S-Tier.`,
+                  layer: "Execution Desk"
+                });
+                await supabase.from("trade_opportunities").insert({
+                  symbol,
+                  side: dbSide,
+                  timeframe: timeframe.toLowerCase(),
+                  status: "REJECTED",
+                  ai_summary: institutional_rationale,
+                  ai_risks: `Rejected by Execution Desk: Structural Regime Mismatch (${evaluation.strategy_applied} in CHOP)`,
+                  model_id: modelId,
+                  model_version: modelVersion,
+                  risk_summary: `RSI ${snapshot.rsi_14}`
+                });
+                return;
+              }
+              // Loosen R:R strictness for mean reversion range trades
+              if (deskRequiredRR > 1.2) deskRequiredRR = 1.2;
+            }
 
             if (riskRewardRatio < deskRequiredRR - 0.05) {
               console.log(`[Layer C: Execution Desk] REJECTED ${symbol}: Risk:Reward ratio (${riskRewardRatio.toFixed(2)}) is below the institutional minimum of ${deskRequiredRR} for Tier score ${confidence_score}.`);

@@ -56,6 +56,49 @@ serve(async (req) => {
     }
     // --- END SECURITY CHECK ---
 
+    // --- RUNNER HANDOFF LOGIC ---
+    if ((payload as any).action === "RUNNER_HANDOFF") {
+       const tradeId = (payload as any).trade_id;
+       if (!tradeId) return new Response("Missing trade_id for runner handoff", { status: 400 });
+
+       const { data: trade } = await supabase.from("user_trades").select("*, trade_opportunities(*)").eq("id", tradeId).single();
+       if (!trade) return new Response("Trade not found", { status: 404 });
+
+       console.log(`[Runner Handoff] Intercepted +2.0R Scalp for ${trade.symbol}. Escalating to Swing Agent & Modifying Order to Break-Even.`);
+       
+       const opp = trade.trade_opportunities;
+       const entryPrice = opp?.entry_plan_json?.price || opp?.entry_plan_json?.entry_price || opp?.entry_plan_json?.limit_price;
+       
+       if (entryPrice && trade.meta_api_order_id) {
+           // We notify the Master Broker via MetaAPI to modify the stop loss to break even
+           const metaApiUrl = `${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`;
+           
+           try {
+             await fetch(metaApiUrl, {
+               method: "PUT",
+               headers: {
+                 "auth-token": META_API_TOKEN || "",
+                 "Content-Type": "application/json",
+                 "Accept": "application/json"
+               },
+               body: JSON.stringify({
+                 actionType: "POSITION_MODIFY",
+                 positionId: trade.meta_api_order_id,
+                 stopLoss: entryPrice
+               })
+             });
+             console.log(`[Runner Handoff] Successfully modified MetaAPI position ${trade.meta_api_order_id} Stop Loss to Break-Even (${entryPrice})`);
+           } catch (err) {
+             console.error("[Runner Handoff] MetaAPI Position Modify Failed:", err);
+           }
+       }
+
+       // Transfer ownership to agent-swing for extended TP management
+       await supabase.from("trade_opportunities").update({ source: "agent-swing", ai_summary: opp.ai_summary + "\n\n[Runner Handoff] Upgraded to Swing Trade. Stop loss moved to Break-Even." }).eq("id", trade.opportunity_id);
+       
+       return new Response("Runner handoff complete.", { status: 200 });
+    }
+
     let signal: any = null;
     let isManual = payload.action === "MANUAL_EXECUTION";
 
@@ -121,6 +164,90 @@ serve(async (req) => {
 
     const isMarketOrder = actionType === "ORDER_TYPE_BUY" || actionType === "ORDER_TYPE_SELL";
 
+    // --- PORTFOLIO MANAGER: Dynamic Risk Sizing (Confluence Check) ---
+    let confluenceMultiplier = 1.0;
+    let pmReason = "Standard Allocation";
+
+    if (!isManual) {
+      // Query recent signals for this symbol in the last 4 hours (tight confluence window)
+      const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+      const { data: recentSignals } = await supabase
+        .from("trade_opportunities")
+        .select("id, side, ai_summary, status, source")
+        .eq("symbol", signal.symbol)
+        .gte("created_at", fourHoursAgo)
+        .neq("id", signal.id);
+
+      if (recentSignals && recentSignals.length > 0) {
+        let alignedCount = 0;
+        let opposingCount = 0;
+
+        for (const rs of recentSignals) {
+          if (rs.status === "REJECTED" || rs.status === "INVALID") continue;
+          
+          if (rs.side === signal.side) {
+             alignedCount++;
+          } else {
+             opposingCount++;
+          }
+        }
+
+        if (alignedCount > 0 && opposingCount === 0) {
+          confluenceMultiplier = 3.0; // Bump risk to 3x for a conviction play
+          pmReason = "Portfolio Manager: 3.0x Risk Multiplier (Massive Multi-Agent Confluence Detected within 4H)";
+        } else if (opposingCount > 0 && opposingCount >= alignedCount) {
+          confluenceMultiplier = 0.5;
+          pmReason = "Portfolio Manager: 0.5x Risk Multiplier (Counter-Trend Scalp / Opposing Confluence)";
+        }
+      }
+
+      // --- DYNAMIC CORRELATION LIMITS ---
+      const correlationGroups = [
+        ["XAUUSD", "XAGUSD"],
+        ["US30", "NAS100", "SPX500"],
+        ["EURUSD", "GBPUSD"]
+      ];
+      
+      const group = correlationGroups.find(g => g.includes(signal.symbol));
+      if (group) {
+        const otherSymbolsInGroup = group.filter(s => s !== signal.symbol);
+        
+        const { data: openCorrelatedTrades } = await supabase
+          .from("user_trades")
+          .select("side, symbol")
+          .in("symbol", otherSymbolsInGroup)
+          .eq("status", "OPEN");
+
+        if (openCorrelatedTrades && openCorrelatedTrades.length > 0) {
+           let sameDirectionCount = 0;
+           let oppositeDirectionCount = 0;
+           
+           for (const trade of openCorrelatedTrades) {
+             if (trade.side === signal.side) sameDirectionCount++;
+             else oppositeDirectionCount++;
+           }
+           
+           if (oppositeDirectionCount > 0) {
+              const rejectReason = `Rejected by Execution Desk: Contradictory signal against open highly correlated asset.`;
+              await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + rejectReason, ai_risks: rejectReason }).eq("id", signal.id);
+              console.log(`[Execution Desk] Rejected ${signal.symbol} due to contradictory open correlated position.`);
+              return new Response(JSON.stringify({ success: true, message: "Rejected due to correlation contradiction" }), { status: 200 });
+           }
+           
+           if (sameDirectionCount > 0) {
+              confluenceMultiplier *= 0.5;
+              pmReason += `\n[Execution Desk] 0.5x Risk Modifier Applied: Heavy Correlation Detected with OPEN position.`;
+           }
+        }
+      }
+      // --- END DYNAMIC CORRELATION LIMITS ---
+
+    }  
+      const updatedSummary = `${signal.ai_summary || ""} \n\n[Execution Desk] ${pmReason}`;
+      await supabase.from("trade_opportunities").update({ ai_summary: updatedSummary }).eq("id", signal.id);
+      signal.ai_summary = updatedSummary; 
+    // --- END PORTFOLIO MANAGER ---
+
     // Build user allocations
     const userAllocations = [];
     let totalMasterVolume = 0;
@@ -143,7 +270,17 @@ serve(async (req) => {
 
         let tierRiskModifier = 1.0;
         if (signalTier === "B-Tier") tierRiskModifier = 0.5;
-        const riskPerTrade = Number(user.portfolio_capital) * Number(user.risk_per_trade_pct) * entryWeight * tierRiskModifier;
+
+        // --- DRAWDOWN BREAKER ---
+        let drawdownModifier = 1.0;
+        const hwm = Number(user.high_water_mark_equity) || Number(user.portfolio_capital);
+        const maxDrawdownPct = Number(user.max_drawdown_pct) || 0.05;
+        if (Number(user.portfolio_capital) < hwm * (1 - maxDrawdownPct)) {
+           drawdownModifier = 0.5;
+           console.log(`[Drawdown Breaker] User ${user.user_id} is in >${maxDrawdownPct*100}% drawdown. Cutting risk in half.`);
+        }
+        
+        const riskPerTrade = Number(user.portfolio_capital) * Number(user.risk_per_trade_pct) * entryWeight * tierRiskModifier * confluenceMultiplier * drawdownModifier;
         let volume = pointsAtRisk > 0 ? riskPerTrade / (pointsAtRisk * pointValueUsd) : 0.01;
         volume = Math.max(0.01, Math.round(volume * 100) / 100);
         
@@ -194,8 +331,13 @@ serve(async (req) => {
       ? Number((defaultEntryPrice + riskDistance).toFixed(5))
       : Number((defaultEntryPrice - riskDistance).toFixed(5));
 
-    const payloadA: any = { actionType, symbol: signal.symbol, volume: halfVolume, stopLoss, takeProfit: quickExitTP };
-    const payloadB: any = { actionType, symbol: signal.symbol, volume: halfVolume, stopLoss, takeProfit };
+    // --- EXECUTION DESK: SMART ROUTING / ORDER SLICING ---
+    const MAX_LOT_SIZE = 1.0;
+    const numSlices = Math.ceil(halfVolume / MAX_LOT_SIZE);
+    const slicedVolume = Math.max(0.01, Math.round((halfVolume / numSlices) * 100) / 100);
+
+    const payloadA: any = { actionType, symbol: signal.symbol, volume: slicedVolume, stopLoss, takeProfit: quickExitTP };
+    const payloadB: any = { actionType, symbol: signal.symbol, volume: slicedVolume, stopLoss, takeProfit };
 
     if (!isMarketOrder) {
       payloadA.openPrice = defaultEntryPrice;
@@ -208,15 +350,33 @@ serve(async (req) => {
     }
 
     try {
-      const resA = await fetch(metaApiUrl, { method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" }, body: JSON.stringify(payloadA) });
-      const resB = await fetch(metaApiUrl, { method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" }, body: JSON.stringify(payloadB) });
+      let allOk = true;
+      let finalOrderId = "EXECUTED";
       
-      if (resA.ok && resB.ok) {
+      console.log(`[Execution Desk] Slicing order into ${numSlices} chunks of ${slicedVolume} lots to prevent slippage.`);
+      
+      for (let i = 0; i < numSlices; i++) {
+          const resA = await fetch(metaApiUrl, { method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" }, body: JSON.stringify(payloadA) });
+          const resB = await fetch(metaApiUrl, { method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" }, body: JSON.stringify(payloadB) });
+          
+          if (!resA.ok || !resB.ok) {
+              allOk = false;
+              masterError = (await resA.text()) + " | " + (await resB.text());
+              break;
+          } else if (i === 0) {
+              const dataA = await resA.json();
+              finalOrderId = dataA.orderId || "EXECUTED";
+          }
+          
+          if (i < numSlices - 1) {
+              // Delay 500ms between slices
+              await new Promise(resolve => setTimeout(resolve, 500));
+          }
+      }
+      
+      if (allOk) {
         masterStatus = isMarketOrder ? "OPEN" : "PENDING";
-        const dataA = await resA.json();
-        masterOrderId = dataA.orderId || "EXECUTED";
-      } else {
-        masterError = await resA.text() + " | " + await resB.text();
+        masterOrderId = finalOrderId;
       }
     } catch (e: any) {
       masterError = e.message;

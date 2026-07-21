@@ -47,6 +47,61 @@ const MACRO_RULES = [
     triggerThreshold: 0.2, // Needs to beat forecast by 0.2%
     onBeat: { symbol: "USDJPY", side: "BUY", slDistance: 0.300 },
     onMiss: { symbol: "USDJPY", side: "SELL", slDistance: 0.300 }
+  },
+  {
+    id: "USD_FED_RATE",
+    titlePattern: /Federal Funds Rate/i,
+    country: "USD",
+    impact: "High",
+    triggerThreshold: 0.25, // Typically 25bps (0.25%) hikes/cuts
+    onBeat: { symbol: "USDJPY", side: "BUY", slDistance: 0.300 }, // Higher rate -> USD Strong
+    onMiss: { symbol: "USDJPY", side: "SELL", slDistance: 0.300 } // Lower rate -> USD Weak
+  },
+  {
+    id: "EUR_ECB_RATE",
+    titlePattern: /Main Refinancing Rate/i,
+    country: "EUR",
+    impact: "High",
+    triggerThreshold: 0.25,
+    onBeat: { symbol: "EURUSD", side: "BUY", slDistance: 0.003 }, // Higher rate -> EUR Strong
+    onMiss: { symbol: "EURUSD", side: "SELL", slDistance: 0.003 } // Lower rate -> EUR Weak
+  },
+  {
+    id: "GBP_BOE_RATE",
+    titlePattern: /Official Bank Rate/i,
+    country: "GBP",
+    impact: "High",
+    triggerThreshold: 0.25,
+    onBeat: { symbol: "GBPUSD", side: "BUY", slDistance: 0.003 }, // Higher rate -> GBP Strong
+    onMiss: { symbol: "GBPUSD", side: "SELL", slDistance: 0.003 } // Lower rate -> GBP Weak
+  },
+  {
+    id: "USD_RETAIL_SALES",
+    titlePattern: /Retail Sales m\/m/i,
+    country: "USD",
+    impact: "High",
+    triggerThreshold: 0.4, // 0.4% deviation
+    onBeat: { symbol: "USDJPY", side: "BUY", slDistance: 0.300 },
+    onMiss: { symbol: "USDJPY", side: "SELL", slDistance: 0.300 }
+  },
+  {
+    id: "USD_GDP",
+    titlePattern: /Advance GDP q\/q/i,
+    country: "USD",
+    impact: "High",
+    triggerThreshold: 0.3, // 0.3% deviation
+    onBeat: { symbol: "USDJPY", side: "BUY", slDistance: 0.300 },
+    onMiss: { symbol: "USDJPY", side: "SELL", slDistance: 0.300 }
+  },
+  {
+    id: "USD_UNEMPLOYMENT_CLAIMS",
+    titlePattern: /Unemployment Claims/i,
+    country: "USD",
+    impact: "High",
+    triggerThreshold: 15, // 15K deviation
+    // Note: Unemployment claims are inverted. Numerically higher = economically worse.
+    onBeat: { symbol: "USDJPY", side: "SELL", slDistance: 0.300 }, // Higher claims -> USD Weak
+    onMiss: { symbol: "USDJPY", side: "BUY", slDistance: 0.300 }   // Lower claims -> USD Strong
   }
 ];
 
@@ -169,6 +224,13 @@ serve(async (req) => {
     const ffResponse = await fetch("https://nfs.faireconomy.media/ff_calendar_thisweek.json");
     if (!ffResponse.ok) throw new Error("Failed to fetch Forex Factory calendar");
     const events = await ffResponse.json();
+
+    // 1b. Write to Macro Oracle (System Settings)
+    await supabase.from("system_settings").upsert({
+      key: "macro_oracle_context",
+      value: events,
+      updated_at: new Date().toISOString()
+    });
 
     const now = new Date();
     const results = [];

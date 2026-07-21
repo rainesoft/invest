@@ -36,16 +36,21 @@ export type FibLevels = {
 };
 
 export function calculateFibonacciLevels(high: number[], low: number[], close: number[]): FibLevels {
-  // Identify the dominant swing: look at full history for the major high and low
-  const swing_high = Math.max(...high);
-  const swing_low = Math.min(...low);
+  // Limit to the last 80 bars for Fibonacci to avoid massive macro swings on 300-bar datasets
+  const lookbackBars = 80;
+  const recentHigh = high.slice(-lookbackBars);
+  const recentLow = low.slice(-lookbackBars);
+
+  // Identify the dominant swing: look at recent history for the major high and low
+  const swing_high = Math.max(...recentHigh);
+  const swing_low = Math.min(...recentLow);
   const swing_range = swing_high - swing_low;
   const current_price = close[close.length - 1];
 
   // Determine if we are in a bullish retracement (came from low, pulled back from high)
   // or bearish retracement (came from high, bouncing from low)
-  const highIdx = high.indexOf(swing_high);
-  const lowIdx = low.indexOf(swing_low);
+  const highIdx = recentHigh.indexOf(swing_high);
+  const lowIdx = recentLow.indexOf(swing_low);
   const direction: "BULLISH_RETRACEMENT" | "BEARISH_RETRACEMENT" =
     highIdx > lowIdx ? "BULLISH_RETRACEMENT" : "BEARISH_RETRACEMENT";
 
@@ -222,7 +227,7 @@ ${macroContext || "No major macro events in the window."}
    - A daily/weekly structural support or resistance zone overlaps the Fib level
    - RSI is showing divergence or approaching oversold/overbought (< 35 or > 65)
    - Candlestick pattern confirms reversal (e.g. BULLISH_ENGULFING, MORNING_STAR, BEARISH_REJECTION_PINBAR at support/resistance)
-   - Macro fundamentals explicitly support the direction (MACRO SENTIMENT SCORE >= +5 for longs, or <= -5 for shorts)
+   - Macro fundamentals explicitly support the direction (e.g., High-impact events or breaking news align with the technical bias)
    - Higher timeframe (Weekly) EMA (50 or 200) is perfectly aligned with the Fib level (see weekly_ema_50 / weekly_ema_200 in snapshot)
    If fewer than 3 align, maximum confidence is A-Tier (85). Never inflate confidence.
 
@@ -240,9 +245,12 @@ ${macroContext || "No major macro events in the window."}
    - ALL THREE targets must be mathematically achievable from the entry
 
 4. R:R REQUIREMENTS FOR SWING:
-   - S-Tier (≥90 confidence): TP2 must yield minimum 1:2.5 R:R
-   - A-Tier (80–89): TP2 must yield minimum 1:2 R:R
-   - B-Tier (70–79): TP2 must yield minimum 1:1.5 R:R
+   - S-Tier (≥90 confidence): TP2 must yield minimum 1:2.0 R:R
+   - A-Tier (80–89): TP2 must yield minimum 1:1.5 R:R
+   - B-Tier (70–79): TP2 must yield minimum 1:1.2 R:R
+
+5. MACRO SENSITIVITY: 
+   If trading XAUUSD (Gold), XAGUSD (Silver), or UKOIL (Oil) and the recent news context contains high-impact geopolitical events or central bank rate decisions, you MUST reject the trade unless you are explicitly originating a momentum breakout setup directly aligned with the macro catalyst.
    - If R:R to TP2 does not meet threshold, set recommended_direction to "NONE"
 
 5. COUNTER-TREND IS ALLOWED FOR SWING:
@@ -316,7 +324,8 @@ ${macroContext || "No major macro events in the window."}
           required: ["reason"]
         }
       }
-    ]
+    ],
+    tool_choice: "required"
   };
 
   const responseRes = await fetch("https://api.openai.com/v1/responses", {
@@ -509,7 +518,15 @@ serve(async (req) => {
       }
 
       // Fetch macro events once
-      const allEvents = await fetchAllMacroEvents().catch(() => null);
+      // Fetch macro events from Oracle
+      let allEvents = null;
+      sendEvent({ type: 'progress', message: `[Macro Oracle] Reading global economic calendar from Central Oracle...` });
+      const { data: oracleData } = await supabase.from("system_settings").select("value").eq("key", "macro_oracle_context").single();
+      if (oracleData && oracleData.value) {
+        allEvents = oracleData.value;
+      } else {
+        allEvents = await fetchAllMacroEvents().catch(() => null);
+      }
 
         // ==========================================
         // PHASE 1: ACTIVE SIGNAL VALIDATION SWEEP
@@ -605,6 +622,30 @@ serve(async (req) => {
 
 
       for (const symbol of symbols) {
+        // --- LAYER 0: MACRO BLACKOUT WINDOW ---
+        if (["XAUUSD", "XAGUSD", "BTCUSD", "UKOIL"].includes(symbol) && allEvents) {
+          const nowMs = Date.now();
+          const thirtyMins = 30 * 60 * 1000;
+          const blackoutEvents = allEvents.filter((e: any) => {
+             if (e.impact !== "High" || e.country !== "USD") return false;
+             const eventTime = new Date(e.date).getTime();
+             const timeDiff = Math.abs(eventTime - nowMs);
+             return timeDiff <= thirtyMins;
+          });
+
+          if (blackoutEvents.length > 0) {
+             const evNames = blackoutEvents.map((e: any) => e.title).join(", ");
+             console.log(`[Layer 0] Macro Blackout Window Active: Halting ${symbol} due to ${evNames}`);
+             sendEvent({ type: 'progress', message: `[Layer 0] Macro Blackout Window Active: Halting ${symbol} due to High-Impact USD event within ±30m.` });
+             rejections.push({
+               symbol,
+               reason: `Macro Blackout Window: Halting origination due to High-Impact USD event within ±30m (${evNames})`,
+               layer: "Layer 0"
+             });
+             continue; // Skip this symbol completely
+          }
+        }
+
         try {
           sendEvent({ type: "progress", message: `[${symbol}] Fetching ${lookback} daily bars...` });
 
@@ -820,6 +861,27 @@ serve(async (req) => {
           let evaluation: SwingTrade;
           try {
             evaluation = await evaluateSwingOpportunity(symbol, snapshot, fib, timeframe, historicalMemory, macroContext);
+            
+            // --- SHADOW LEDGER: Log raw AI prediction instantly ---
+            if (evaluation && evaluation.recommended_direction !== "NONE") {
+               let rawEntry = Number(evaluation.execution_parameters?.suggested_entry_price);
+               let rawTP = Number(evaluation.execution_parameters?.take_profit_2 || evaluation.execution_parameters?.take_profit_1);
+               let rawSL = Number(evaluation.execution_parameters?.suggested_stop_loss);
+               
+               // Fallback to snapshot if AI omitted them
+               if (!rawEntry) rawEntry = snapshot.current_price;
+               if (!rawSL) rawSL = evaluation.recommended_direction === "LONG" ? snapshot.safe_long_stop_loss : snapshot.safe_short_stop_loss;
+               
+               await supabase.from("shadow_ledger").insert({
+                  symbol: symbol,
+                  timeframe: timeframe.toLowerCase(),
+                  side: evaluation.recommended_direction,
+                  entry_price: rawEntry,
+                  take_profit: rawTP || null,
+                  stop_loss: rawSL || null,
+                  status: "PENDING"
+               }).catch(err => console.error(`[Shadow Ledger] Failed to insert raw signal for ${symbol}: ${err.message}`));
+            }
           } catch (err: any) {
             console.error(`[AI Error] [Trace: ${traceId}] ${symbol}: ${err.message}`);
             rejections.push({ symbol, reason: `AI evaluation failed: ${err.message}`, layer: "AI" });
@@ -906,8 +968,12 @@ serve(async (req) => {
 
           const rrToTp2 = Math.abs(tp2 - entry) / Math.abs(entry - sl);
           let requiredRR = 1.5;
-          if (confidence >= 90) requiredRR = 3.0;
-          else if (confidence >= 80) requiredRR = 2.0;
+          if (["XAGUSD", "UKOIL"].includes(symbol)) {
+            requiredRR = 1.0; // Lower threshold due to high volatility and wider stops
+          } else {
+            if (confidence >= 90) requiredRR = 3.0;
+            else if (confidence >= 80) requiredRR = 2.0;
+          }
 
           if (rrToTp2 < requiredRR - 0.1) {
             const msg = `R:R to TP2 is 1:${rrToTp2.toFixed(2)}, below required 1:${requiredRR} for ${tier}`;

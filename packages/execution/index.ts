@@ -312,9 +312,10 @@ export async function fetchPaperBars(
         const now = new Date().getTime();
         
         let maxAgeMs = 12 * 60 * 60 * 1000; // default 12h
-        if (timeframe.includes('m')) maxAgeMs = 2 * 60 * 60 * 1000;
-        if (timeframe.includes('h')) maxAgeMs = 6 * 60 * 60 * 1000;
-        if (timeframe.includes('d')) maxAgeMs = 72 * 60 * 60 * 1000; // 72h to cover weekends
+        const tfLower = timeframe.toLowerCase();
+        if (tfLower.includes('m')) maxAgeMs = 2 * 60 * 60 * 1000;
+        if (tfLower.includes('h')) maxAgeMs = 6 * 60 * 60 * 1000;
+        if (tfLower.includes('d')) maxAgeMs = 72 * 60 * 60 * 1000; // 72h to cover weekends
 
         if (now - latestTs < maxAgeMs) {
           // Reverse because we want oldest first for the indicator logic
