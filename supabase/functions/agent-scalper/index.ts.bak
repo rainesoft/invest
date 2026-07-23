@@ -75,7 +75,7 @@ const TradeEvaluationSchema = z.object({
   }),
   market_structure: z.enum(["BULLISH_TREND", "BEARISH_TREND", "RANGING", "BREAKOUT"]),
   recommended_direction: z.enum(["LONG", "SHORT", "NONE"]),
-  strategy_applied: z.enum(["PULLBACK", "MOMENTUM_CONTINUATION", "MEAN_REVERSION", "MOMENTUM_BREAKOUT", "NONE"]),
+  strategy_applied: z.enum(["PULLBACK", "MOMENTUM_CONTINUATION", "MEAN_REVERSION", "BREAKOUT", "NONE"]),
   execution_parameters: z.object({
     entry_type: z.enum(["Buy Limit", "Sell Limit", "Buy Stop", "Sell Stop", "Market", "NONE"]),
     suggested_entry_price: z.number().nullable(),
@@ -109,23 +109,10 @@ async function evaluateOpportunity(symbol: string, snapshot: LogicContext & { ag
     input: `Evaluate the raw market data for ${symbol} on the ${timeframe} timeframe at current price ${snapshot.current_price} and autonomously originate the highest probability trade setup, if any. Return the required execution profile using the provided tools.
     
 CRITICAL RULES:
-
-0. ORDER OF OPERATIONS (CRITICAL PRIORITY):
-   - STEP 1: Always check for MACRO SENSITIVITY & MOMENTUM BREAKOUTS (Rule 4) FIRST. If the conditions for a breakout are met, you MUST originate the trade. Do NOT look for reasons to reject.
-   - STEP 2: If no overrides apply, calculate your distance to boundaries.
-   - STEP 3: Only if distance is <= 0.5% and overrides are absent, you may consider an INFLECTION_POINT_WAIT rejection (Rule 5).
-   - NEVER invoke a rejection guardrail without explicitly explaining why the Overrides in Step 1 did not apply.
-
 1. If the market is in a momentum trend, follow standard trend continuation rules.
 2. If the market is ranging (trend_alignment is CHOP), you MUST look for MEAN_REVERSION setups. Buy near the lower Bollinger Band (bb_lower) or sell near the upper Bollinger Band (bb_upper) if corroborated by RSI extremes (e.g., RSI < 35 for LONG, RSI > 65 for SHORT).
 3. For MEAN_REVERSION, set your take_profit near the opposite Bollinger Band or SMA.
-4. MACRO SENSITIVITY & MOMENTUM BREAKOUTS: If trading XAUUSD (Gold) or UKOIL (Oil) and the recent news context contains high-impact geopolitical events or central bank rate decisions, do NOT automatically reject the trade! First, check the 'momentum_spike' variable in the snapshot. If 'momentum_spike' is active (BULLISH or BEARISH), you MUST originate a 'MOMENTUM_BREAKOUT' strategy in the direction of the momentum. Use a 'Market' or 'Buy Stop' / 'Sell Stop' order to execute instantly, and set a tight structural invalidation point. Only reject the trade if there is NO momentum_spike present during the macro event.
-5. CHOP / INFLECTION GUARD (CRITICAL):
-   - BEFORE invoking this guard, you MUST calculate the percentage distance between the Current Price and the nearest structural/macro boundary. (Formula: abs(Current Price - Nearest Boundary) / Nearest Boundary * 100)
-   - If the Percentage Distance is > 0.5%, the price is NOT resting on a boundary. You CANNOT use INFLECTION_POINT_WAIT.
-   - If price is resting squarely on a boundary (<= 0.5%) and momentum indicators (like RSI or ADX) are completely flat, indicating a highly ambiguous chop zone without a confirmed momentum_spike, you MUST explicitly reject the trade. Do not guess the direction. Invoke the reject_trade tool with the exact reason: 'INFLECTION_POINT_WAIT' to sideline capital until a definitive breakout is confirmed.
-6. DYNAMIC ADX OSCILLATOR THRESHOLDS: In a strong runaway trend where ADX > 30, standard oscillators like RSI will remain overbought/oversold for long periods. Do NOT reject a strong breakout just because RSI > 70. Expand your RSI rejection bounds to > 90 (or < 10 for shorts) if ADX confirms strong momentum.
-7. LOWER TIMEFRAME (LTF) DRILLING: If the macro trend and momentum are incredibly strong, but the price is stretched far beyond the 50 EMA making a direct Market Order dangerous, DO NOT reject the trade. Set recommended_direction to "REQUIRE_LTF_DRILLDOWN" to instruct the execution engine to drop to a lower timeframe and hunt for a localized entry.
+4. MACRO SENSITIVITY: If trading XAUUSD (Gold) or UKOIL (Oil) and the recent news context contains high-impact geopolitical events or central bank rate decisions, you MUST reject the trade unless you are explicitly originating a momentum breakout setup directly aligned with the macro catalyst.
 
 Historical Memory:
 ${historicalMemory || "None"}
@@ -140,9 +127,8 @@ ${JSON.stringify(snapshot, null, 2)}`,
         parameters: {
           type: "object",
           properties: {
-            thought_process: { type: "string", description: "Step-by-step reasoning for the approval. You MUST calculate your R:R before filling in the execution parameters. You MUST verify that the suggested_entry_price exactly matches the chosen structural or SMC zone." },
             confidence_score: { type: "number", description: "Score 0-100" },
-            recommended_direction: { type: "string", enum: ["LONG", "SHORT", "REQUIRE_LTF_DRILLDOWN"] },
+            recommended_direction: { type: "string", enum: ["LONG", "SHORT"] },
             structural_confirmation: { type: "string" },
             market_structure: { type: "string" },
             strategy_applied: { type: "string" },
@@ -157,7 +143,7 @@ ${JSON.stringify(snapshot, null, 2)}`,
             take_profit: { type: "number" }
           },
           required: [
-            "thought_process", "confidence_score", "recommended_direction", "structural_confirmation",
+            "confidence_score", "recommended_direction", "structural_confirmation",
             "market_structure", "strategy_applied", "suggested_entry_price", "suggested_stop_loss",
             "suggested_take_profit", "rationale"
           ]
@@ -170,16 +156,13 @@ ${JSON.stringify(snapshot, null, 2)}`,
         parameters: {
           type: "object",
           properties: {
-            thought_process: { type: "string", description: "Step-by-step reasoning for the rejection. You MUST explicitly state why the MACRO SENSITIVITY (Rule 4) override did not apply before rejecting." },
-            distance_to_level_percent: { type: "number", description: "The calculated percentage distance from the current price to the nearest Fib/Structural level. Must be calculated BEFORE invoking INFLECTION_POINT_WAIT." },
             reason: { type: "string" }
           },
-          required: ["thought_process", "reason"]
+          required: ["reason"]
         }
       }
     ],
-    tool_choice: "required",
-    parallel_tool_calls: false
+    tool_choice: "required"
   };
 
   const responseRes = await fetch("https://api.openai.com/v1/responses", {
@@ -212,7 +195,6 @@ ${JSON.stringify(snapshot, null, 2)}`,
   if (toolCall.name === "reject_trade") {
     return {
       recommended_direction: "NONE",
-      thought_process: args.thought_process || args.reason || args.rationale || JSON.stringify(args),
       institutional_rationale: { directional_bias: args.reason },
       confidence_score: 0
     };
@@ -755,7 +737,7 @@ serve(async (req) => {
               .from("trade_opportunities")
               .select("status, side, ai_summary, ai_risks, r_multiple")
               .eq("symbol", symbol)
-              .in("status", ["WON", "LOST", "REJECTED"])
+              .in("status", ["WON", "LOST"])
               .order("created_at", { ascending: false })
               .limit(5);
 
@@ -787,19 +769,15 @@ serve(async (req) => {
                  if (!rawEntry) rawEntry = snapshot.current_price;
                  if (!rawSL) rawSL = evaluation.recommended_direction === "LONG" ? snapshot.safe_long_stop_loss : snapshot.safe_short_stop_loss;
                  
-                 try {
-                   await supabase.from("shadow_ledger").insert({
-                      symbol: symbol,
-                      timeframe: timeframe.toLowerCase(),
-                      side: evaluation.recommended_direction,
-                      entry_price: rawEntry,
-                      take_profit: rawTP || null,
-                      stop_loss: rawSL || null,
-                      status: "PENDING"
-                   });
-                 } catch (err) {
-                   console.error(`[Shadow Ledger] Failed to insert raw signal for ${symbol}: ${err.message}`);
-                 }
+                 await supabase.from("shadow_ledger").insert({
+                    symbol: symbol,
+                    timeframe: timeframe.toLowerCase(),
+                    side: evaluation.recommended_direction,
+                    entry_price: rawEntry,
+                    take_profit: rawTP || null,
+                    stop_loss: rawSL || null,
+                    status: "PENDING"
+                 }).catch(err => console.error(`[Shadow Ledger] Failed to insert raw signal for ${symbol}: ${err.message}`));
               }
             } catch (err: any) {
               console.error(`[Layer B Error] AI evaluation failed for ${symbol}: ${err.message}`);
@@ -818,9 +796,9 @@ serve(async (req) => {
               return;
             }
 
-            let is_valid = evaluation.recommended_direction !== "NONE" && evaluation.recommended_direction !== "REQUIRE_LTF_DRILLDOWN";
+            let is_valid = evaluation.recommended_direction !== "NONE";
             
-            let dbSide = (!is_valid) 
+            let dbSide = evaluation.recommended_direction === "NONE" 
               ? (snapshot.trend_alignment.startsWith('BULLISH') ? 'LONG' : 'SHORT') 
               : evaluation.recommended_direction;
             
@@ -847,29 +825,9 @@ serve(async (req) => {
             console.log(`[Layer B] AI Rationale: ${institutional_rationale}`);
 
             if (!is_valid || confidence_score < 70) {
-              let rejectReason = "";
-              if (evaluation.recommended_direction === "REQUIRE_LTF_DRILLDOWN") {
-                rejectReason = `LTF_ENTRY_WAIT: Macro trend is strong but price is overextended. Waiting for LTF pullback.`;
-                
-                const expiresAt = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
-                const targetDirection = snapshot.trend_alignment.startsWith("BULLISH") ? "LONG" : "SHORT";
-                
-                await supabase.from("trade_watchlists").update({ status: 'CANCELLED' }).eq('symbol', symbol).eq('status', 'WATCHING');
-                await supabase.from("trade_watchlists").insert({
-                  symbol,
-                  direction: targetDirection,
-                  status: "WATCHING",
-                  macro_score: String(confidence_score),
-                  source_agent: "agent-scalper",
-                  current_price: snapshot.current_price,
-                  context: snapshot,
-                  expires_at: expiresAt
-                });
-              } else {
-                rejectReason = !is_valid 
-                  ? institutional_rationale 
-                  : `AI Confidence Score (${confidence_score}) below 70 threshold.`;
-              }
+              const rejectReason = !is_valid 
+                ? institutional_rationale 
+                : `AI Confidence Score (${confidence_score}) below 70 threshold.`;
                 
               console.log(`[Layer B: Cognitive Guard] REJECTED ${symbol} by AI Risk Officer: ${rejectReason}`);
               sendEvent({ type: 'progress', message: `[Layer B: AI Risk Officer] REJECTED ${symbol}: ${rejectReason}` });
@@ -1078,7 +1036,6 @@ serve(async (req) => {
               // FALLBACK: In case the DB webhook fails, we manually invoke the trade agent
               try {
                 await supabase.functions.invoke('agent-trade', {
-                  headers: { "x-webhook-secret": Deno.env.get("WEBHOOK_SECRET") || "FALLBACK_SECRET_123" },
                   body: {
                     type: "INSERT",
                     table: "trade_opportunities",
