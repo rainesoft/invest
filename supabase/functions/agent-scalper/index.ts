@@ -1071,6 +1071,9 @@ serve(async (req) => {
               console.log(`[Success] Opportunity generated for ${symbol}: ID ${data.id}`);
               sendEvent({ type: 'progress', message: `[Success] Opportunity generated for ${symbol}` });
               
+              // Clean up any active sniper watchlists for this symbol to prevent duplicate execution
+              await supabase.from("trade_watchlists").update({ status: 'CANCELLED' }).eq('symbol', symbol).eq('status', 'WATCHING');
+              
               // order_type is now pre-calculated and saved to the database!
 
               // Execution is now entirely delegated to the exness-executor webhook, 

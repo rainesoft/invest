@@ -1149,6 +1149,9 @@ serve(async (req) => {
             message: `[Success] Opportunity generated for ${symbol}`,
           });
           
+          // Clean up any active sniper watchlists for this symbol to prevent duplicate execution
+          await supabase.from("trade_watchlists").update({ status: 'CANCELLED' }).eq('symbol', symbol).eq('status', 'WATCHING');
+          
           // FALLBACK: In case the DB webhook fails, we manually invoke the trade agent
           try {
             await supabase.functions.invoke('agent-trade', {

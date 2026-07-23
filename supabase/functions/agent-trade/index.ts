@@ -276,8 +276,8 @@ serve(async (req) => {
         const hwm = Number(user.high_water_mark_equity) || Number(user.portfolio_capital);
         const maxDrawdownPct = Number(user.max_drawdown_pct) || 0.05;
         if (Number(user.portfolio_capital) < hwm * (1 - maxDrawdownPct)) {
-           drawdownModifier = 0.5;
-           console.log(`[Drawdown Breaker] User ${user.user_id} is in >${maxDrawdownPct*100}% drawdown. Cutting risk in half.`);
+           console.log(`[Drawdown Breaker] User ${user.user_id} breached ${maxDrawdownPct*100}% max drawdown! Blocking new execution.`);
+           continue; // Skips allocating volume to this user
         }
         
         const riskPerTrade = Number(user.portfolio_capital) * Number(user.risk_per_trade_pct) * entryWeight * tierRiskModifier * confluenceMultiplier * drawdownModifier;
