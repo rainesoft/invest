@@ -113,6 +113,7 @@ CRITICAL RULES:
 2. If the market is ranging (trend_alignment is CHOP), you MUST look for MEAN_REVERSION setups. Buy near the lower Bollinger Band (bb_lower) or sell near the upper Bollinger Band (bb_upper) if corroborated by RSI extremes (e.g., RSI < 35 for LONG, RSI > 65 for SHORT).
 3. For MEAN_REVERSION, set your take_profit near the opposite Bollinger Band or SMA.
 4. MACRO SENSITIVITY & MOMENTUM BREAKOUTS: If trading XAUUSD (Gold) or UKOIL (Oil) and the recent news context contains high-impact geopolitical events or central bank rate decisions, do NOT automatically reject the trade! First, check the 'momentum_spike' variable in the snapshot. If 'momentum_spike' is active (BULLISH or BEARISH), you MUST originate a 'MOMENTUM_BREAKOUT' strategy in the direction of the momentum. Use a 'Market' or 'Buy Stop' / 'Sell Stop' order to execute instantly, and set a tight structural invalidation point. Only reject the trade if there is NO momentum_spike present during the macro event.
+5. CHOP / INFLECTION GUARD (CRITICAL): If price is resting squarely on a major structural or macro boundary and momentum indicators (like RSI or ADX) are completely flat, indicating a highly ambiguous chop zone without a confirmed momentum_spike, you MUST explicitly reject the trade. Do not guess the direction. Invoke the reject_trade tool with the exact reason: 'INFLECTION_POINT_WAIT' to sideline capital until a definitive breakout is confirmed.
 
 Historical Memory:
 ${historicalMemory || "None"}

@@ -258,7 +258,12 @@ ${macroContext || "No major macro events in the window."}
 7. TAKE PROFIT STRUCTURE — THREE TARGETS:
    - TP1 (Conservative): Next Fib level or structure
    - TP2 (Primary): Second major Fib level or structural zone
-   - TP3 (Runner): Fib extension or psychological round number`;
+   - TP3 (Runner): Fib extension or psychological round number
+   
+8. INFLECTION POINT AMBIGUITY GUARD (CRITICAL):
+   - If price is resting squarely on a major structural or Fibonacci boundary (e.g., within 0.2% of a level) AND momentum indicators (e.g., RSI is flat around 40-60, ADX is low, or no clear candlestick reversal pattern exists) do not provide overwhelming confirmation of a bounce or breakout, you MUST explicitly reject the trade.
+   - Do NOT force a low-confidence coin flip just because Expected Value (R:R) is high.
+   - Invoke the reject_trade tool with the exact reason: 'INFLECTION_POINT_WAIT' to sideline capital until a definitive bounce or breakdown is confirmed via a candle close.`;
 
   console.log(`[Responses API] Submitting ${symbol} analysis...`);
   
