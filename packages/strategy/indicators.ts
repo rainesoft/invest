@@ -31,6 +31,7 @@ export type LogicContext = {
   bearish_ob_nearest?: number | null;
   liquidity_sweep_bullish?: boolean;
   liquidity_sweep_bearish?: boolean;
+  momentum_spike?: 'BULLISH' | 'BEARISH' | 'NONE';
 };
 
 export function calculateFractals(high: number[], low: number[]) {
@@ -213,6 +214,7 @@ export function getContextSnapshot(
       bearish_ob_nearest: null,
       liquidity_sweep_bullish: false,
       liquidity_sweep_bearish: false,
+      momentum_spike: 'NONE',
     };
   }
 
@@ -254,6 +256,14 @@ export function getContextSnapshot(
   
   const current_bb_upper = bb20.length > 0 ? bb20[bb20.length - 1].upper : null;
   const current_bb_lower = bb20.length > 0 ? bb20[bb20.length - 1].lower : null;
+
+  // Momentum Spike Detection
+  let momentum_spike: 'BULLISH' | 'BEARISH' | 'NONE' = 'NONE';
+  if (current_adx_14 !== null && current_adx_14 > 25 && current_atr_14 !== null) {
+    const last_body = close[close.length - 1] - open[open.length - 1];
+    if (last_body > 1.5 * current_atr_14) momentum_spike = 'BULLISH';
+    else if (last_body < -1.5 * current_atr_14) momentum_spike = 'BEARISH';
+  }
 
   // Calculate safe structural stop loss boundaries
   const atrBuffer = current_atr_14 !== null ? current_atr_14 * 1.5 : 0;
@@ -332,6 +342,7 @@ export function getContextSnapshot(
     bearish_ob_nearest,
     liquidity_sweep_bullish,
     liquidity_sweep_bearish,
+    momentum_spike,
   };
 }
 

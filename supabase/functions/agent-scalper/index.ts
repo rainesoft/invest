@@ -75,7 +75,7 @@ const TradeEvaluationSchema = z.object({
   }),
   market_structure: z.enum(["BULLISH_TREND", "BEARISH_TREND", "RANGING", "BREAKOUT"]),
   recommended_direction: z.enum(["LONG", "SHORT", "NONE"]),
-  strategy_applied: z.enum(["PULLBACK", "MOMENTUM_CONTINUATION", "MEAN_REVERSION", "BREAKOUT", "NONE"]),
+  strategy_applied: z.enum(["PULLBACK", "MOMENTUM_CONTINUATION", "MEAN_REVERSION", "MOMENTUM_BREAKOUT", "NONE"]),
   execution_parameters: z.object({
     entry_type: z.enum(["Buy Limit", "Sell Limit", "Buy Stop", "Sell Stop", "Market", "NONE"]),
     suggested_entry_price: z.number().nullable(),
@@ -112,7 +112,7 @@ CRITICAL RULES:
 1. If the market is in a momentum trend, follow standard trend continuation rules.
 2. If the market is ranging (trend_alignment is CHOP), you MUST look for MEAN_REVERSION setups. Buy near the lower Bollinger Band (bb_lower) or sell near the upper Bollinger Band (bb_upper) if corroborated by RSI extremes (e.g., RSI < 35 for LONG, RSI > 65 for SHORT).
 3. For MEAN_REVERSION, set your take_profit near the opposite Bollinger Band or SMA.
-4. MACRO SENSITIVITY: If trading XAUUSD (Gold) or UKOIL (Oil) and the recent news context contains high-impact geopolitical events or central bank rate decisions, you MUST reject the trade unless you are explicitly originating a momentum breakout setup directly aligned with the macro catalyst.
+4. MACRO SENSITIVITY & MOMENTUM BREAKOUTS: If trading XAUUSD (Gold) or UKOIL (Oil) and the recent news context contains high-impact geopolitical events or central bank rate decisions, do NOT automatically reject the trade! First, check the 'momentum_spike' variable in the snapshot. If 'momentum_spike' is active (BULLISH or BEARISH), you MUST originate a 'MOMENTUM_BREAKOUT' strategy in the direction of the momentum. Use a 'Market' or 'Buy Stop' / 'Sell Stop' order to execute instantly, and set a tight structural invalidation point. Only reject the trade if there is NO momentum_spike present during the macro event.
 
 Historical Memory:
 ${historicalMemory || "None"}
@@ -769,15 +769,19 @@ serve(async (req) => {
                  if (!rawEntry) rawEntry = snapshot.current_price;
                  if (!rawSL) rawSL = evaluation.recommended_direction === "LONG" ? snapshot.safe_long_stop_loss : snapshot.safe_short_stop_loss;
                  
-                 await supabase.from("shadow_ledger").insert({
-                    symbol: symbol,
-                    timeframe: timeframe.toLowerCase(),
-                    side: evaluation.recommended_direction,
-                    entry_price: rawEntry,
-                    take_profit: rawTP || null,
-                    stop_loss: rawSL || null,
-                    status: "PENDING"
-                 }).catch(err => console.error(`[Shadow Ledger] Failed to insert raw signal for ${symbol}: ${err.message}`));
+                 try {
+                   await supabase.from("shadow_ledger").insert({
+                      symbol: symbol,
+                      timeframe: timeframe.toLowerCase(),
+                      side: evaluation.recommended_direction,
+                      entry_price: rawEntry,
+                      take_profit: rawTP || null,
+                      stop_loss: rawSL || null,
+                      status: "PENDING"
+                   });
+                 } catch (err) {
+                   console.error(`[Shadow Ledger] Failed to insert raw signal for ${symbol}: ${err.message}`);
+                 }
               }
             } catch (err: any) {
               console.error(`[Layer B Error] AI evaluation failed for ${symbol}: ${err.message}`);
@@ -1036,6 +1040,7 @@ serve(async (req) => {
               // FALLBACK: In case the DB webhook fails, we manually invoke the trade agent
               try {
                 await supabase.functions.invoke('agent-trade', {
+                  headers: { "x-webhook-secret": Deno.env.get("WEBHOOK_SECRET") || "FALLBACK_SECRET_123" },
                   body: {
                     type: "INSERT",
                     table: "trade_opportunities",

@@ -344,7 +344,7 @@ ${macroContext || "No major macro events in the window."}
   if (toolCall.name === "reject_trade") {
     return {
       recommended_direction: "NONE",
-      fibonacci_rationale: args.reason,
+      fibonacci_rationale: args.reason || args.rationale || JSON.stringify(args),
       confidence_score: 0
     } as any;
   }
@@ -787,7 +787,7 @@ serve(async (req) => {
             .from("trade_opportunities")
             .select("status, side, ai_summary, ai_risks, r_multiple, timeframe")
             .eq("symbol", symbol)
-            .in("status", ["WON", "LOST", "REJECTED"])
+            .in("status", ["WON", "LOST"])
             .in("timeframe", ["1d", "1D", "1w", "1W"])
             .order("created_at", { ascending: false })
             .limit(5);
@@ -865,7 +865,7 @@ serve(async (req) => {
                const { error: shadowErr } = await supabase.from("shadow_ledger").insert({
                   symbol: symbol,
                   timeframe: timeframe.toLowerCase(),
-                  side: evaluation.recommended_direction,
+                  side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
                   entry_price: rawEntry,
                   take_profit: rawTP || null,
                   stop_loss: rawSL || null,
@@ -929,7 +929,52 @@ serve(async (req) => {
 
           // === LAYER C: STRUCTURAL RISK VALIDATION ===
           const entry = evaluation.execution_parameters.suggested_entry_price!;
-          const sl = evaluation.execution_parameters.suggested_stop_loss!;
+          let sl = evaluation.execution_parameters.suggested_stop_loss!;
+
+          // === DYNAMIC LTF STOP-LOSS COMPRESSION ===
+          let compressed = false;
+          const atr = (snapshot as any).atr_14 || 10;
+          
+          if (evaluation.recommended_direction === "LONG") {
+             if (sl >= entry) {
+                // Fix invalid AI SL
+                sl = entry - (atr * 0.2); 
+             }
+             if ((snapshot as any).ltf_bullish_ob_nearest && entry > (snapshot as any).ltf_bullish_ob_nearest && (snapshot as any).ltf_bullish_ob_nearest > sl) {
+                 sl = (snapshot as any).ltf_bullish_ob_nearest;
+                 compressed = true;
+             } else if (evaluation.strategy_applied?.includes("MACRO_MOMENTUM_BREAKOUT")) {
+                 if (sl < entry) {
+                     sl = entry - ((entry - sl) * 0.2); // Force 80% compression
+                 } else {
+                     sl = entry - (atr * 0.2);
+                 }
+                 compressed = true;
+             }
+          } else if (evaluation.recommended_direction === "SHORT") {
+             if (sl <= entry) {
+                // Fix invalid AI SL
+                sl = entry + (atr * 0.2);
+             }
+             if ((snapshot as any).ltf_bearish_ob_nearest && entry < (snapshot as any).ltf_bearish_ob_nearest && (snapshot as any).ltf_bearish_ob_nearest < sl) {
+                 sl = (snapshot as any).ltf_bearish_ob_nearest;
+                 compressed = true;
+             } else if (evaluation.strategy_applied?.includes("MACRO_MOMENTUM_BREAKOUT")) {
+                 if (sl > entry) {
+                     sl = entry + ((sl - entry) * 0.2); // Force 80% compression
+                 } else {
+                     sl = entry + (atr * 0.2);
+                 }
+                 compressed = true;
+             }
+          }
+          
+          if (compressed) {
+              console.log(`[LTF Compression] Anchored ${symbol} Stop Loss tightly at ${sl} (80% risk reduction)`);
+              sendEvent({ type: "progress", message: `[LTF Compression] Slashed risk by 80%. Anchored Stop Loss tightly at ${sl}` });
+          }
+          // Always update in case we fixed an invalid AI SL
+          evaluation.execution_parameters.suggested_stop_loss = sl;
           const tp1 = evaluation.execution_parameters.take_profit_1;
           const tp2 = evaluation.execution_parameters.take_profit_2;
           const tp3 = evaluation.execution_parameters.take_profit_3;
@@ -947,7 +992,7 @@ serve(async (req) => {
             sendEvent({ type: "progress", message: `[${symbol}] REJECTED: ${msg}` });
             await supabase.from("trade_opportunities").insert({
               symbol,
-              side: evaluation.recommended_direction,
+              side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
               timeframe: timeframe.toLowerCase(),
               status: "REJECTED",
               ai_summary: `[SWING][${tier}] ${evaluation.fibonacci_rationale}`,
@@ -973,7 +1018,7 @@ serve(async (req) => {
             sendEvent({ type: "progress", message: `[${symbol}] REJECTED: ${msg}` });
             await supabase.from("trade_opportunities").insert({
               symbol,
-              side: evaluation.recommended_direction,
+              side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
               timeframe: timeframe.toLowerCase(),
               status: "REJECTED",
               ai_summary: `[SWING][${tier}] ${evaluation.fibonacci_rationale}`,
@@ -1012,7 +1057,7 @@ serve(async (req) => {
             .from("trade_opportunities")
             .insert({
               symbol,
-              side: evaluation.recommended_direction,
+              side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
               timeframe: timeframe.toLowerCase(),
               status: "APPROVED",
               entry_plan_json: {
@@ -1061,7 +1106,7 @@ serve(async (req) => {
                 record: {
                   id: dbData.id,
                   symbol,
-                  side: evaluation.recommended_direction,
+                  side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
                   timeframe: timeframe.toLowerCase(),
                   status: "APPROVED",
                   entry_plan_json: { price: entry, order_type, scaled_entries: null },

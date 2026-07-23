@@ -11,12 +11,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   try {
     // 1. Fetch the user (Mock Auth for Dashboard)
     // In production, this would use supabase.auth.getUser() from the session token
-    const userId = "00ebf71d-8ad4-4072-9bb8-6149f55594b1"; 
+    const userId = "912d249b-9be8-4691-a11b-5b00f386a804";
 
     // 2. Delegate execution to the Exness Executor Edge Function
     // This allows us to reuse all the complex MetaApi routing, tier validation, 
     // drawdown breakers, and position sizing logic without duplicating it here.
-    const edgeFunctionUrl = `${supabaseUrl}/functions/v1/exness-executor`;
+    const edgeFunctionUrl = `${supabaseUrl}/functions/v1/agent-trade`;
     
     const response = await fetch(edgeFunctionUrl, {
       method: 'POST',
