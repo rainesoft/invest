@@ -247,13 +247,14 @@ ${macroContext || "No major macro events in the window."}
    - If the MACRO SENTIMENT SCORE is > 8 (Extremely Bullish) or < -8 (Extremely Bearish), you are authorized to IGNORE Fibonacci retracements.
    - In a massive fundamental run, price will not pull back to 61.8%.
    - In this state, approve a MACRO_MOMENTUM_BREAKOUT_LONG or SHORT trade. Buy/sell the breakout of structural resistance/support using a tighter trailing ATR stop instead of waiting for a deep pullback.
+   - EXECUTION DIRECTIVE: For momentum breakouts, you MUST use a MARKET order with 'suggested_entry_price' set exactly to the 'current_price'. Do not wait for a limit pullback.
 
 4. LIQUIDITY SWEEP "SNIPER" MODE (TURTLESOUP):
    - Institutional algorithms buy below support after retail stops are hunted, and sell above resistance.
    - Definition: 'liquidity_sweep_bullish' = Swept lows, prepare for a LONG reversal.
    - Definition: 'liquidity_sweep_bearish' = Swept highs, prepare for a SHORT reversal. DO NOT go long on a bearish sweep.
    - If you detect a Liquidity Sweep where price pierced a Daily low/high and immediately closed back inside the range (wick rejection), flag this as an IMMEDIATE S-Tier reversal.
-   - Jump in before the retail market reacts.
+   - EXECUTION DIRECTIVE: Jump in before the retail market reacts. You MUST use a MARKET order with 'suggested_entry_price' set exactly to the 'current_price'.
 
 5. KELLY CRITERION OVERRIDE VS RIGID R:R:
    - Provide your honest 'probability_estimate' (1-99) of the trade hitting TP2.
