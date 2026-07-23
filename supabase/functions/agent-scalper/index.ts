@@ -196,6 +196,7 @@ ${JSON.stringify(snapshot, null, 2)}`,
   if (toolCall.name === "reject_trade") {
     return {
       recommended_direction: "NONE",
+      thought_process: args.reason || args.rationale || JSON.stringify(args),
       institutional_rationale: { directional_bias: args.reason },
       confidence_score: 0
     };

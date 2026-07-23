@@ -349,6 +349,7 @@ ${macroContext || "No major macro events in the window."}
   if (toolCall.name === "reject_trade") {
     return {
       recommended_direction: "NONE",
+      thought_process: args.reason || args.rationale || JSON.stringify(args),
       fibonacci_rationale: args.reason || args.rationale || JSON.stringify(args),
       confidence_score: 0
     } as any;
