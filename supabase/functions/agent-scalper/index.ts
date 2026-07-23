@@ -140,6 +140,7 @@ ${JSON.stringify(snapshot, null, 2)}`,
         parameters: {
           type: "object",
           properties: {
+            thought_process: { type: "string", description: "Step-by-step reasoning for the approval. You MUST calculate your R:R before filling in the execution parameters. You MUST verify that the suggested_entry_price exactly matches the chosen structural or SMC zone." },
             confidence_score: { type: "number", description: "Score 0-100" },
             recommended_direction: { type: "string", enum: ["LONG", "SHORT", "REQUIRE_LTF_DRILLDOWN"] },
             structural_confirmation: { type: "string" },
@@ -156,7 +157,7 @@ ${JSON.stringify(snapshot, null, 2)}`,
             take_profit: { type: "number" }
           },
           required: [
-            "confidence_score", "recommended_direction", "structural_confirmation",
+            "thought_process", "confidence_score", "recommended_direction", "structural_confirmation",
             "market_structure", "strategy_applied", "suggested_entry_price", "suggested_stop_loss",
             "suggested_take_profit", "rationale"
           ]
@@ -177,7 +178,8 @@ ${JSON.stringify(snapshot, null, 2)}`,
         }
       }
     ],
-    tool_choice: "required"
+    tool_choice: "required",
+    parallel_tool_calls: false
   };
 
   const responseRes = await fetch("https://api.openai.com/v1/responses", {

@@ -249,8 +249,10 @@ ${macroContext || "No major macro events in the window."}
    - In this state, approve a MACRO_MOMENTUM_BREAKOUT_LONG or SHORT trade. Buy/sell the breakout of structural resistance/support using a tighter trailing ATR stop instead of waiting for a deep pullback.
 
 4. LIQUIDITY SWEEP "SNIPER" MODE (TURTLESOUP):
-   - Institutional algorithms buy below support after retail stops are hunted.
-   - If you detect a Liquidity Sweep (ltf_liquidity_sweep_bullish or ltf_liquidity_sweep_bearish is true) where price pierced a Daily low/high and immediately closed back inside the range (wick rejection), flag this as an IMMEDIATE S-Tier reversal.
+   - Institutional algorithms buy below support after retail stops are hunted, and sell above resistance.
+   - Definition: 'liquidity_sweep_bullish' = Swept lows, prepare for a LONG reversal.
+   - Definition: 'liquidity_sweep_bearish' = Swept highs, prepare for a SHORT reversal. DO NOT go long on a bearish sweep.
+   - If you detect a Liquidity Sweep where price pierced a Daily low/high and immediately closed back inside the range (wick rejection), flag this as an IMMEDIATE S-Tier reversal.
    - Jump in before the retail market reacts.
 
 5. KELLY CRITERION OVERRIDE VS RIGID R:R:
@@ -292,6 +294,7 @@ ${macroContext || "No major macro events in the window."}
         parameters: {
           type: "object",
           properties: {
+            thought_process: { type: "string", description: "Step-by-step reasoning for the approval. You MUST calculate the exact R:R for TP1, TP2, and TP3 here before filling in the execution parameters. You MUST verify that the suggested_entry_price exactly matches the chosen Fib level or SMC zone." },
             confidence_score: { type: "number", description: "Score 0-100" },
             recommended_direction: { type: "string", enum: ["LONG", "SHORT", "REQUIRE_LTF_DRILLDOWN"] },
             fib_entry_level: { type: "string", description: "e.g. 61.8% or 78.6%" },
@@ -311,7 +314,7 @@ ${macroContext || "No major macro events in the window."}
             probability_estimate: { type: "number", description: "Estimated win probability 1-99" }
           },
           required: [
-            "confidence_score", "recommended_direction", "fib_entry_level", "structural_confirmation",
+            "thought_process", "confidence_score", "recommended_direction", "fib_entry_level", "structural_confirmation",
             "market_structure", "strategy_applied", "suggested_entry_price", "suggested_stop_loss",
             "take_profit_2", "rationale", "probability_estimate"
           ]
@@ -332,7 +335,8 @@ ${macroContext || "No major macro events in the window."}
         }
       }
     ],
-    tool_choice: "required"
+    tool_choice: "required",
+    parallel_tool_calls: false
   };
 
   const responseRes = await fetch("https://api.openai.com/v1/responses", {
