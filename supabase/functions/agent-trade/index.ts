@@ -271,13 +271,23 @@ serve(async (req) => {
         let tierRiskModifier = 1.0;
         if (signalTier === "B-Tier") tierRiskModifier = 0.5;
 
-        // --- DRAWDOWN BREAKER ---
+        // --- ALL-TIME DRAWDOWN BREAKER ---
         let drawdownModifier = 1.0;
         const hwm = Number(user.high_water_mark_equity) || Number(user.portfolio_capital);
         const maxDrawdownPct = Number(user.max_drawdown_pct) || 0.05;
         if (Number(user.portfolio_capital) < hwm * (1 - maxDrawdownPct)) {
-           console.log(`[Drawdown Breaker] User ${user.user_id} breached ${maxDrawdownPct*100}% max drawdown! Blocking new execution.`);
+           console.log(`[Drawdown Breaker] User ${user.user_id} breached ${maxDrawdownPct*100}% all-time max drawdown! Blocking new execution.`);
            continue; // Skips allocating volume to this user
+        }
+
+        // --- DAILY DRAWDOWN BREAKER (PROP FIRM RULE) ---
+        if (user.daily_starting_equity != null) {
+            const dailyStart = Number(user.daily_starting_equity);
+            const maxDailyLoss = Number(user.max_daily_drawdown_pct) || 0.05;
+            if (Number(user.portfolio_capital) < dailyStart * (1 - maxDailyLoss)) {
+               console.log(`[Drawdown Breaker] User ${user.user_id} breached ${maxDailyLoss*100}% DAILY drawdown limit! Blocking new execution until 5PM reset.`);
+               continue; // Skips allocating volume to this user
+            }
         }
         
         const riskPerTrade = Number(user.portfolio_capital) * Number(user.risk_per_trade_pct) * entryWeight * tierRiskModifier * confluenceMultiplier * drawdownModifier;
