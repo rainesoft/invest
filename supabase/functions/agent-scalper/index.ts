@@ -113,7 +113,10 @@ CRITICAL RULES:
 2. If the market is ranging (trend_alignment is CHOP), you MUST look for MEAN_REVERSION setups. Buy near the lower Bollinger Band (bb_lower) or sell near the upper Bollinger Band (bb_upper) if corroborated by RSI extremes (e.g., RSI < 35 for LONG, RSI > 65 for SHORT).
 3. For MEAN_REVERSION, set your take_profit near the opposite Bollinger Band or SMA.
 4. MACRO SENSITIVITY & MOMENTUM BREAKOUTS: If trading XAUUSD (Gold) or UKOIL (Oil) and the recent news context contains high-impact geopolitical events or central bank rate decisions, do NOT automatically reject the trade! First, check the 'momentum_spike' variable in the snapshot. If 'momentum_spike' is active (BULLISH or BEARISH), you MUST originate a 'MOMENTUM_BREAKOUT' strategy in the direction of the momentum. Use a 'Market' or 'Buy Stop' / 'Sell Stop' order to execute instantly, and set a tight structural invalidation point. Only reject the trade if there is NO momentum_spike present during the macro event.
-5. CHOP / INFLECTION GUARD (CRITICAL): If price is resting squarely on a major structural or macro boundary and momentum indicators (like RSI or ADX) are completely flat, indicating a highly ambiguous chop zone without a confirmed momentum_spike, you MUST explicitly reject the trade. Do not guess the direction. Invoke the reject_trade tool with the exact reason: 'INFLECTION_POINT_WAIT' to sideline capital until a definitive breakout is confirmed.
+5. CHOP / INFLECTION GUARD (CRITICAL):
+   - BEFORE invoking this guard, you MUST calculate the percentage distance between the Current Price and the nearest structural/macro boundary. (Formula: abs(Current Price - Nearest Boundary) / Nearest Boundary * 100)
+   - If the Percentage Distance is > 0.5%, the price is NOT resting on a boundary. You CANNOT use INFLECTION_POINT_WAIT.
+   - If price is resting squarely on a boundary (<= 0.5%) and momentum indicators (like RSI or ADX) are completely flat, indicating a highly ambiguous chop zone without a confirmed momentum_spike, you MUST explicitly reject the trade. Do not guess the direction. Invoke the reject_trade tool with the exact reason: 'INFLECTION_POINT_WAIT' to sideline capital until a definitive breakout is confirmed.
 6. DYNAMIC ADX OSCILLATOR THRESHOLDS: In a strong runaway trend where ADX > 30, standard oscillators like RSI will remain overbought/oversold for long periods. Do NOT reject a strong breakout just because RSI > 70. Expand your RSI rejection bounds to > 90 (or < 10 for shorts) if ADX confirms strong momentum.
 7. LOWER TIMEFRAME (LTF) DRILLING: If the macro trend and momentum are incredibly strong, but the price is stretched far beyond the 50 EMA making a direct Market Order dangerous, DO NOT reject the trade. Set recommended_direction to "REQUIRE_LTF_DRILLDOWN" to instruct the execution engine to drop to a lower timeframe and hunt for a localized entry.
 
@@ -159,9 +162,11 @@ ${JSON.stringify(snapshot, null, 2)}`,
         parameters: {
           type: "object",
           properties: {
+            thought_process: { type: "string", description: "Step-by-step reasoning for the rejection, including distance calculation if applicable." },
+            distance_to_level_percent: { type: "number", description: "The calculated percentage distance from the current price to the nearest Fib/Structural level. Must be calculated BEFORE invoking INFLECTION_POINT_WAIT." },
             reason: { type: "string" }
           },
-          required: ["reason"]
+          required: ["thought_process", "reason"]
         }
       }
     ],
@@ -198,7 +203,7 @@ ${JSON.stringify(snapshot, null, 2)}`,
   if (toolCall.name === "reject_trade") {
     return {
       recommended_direction: "NONE",
-      thought_process: args.reason || args.rationale || JSON.stringify(args),
+      thought_process: args.thought_process || args.reason || args.rationale || JSON.stringify(args),
       institutional_rationale: { directional_bias: args.reason },
       confidence_score: 0
     };

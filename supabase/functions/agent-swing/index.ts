@@ -261,8 +261,9 @@ ${macroContext || "No major macro events in the window."}
    - TP3 (Runner): Fib extension or psychological round number
    
 8. INFLECTION POINT AMBIGUITY GUARD (CRITICAL):
-   - If price is resting squarely on a major structural or Fibonacci boundary (e.g., within 0.2% of a level) AND momentum indicators (e.g., RSI is flat around 40-60, ADX is low, or no clear candlestick reversal pattern exists) do not provide overwhelming confirmation of a bounce or breakout, you MUST explicitly reject the trade.
-   - Do NOT force a low-confidence coin flip just because Expected Value (R:R) is high.
+   - BEFORE invoking this guard, you MUST calculate the percentage distance between the Current Price and the nearest Fibonacci or Structural level. (Formula: abs(Current Price - Nearest Level) / Nearest Level * 100)
+   - If the Percentage Distance is > 0.5%, the price is NOT resting on a level. You CANNOT use INFLECTION_POINT_WAIT.
+   - If price is resting squarely on a boundary (<= 0.5%) AND momentum indicators (RSI flat, ADX low) do not provide overwhelming confirmation, you MUST explicitly reject the trade.
    - Invoke the reject_trade tool with the exact reason: 'INFLECTION_POINT_WAIT' to sideline capital until a definitive bounce or breakdown is confirmed via a candle close.
 
 9. DYNAMIC ADX OSCILLATOR THRESHOLDS:
@@ -317,9 +318,11 @@ ${macroContext || "No major macro events in the window."}
         parameters: {
           type: "object",
           properties: {
+            thought_process: { type: "string", description: "Step-by-step reasoning for the rejection, including distance calculation if applicable." },
+            distance_to_level_percent: { type: "number", description: "The calculated percentage distance from the current price to the nearest Fib/Structural level. Must be calculated BEFORE invoking INFLECTION_POINT_WAIT." },
             reason: { type: "string" }
           },
-          required: ["reason"]
+          required: ["thought_process", "reason"]
         }
       }
     ],
@@ -356,7 +359,7 @@ ${macroContext || "No major macro events in the window."}
   if (toolCall.name === "reject_trade") {
     return {
       recommended_direction: "NONE",
-      thought_process: args.reason || args.rationale || JSON.stringify(args),
+      thought_process: args.thought_process || args.reason || args.rationale || JSON.stringify(args),
       fibonacci_rationale: args.reason || args.rationale || JSON.stringify(args),
       confidence_score: 0
     } as any;
