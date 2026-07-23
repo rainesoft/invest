@@ -59,3 +59,8 @@ scratch/
 .env*
 docs/
 temp/
+
+# Temporary Files
+temp/
+supabase/functions/temp-sql/
+
