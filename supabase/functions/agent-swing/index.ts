@@ -119,7 +119,7 @@ const SwingTradeSchema = z.object({
     "Which specific Fib level is the entry anchored to and why it is high-confluence (e.g. 61.8% + structure support + weekly EMA).",
   ),
   market_structure: z.enum(["BULLISH_TREND", "BEARISH_TREND", "RANGING", "DISTRIBUTION", "ACCUMULATION"]),
-  recommended_direction: z.enum(["LONG", "SHORT", "NONE"]),
+  recommended_direction: z.enum(["LONG", "SHORT", "NONE", "REQUIRE_LTF_DRILLDOWN"]),
   strategy_applied: z.enum([
     "FIB_RETRACEMENT_LONG",
     "FIB_RETRACEMENT_SHORT",
@@ -263,7 +263,14 @@ ${macroContext || "No major macro events in the window."}
 8. INFLECTION POINT AMBIGUITY GUARD (CRITICAL):
    - If price is resting squarely on a major structural or Fibonacci boundary (e.g., within 0.2% of a level) AND momentum indicators (e.g., RSI is flat around 40-60, ADX is low, or no clear candlestick reversal pattern exists) do not provide overwhelming confirmation of a bounce or breakout, you MUST explicitly reject the trade.
    - Do NOT force a low-confidence coin flip just because Expected Value (R:R) is high.
-   - Invoke the reject_trade tool with the exact reason: 'INFLECTION_POINT_WAIT' to sideline capital until a definitive bounce or breakdown is confirmed via a candle close.`;
+   - Invoke the reject_trade tool with the exact reason: 'INFLECTION_POINT_WAIT' to sideline capital until a definitive bounce or breakdown is confirmed via a candle close.
+
+9. DYNAMIC ADX OSCILLATOR THRESHOLDS:
+   - In a strong runaway trend where ADX > 30, standard oscillators like RSI will remain overbought/oversold for long periods. Do NOT reject a strong breakout just because RSI > 70. Expand your RSI rejection bounds to > 90 (or < 10 for shorts) if ADX confirms strong momentum.
+
+10. LOWER TIMEFRAME (LTF) DRILLING:
+    - If the macro trend and momentum are incredibly strong, but the price is stretched far beyond the 50 EMA making a direct Market Order dangerous, DO NOT reject the trade. 
+    - Set recommended_direction to "REQUIRE_LTF_DRILLDOWN" to instruct the execution engine to drop to a 5-minute chart and hunt for a localized Fair Value Gap (FVG) or consolidation to enter the macro trend safely.`;
 
   console.log(`[Responses API] Submitting ${symbol} analysis...`);
   
@@ -279,7 +286,7 @@ ${macroContext || "No major macro events in the window."}
           type: "object",
           properties: {
             confidence_score: { type: "number", description: "Score 0-100" },
-            recommended_direction: { type: "string", enum: ["LONG", "SHORT"] },
+            recommended_direction: { type: "string", enum: ["LONG", "SHORT", "REQUIRE_LTF_DRILLDOWN"] },
             fib_entry_level: { type: "string", description: "e.g. 61.8% or 78.6%" },
             structural_confirmation: { type: "string" },
             market_structure: { type: "string" },
@@ -778,7 +785,12 @@ serve(async (req) => {
               });
 
               const parsedScore = parseInt(sentimentResponse.choices[0].message?.content?.trim() || "0", 10);
-              if (!isNaN(parsedScore)) sentimentScore = parsedScore;
+              if (!isNaN(parsedScore)) {
+                sentimentScore = parsedScore;
+                // NLP Override for Momentum Breakouts
+                if (sentimentScore >= 7) snapshot.momentum_spike = 'BULLISH';
+                else if (sentimentScore <= -7) snapshot.momentum_spike = 'BEARISH';
+              }
               sendEvent({ type: "progress", message: `[${symbol}] Sentiment Score: ${sentimentScore}/10` });
             } catch (err: any) {
               console.error(`[Sentiment Error] Failed to evaluate sentiment for ${symbol}: ${err.message}`);
@@ -891,10 +903,15 @@ serve(async (req) => {
           const confidence = evaluation.confidence_score;
           const tier = getTier(confidence);
 
-          if (evaluation.recommended_direction === "NONE" || confidence < 70) {
-            const reason = evaluation.recommended_direction === "NONE"
-              ? `No valid swing setup identified: ${evaluation.thought_process?.slice(0, 200)}`
-              : `Confidence too low (${confidence}) — below 70 threshold`;
+          if (evaluation.recommended_direction === "NONE" || evaluation.recommended_direction === "REQUIRE_LTF_DRILLDOWN" || confidence < 70) {
+            let reason = "";
+            if (evaluation.recommended_direction === "REQUIRE_LTF_DRILLDOWN") {
+              reason = `LTF_ENTRY_WAIT: Macro trend is strong but price is overextended. Waiting for LTF pullback.`;
+            } else {
+              reason = evaluation.recommended_direction === "NONE"
+                ? `No valid swing setup identified: ${evaluation.thought_process?.slice(0, 200)}`
+                : `Confidence too low (${confidence}) — below 70 threshold`;
+            }
 
             sendEvent({ type: "progress", message: `[${symbol}] No trade: ${reason.slice(0, 120)}` });
             await supabase.from("trade_opportunities").insert({

@@ -114,6 +114,8 @@ CRITICAL RULES:
 3. For MEAN_REVERSION, set your take_profit near the opposite Bollinger Band or SMA.
 4. MACRO SENSITIVITY & MOMENTUM BREAKOUTS: If trading XAUUSD (Gold) or UKOIL (Oil) and the recent news context contains high-impact geopolitical events or central bank rate decisions, do NOT automatically reject the trade! First, check the 'momentum_spike' variable in the snapshot. If 'momentum_spike' is active (BULLISH or BEARISH), you MUST originate a 'MOMENTUM_BREAKOUT' strategy in the direction of the momentum. Use a 'Market' or 'Buy Stop' / 'Sell Stop' order to execute instantly, and set a tight structural invalidation point. Only reject the trade if there is NO momentum_spike present during the macro event.
 5. CHOP / INFLECTION GUARD (CRITICAL): If price is resting squarely on a major structural or macro boundary and momentum indicators (like RSI or ADX) are completely flat, indicating a highly ambiguous chop zone without a confirmed momentum_spike, you MUST explicitly reject the trade. Do not guess the direction. Invoke the reject_trade tool with the exact reason: 'INFLECTION_POINT_WAIT' to sideline capital until a definitive breakout is confirmed.
+6. DYNAMIC ADX OSCILLATOR THRESHOLDS: In a strong runaway trend where ADX > 30, standard oscillators like RSI will remain overbought/oversold for long periods. Do NOT reject a strong breakout just because RSI > 70. Expand your RSI rejection bounds to > 90 (or < 10 for shorts) if ADX confirms strong momentum.
+7. LOWER TIMEFRAME (LTF) DRILLING: If the macro trend and momentum are incredibly strong, but the price is stretched far beyond the 50 EMA making a direct Market Order dangerous, DO NOT reject the trade. Set recommended_direction to "REQUIRE_LTF_DRILLDOWN" to instruct the execution engine to drop to a lower timeframe and hunt for a localized entry.
 
 Historical Memory:
 ${historicalMemory || "None"}
@@ -129,7 +131,7 @@ ${JSON.stringify(snapshot, null, 2)}`,
           type: "object",
           properties: {
             confidence_score: { type: "number", description: "Score 0-100" },
-            recommended_direction: { type: "string", enum: ["LONG", "SHORT"] },
+            recommended_direction: { type: "string", enum: ["LONG", "SHORT", "REQUIRE_LTF_DRILLDOWN"] },
             structural_confirmation: { type: "string" },
             market_structure: { type: "string" },
             strategy_applied: { type: "string" },
@@ -802,9 +804,9 @@ serve(async (req) => {
               return;
             }
 
-            let is_valid = evaluation.recommended_direction !== "NONE";
+            let is_valid = evaluation.recommended_direction !== "NONE" && evaluation.recommended_direction !== "REQUIRE_LTF_DRILLDOWN";
             
-            let dbSide = evaluation.recommended_direction === "NONE" 
+            let dbSide = (!is_valid) 
               ? (snapshot.trend_alignment.startsWith('BULLISH') ? 'LONG' : 'SHORT') 
               : evaluation.recommended_direction;
             
@@ -831,9 +833,14 @@ serve(async (req) => {
             console.log(`[Layer B] AI Rationale: ${institutional_rationale}`);
 
             if (!is_valid || confidence_score < 70) {
-              const rejectReason = !is_valid 
-                ? institutional_rationale 
-                : `AI Confidence Score (${confidence_score}) below 70 threshold.`;
+              let rejectReason = "";
+              if (evaluation.recommended_direction === "REQUIRE_LTF_DRILLDOWN") {
+                rejectReason = `LTF_ENTRY_WAIT: Macro trend is strong but price is overextended. Waiting for LTF pullback.`;
+              } else {
+                rejectReason = !is_valid 
+                  ? institutional_rationale 
+                  : `AI Confidence Score (${confidence_score}) below 70 threshold.`;
+              }
                 
               console.log(`[Layer B: Cognitive Guard] REJECTED ${symbol} by AI Risk Officer: ${rejectReason}`);
               sendEvent({ type: 'progress', message: `[Layer B: AI Risk Officer] REJECTED ${symbol}: ${rejectReason}` });
