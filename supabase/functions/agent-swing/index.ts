@@ -224,6 +224,12 @@ ${macroContext || "No major macro events in the window."}
 
 [SWING TRADE RULES — READ CAREFULLY]
 
+0. ORDER OF OPERATIONS (CRITICAL PRIORITY):
+   - STEP 1: Always check for MACRO OVERRIDES (Rule 3) and SNIPER OVERRIDES (Rule 4) FIRST. If Macro Sentiment is 10/10 or a Liquidity Sweep is present, you MUST originate the trade. Do NOT look for reasons to reject.
+   - STEP 2: If no overrides apply, calculate your Fib distances.
+   - STEP 3: Only if distance is <= 0.5% and overrides are absent, you may consider an INFLECTION_POINT_WAIT rejection.
+   - NEVER invoke a rejection guardrail without explicitly explaining why the Overrides in Step 1 did not apply.
+
 1. FIBONACCI & SMC CONFLUENCE:
    An S-Tier (confidence >= 90) setup REQUIRES at least 3 of the following to align:
    - Price is at or within 1.5% of a key Fib level
@@ -318,7 +324,7 @@ ${macroContext || "No major macro events in the window."}
         parameters: {
           type: "object",
           properties: {
-            thought_process: { type: "string", description: "Step-by-step reasoning for the rejection, including distance calculation if applicable." },
+            thought_process: { type: "string", description: "Step-by-step reasoning for the rejection. You MUST explicitly state why the MOMENTUM BREAKOUT (Rule 3) and SNIPER (Rule 4) overrides did not apply before rejecting." },
             distance_to_level_percent: { type: "number", description: "The calculated percentage distance from the current price to the nearest Fib/Structural level. Must be calculated BEFORE invoking INFLECTION_POINT_WAIT." },
             reason: { type: "string" }
           },

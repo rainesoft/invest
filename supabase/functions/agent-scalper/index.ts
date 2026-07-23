@@ -109,6 +109,13 @@ async function evaluateOpportunity(symbol: string, snapshot: LogicContext & { ag
     input: `Evaluate the raw market data for ${symbol} on the ${timeframe} timeframe at current price ${snapshot.current_price} and autonomously originate the highest probability trade setup, if any. Return the required execution profile using the provided tools.
     
 CRITICAL RULES:
+
+0. ORDER OF OPERATIONS (CRITICAL PRIORITY):
+   - STEP 1: Always check for MACRO SENSITIVITY & MOMENTUM BREAKOUTS (Rule 4) FIRST. If the conditions for a breakout are met, you MUST originate the trade. Do NOT look for reasons to reject.
+   - STEP 2: If no overrides apply, calculate your distance to boundaries.
+   - STEP 3: Only if distance is <= 0.5% and overrides are absent, you may consider an INFLECTION_POINT_WAIT rejection (Rule 5).
+   - NEVER invoke a rejection guardrail without explicitly explaining why the Overrides in Step 1 did not apply.
+
 1. If the market is in a momentum trend, follow standard trend continuation rules.
 2. If the market is ranging (trend_alignment is CHOP), you MUST look for MEAN_REVERSION setups. Buy near the lower Bollinger Band (bb_lower) or sell near the upper Bollinger Band (bb_upper) if corroborated by RSI extremes (e.g., RSI < 35 for LONG, RSI > 65 for SHORT).
 3. For MEAN_REVERSION, set your take_profit near the opposite Bollinger Band or SMA.
@@ -162,7 +169,7 @@ ${JSON.stringify(snapshot, null, 2)}`,
         parameters: {
           type: "object",
           properties: {
-            thought_process: { type: "string", description: "Step-by-step reasoning for the rejection, including distance calculation if applicable." },
+            thought_process: { type: "string", description: "Step-by-step reasoning for the rejection. You MUST explicitly state why the MACRO SENSITIVITY (Rule 4) override did not apply before rejecting." },
             distance_to_level_percent: { type: "number", description: "The calculated percentage distance from the current price to the nearest Fib/Structural level. Must be calculated BEFORE invoking INFLECTION_POINT_WAIT." },
             reason: { type: "string" }
           },
