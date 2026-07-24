@@ -375,7 +375,13 @@ serve(async (req) => {
               break;
           } else if (i === 0) {
               const dataA = await resA.json();
-              finalOrderId = dataA.orderId || "EXECUTED";
+              finalOrderId = dataA.orderId || dataA.positionId || dataA.id;
+              
+              if (!finalOrderId) {
+                 allOk = false;
+                 masterError = `Failed to extract numeric Order ID from MetaAPI response: ${JSON.stringify(dataA)}`;
+                 break;
+              }
           }
           
           if (i < numSlices - 1) {
