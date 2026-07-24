@@ -275,12 +275,14 @@ ${macroContext || "No major macro events in the window."}
    - If price is resting squarely on a boundary (<= 0.5%) AND momentum indicators (RSI flat, ADX low) do not provide overwhelming confirmation, you MUST explicitly reject the trade.
    - Invoke the reject_trade tool with the exact reason: 'INFLECTION_POINT_WAIT' to sideline capital until a definitive bounce or breakdown is confirmed via a candle close.
 
-9. DYNAMIC ADX OSCILLATOR THRESHOLDS:
-   - In a strong runaway trend where ADX > 30, standard oscillators like RSI will remain overbought/oversold for long periods. Do NOT reject a strong breakout just because RSI > 70. Expand your RSI rejection bounds to > 90 (or < 10 for shorts) if ADX confirms strong momentum.
+9. DYNAMIC ADX OSCILLATOR THRESHOLDS (NO MEAN REVERSION):
+   - In a strong runaway trend where ADX > 25, you are FORBIDDEN from taking a Mean Reversion trade against the trend.
+   - High ADX means momentum is accelerating, not reversing. RSI extremes in a high ADX environment are trend-continuation signals, not reversal signals.
+   - Expand your RSI rejection bounds to > 90 (or < 10 for shorts) if ADX confirms strong momentum.
 
 10. LOWER TIMEFRAME (LTF) DRILLING:
-    - If the macro trend and momentum are incredibly strong, but the price is stretched far beyond the 50 EMA making a direct Market Order dangerous, DO NOT reject the trade. 
-    - Set recommended_direction to "REQUIRE_LTF_DRILLDOWN" to instruct the execution engine to drop to a 5-minute chart and hunt for a localized Fair Value Gap (FVG) or consolidation to enter the macro trend safely.`;
+    - If the macro environment is ripe, but the 30m chart price is hovering near a HTF boundary without a clear FVG or entry trigger, DO NOT reject the setup.
+    - Instead, set status to APPROVED and recommended_direction to "REQUIRE_LTF_DRILLDOWN" to instruct the Sniper agent to hunt for a precision entry on the 5m chart.`;
 
   console.log(`[Responses API] Submitting ${symbol} analysis...`);
   
@@ -329,10 +331,11 @@ ${macroContext || "No major macro events in the window."}
           type: "object",
           properties: {
             thought_process: { type: "string", description: "Step-by-step reasoning for the rejection. You MUST explicitly state why the MOMENTUM BREAKOUT (Rule 3) and SNIPER (Rule 4) overrides did not apply before rejecting." },
+            rejection_math_proof: { type: "string", description: "You MUST calculate the boundary percentage distance step-by-step here BEFORE outputting the reason. Do NOT output a lazy INFLECTION_POINT_WAIT without proving the math first." },
             distance_to_level_percent: { type: "number", description: "The calculated percentage distance from the current price to the nearest Fib/Structural level. Must be calculated BEFORE invoking INFLECTION_POINT_WAIT." },
             reason: { type: "string" }
           },
-          required: ["thought_process", "reason"]
+          required: ["thought_process", "rejection_math_proof", "distance_to_level_percent", "reason"]
         }
       }
     ],
