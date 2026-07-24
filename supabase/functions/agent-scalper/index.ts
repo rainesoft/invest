@@ -211,10 +211,11 @@ ${JSON.stringify(snapshot, null, 2)}`,
   const args = JSON.parse(toolCall.arguments);
 
   if (toolCall.name === "reject_trade") {
+    const mathProof = args.rejection_math_proof ? `\n[Math Proof]: ${args.rejection_math_proof}` : "";
     return {
       recommended_direction: "NONE",
       thought_process: args.thought_process || args.reason || args.rationale || JSON.stringify(args),
-      institutional_rationale: { directional_bias: args.reason },
+      institutional_rationale: { directional_bias: args.reason + mathProof },
       confidence_score: 0
     };
   }

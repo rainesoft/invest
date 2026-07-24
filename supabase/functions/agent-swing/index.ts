@@ -371,10 +371,11 @@ ${macroContext || "No major macro events in the window."}
   const args = JSON.parse(toolCall.arguments);
 
   if (toolCall.name === "reject_trade") {
+    const mathProof = args.rejection_math_proof ? `\n[Math Proof]: ${args.rejection_math_proof}` : "";
     return {
       recommended_direction: "NONE",
       thought_process: args.thought_process || args.reason || args.rationale || JSON.stringify(args),
-      fibonacci_rationale: args.reason || args.rationale || JSON.stringify(args),
+      institutional_rationale: { directional_bias: args.reason + mathProof },
       confidence_score: 0
     } as any;
   }
@@ -1158,6 +1159,7 @@ serve(async (req) => {
           // FALLBACK: In case the DB webhook fails, we manually invoke the trade agent
           try {
             await supabase.functions.invoke('agent-trade', {
+              headers: { "x-webhook-secret": Deno.env.get("WEBHOOK_SECRET") || "FALLBACK_SECRET_123" },
               body: {
                 type: "INSERT",
                 table: "trade_opportunities",
