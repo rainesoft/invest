@@ -72,6 +72,8 @@ serve(async (req) => {
     let state: 'PENDING' | 'ACTIVE' = 'PENDING';
 
     const entryPrice = entry_plan_json.price;
+    // Calculate actual risk in price units to compute real R-multiple
+    const riskPerUnit = Math.abs(entryPrice - stopLoss);
 
     for (const candle of candles) {
       if (side === 'BULLISH' || side === 'LONG') {
@@ -88,21 +90,21 @@ serve(async (req) => {
           // Conservative Resolution: If candle spans both TP and SL, assume LOSS
           if (candle.l <= stopLoss && candle.h >= takeProfit) {
             outcome = 'LOST';
-            rMultiple = -1.0;
+            rMultiple = riskPerUnit > 0 ? -((entryPrice - stopLoss) / riskPerUnit) : -1.0;
             closedAt = candle.ts;
             break;
           }
           // Did the candle hit SL?
           if (candle.l <= stopLoss) {
             outcome = 'LOST';
-            rMultiple = -1.0;
+            rMultiple = riskPerUnit > 0 ? -((entryPrice - stopLoss) / riskPerUnit) : -1.0;
             closedAt = candle.ts;
             break;
           }
           // Did the candle hit TP?
           else if (candle.h >= takeProfit) {
             outcome = 'WON';
-            rMultiple = 2.0; // Enforcing 1:2 strict R/R baseline
+            rMultiple = riskPerUnit > 0 ? (takeProfit - entryPrice) / riskPerUnit : 2.0;
             closedAt = candle.ts;
             break;
           }
@@ -120,21 +122,21 @@ serve(async (req) => {
           // Conservative Resolution: If candle spans both TP and SL, assume LOSS
           if (candle.h >= stopLoss && candle.l <= takeProfit) {
             outcome = 'LOST';
-            rMultiple = -1.0;
+            rMultiple = riskPerUnit > 0 ? -((stopLoss - entryPrice) / riskPerUnit) : -1.0;
             closedAt = candle.ts;
             break;
           }
           // Did the candle hit SL?
           if (candle.h >= stopLoss) {
             outcome = 'LOST';
-            rMultiple = -1.0;
+            rMultiple = riskPerUnit > 0 ? -((stopLoss - entryPrice) / riskPerUnit) : -1.0;
             closedAt = candle.ts;
             break;
           }
           // Did the candle hit TP?
           else if (candle.l <= takeProfit) {
             outcome = 'WON';
-            rMultiple = 2.0;
+            rMultiple = riskPerUnit > 0 ? (entryPrice - takeProfit) / riskPerUnit : 2.0;
             closedAt = candle.ts;
             break;
           }

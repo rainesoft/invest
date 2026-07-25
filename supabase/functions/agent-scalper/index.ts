@@ -119,7 +119,7 @@ CRITICAL RULES:
 1. If the market is in a momentum trend, follow standard trend continuation rules.
 2. If the market is ranging (trend_alignment is CHOP), you MUST look for MEAN_REVERSION setups. Buy near the lower Bollinger Band (bb_lower) or sell near the upper Bollinger Band (bb_upper) if corroborated by RSI extremes (e.g., RSI < 35 for LONG, RSI > 65 for SHORT).
 3. For MEAN_REVERSION, set your take_profit near the opposite Bollinger Band or SMA.
-4. MACRO SENSITIVITY & MOMENTUM BREAKOUTS: If trading XAUUSD (Gold) or UKOIL (Oil) and the recent news context contains high-impact geopolitical events or central bank rate decisions, do NOT automatically reject the trade! First, check the 'momentum_spike' variable in the snapshot. If 'momentum_spike' is active (BULLISH or BEARISH), you MUST originate a 'MOMENTUM_BREAKOUT' strategy in the direction of the momentum. Use a 'Market' or 'Buy Stop' / 'Sell Stop' order to execute instantly, and set a tight structural invalidation point. Only reject the trade if there is NO momentum_spike present during the macro event.
+4. MACRO SENSITIVITY & MOMENTUM BREAKOUTS: If trading XAUUSD (Gold), UKOIL (Oil), or BTCUSD (Bitcoin) and the recent news context contains high-impact geopolitical events, central bank rate decisions, or crypto regulatory news, do NOT automatically reject the trade! First, check the 'momentum_spike' variable in the snapshot. If 'momentum_spike' is active (BULLISH or BEARISH), you MUST originate a 'MOMENTUM_BREAKOUT' strategy in the direction of the momentum. Use a 'Market' or 'Buy Stop' / 'Sell Stop' order to execute instantly, and set a tight structural invalidation point. Only reject the trade if there is NO momentum_spike present during the macro event.
 5. CHOP / INFLECTION GUARD (CRITICAL):
    - BEFORE invoking this guard, you MUST calculate the percentage distance between the Current Price and the nearest structural/macro boundary. (Formula: abs(Current Price - Nearest Boundary) / Nearest Boundary * 100)
    - If the Percentage Distance is > 0.5%, the price is NOT resting on a boundary. You CANNOT use INFLECTION_POINT_WAIT.
@@ -772,7 +772,33 @@ serve(async (req) => {
               }).join("\n");
             }
 
+            // === SIGNAL SLEEP MODE ===
+            // If this symbol has 3+ consecutive INFLECTION_POINT_WAIT rejections in the last 2 hours,
+            // skip AI evaluation to reduce compute waste and database noise.
+            const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+            const { data: recentRejections } = await supabase
+              .from('trade_opportunities')
+              .select('ai_summary')
+              .eq('symbol', symbol)
+              .eq('status', 'REJECTED')
+              .gte('created_at', twoHoursAgo)
+              .order('created_at', { ascending: false })
+              .limit(3);
+            
+            if (recentRejections && recentRejections.length >= 3) {
+              const allInflectionWait = recentRejections.every((r: any) => 
+                r.ai_summary?.includes('INFLECTION_POINT_WAIT')
+              );
+              if (allInflectionWait) {
+                console.log(`[Sleep Mode] ${symbol}: 3 consecutive INFLECTION_POINT_WAIT rejections. Entering 2-hour sleep mode.`);
+                sendEvent({ type: 'progress', message: `[Sleep Mode] ${symbol}: Market is in tight consolidation. Skipping for 2 hours to reduce noise.` });
+                rejections.push({ symbol, reason: 'Sleep mode: 3 consecutive INFLECTION_POINT_WAIT in 2h window', layer: 'Sleep Mode' });
+                return;
+              }
+            }
+
             // LAYER B: Cognitive Guard (Senior Risk Officer)
+
             let evaluation;
             try {
               console.log(`[Layer B: Cognitive Guard] Requesting AI evaluation for ${symbol}...`);
@@ -822,9 +848,27 @@ serve(async (req) => {
 
             let is_valid = evaluation.recommended_direction !== "NONE" && evaluation.recommended_direction !== "REQUIRE_LTF_DRILLDOWN";
             
-            let dbSide = (!is_valid) 
-              ? (snapshot.trend_alignment.startsWith('BULLISH') ? 'LONG' : 'SHORT') 
-              : evaluation.recommended_direction;
+            // FIX: Use RSI + Bollinger Band position to determine fallback direction.
+            // Previously defaulted to SHORT when trend was CHOP, causing systematic SHORT bias.
+            // Now: RSI < 40 or price near lower BB => LONG bias. RSI > 60 or price near upper BB => SHORT bias.
+            const rsi = snapshot.rsi_14 ?? 50;
+            const bbUpper = snapshot.bb_upper ?? Infinity;
+            const bbLower = snapshot.bb_lower ?? 0;
+            const price = snapshot.current_price;
+            const nearLowerBB = bbLower > 0 && Math.abs(price - bbLower) / bbLower < 0.005;
+            const nearUpperBB = bbUpper < Infinity && Math.abs(price - bbUpper) / bbUpper < 0.005;
+            
+            let fallbackSide: 'LONG' | 'SHORT';
+            if (snapshot.trend_alignment.startsWith('BULLISH') || rsi < 40 || nearLowerBB) {
+              fallbackSide = 'LONG';
+            } else if (snapshot.trend_alignment.startsWith('BEARISH') || rsi > 60 || nearUpperBB) {
+              fallbackSide = 'SHORT';
+            } else {
+              // True neutral — use HTF trend as tiebreaker
+              fallbackSide = (snapshot.htf_trend === 'BULLISH') ? 'LONG' : 'SHORT';
+            }
+            
+            let dbSide = (!is_valid) ? fallbackSide : evaluation.recommended_direction;
             
             let entry_price = Number((evaluation.execution_parameters?.suggested_entry_price || snapshot.current_price).toFixed(3));
             let stop_loss = Number((evaluation.execution_parameters?.suggested_stop_loss || (dbSide === "LONG" ? snapshot.safe_long_stop_loss : snapshot.safe_short_stop_loss)).toFixed(3));
