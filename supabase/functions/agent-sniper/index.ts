@@ -4,6 +4,18 @@ import { fetchPaperBars } from "../../../packages/execution/index.ts";
 import { getContextSnapshot } from "../../../packages/strategy/indicators.ts";
 import { isAutoTradingEnabled } from "../../../packages/core/settings.ts";
 
+async function notifyTelegram(text: string) {
+  const TG_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN");
+  const TG_CHAT = Deno.env.get("TELEGRAM_CHAT_ID");
+  if (!TG_TOKEN || !TG_CHAT) return;
+  const url = `https://api.telegram.org/bot${TG_TOKEN}/sendMessage`;
+  await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: TG_CHAT, text, parse_mode: "Markdown" }),
+  }).catch(() => {});
+}
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -121,6 +133,14 @@ serve(async (req) => {
           take_profit_json: { tp: tp2, tp1, tp2, tp3 },
           risk_summary: `Algorithmic LTF Trigger. ATR: ${atr}`
         });
+
+        const alertText = `🎯 *SNIPER EXECUTED*\n\n` +
+                          `*Asset:* ${watch.symbol}\n` +
+                          `*Side:* ${watch.direction} @ ${entryPrice}\n` +
+                          `*Target:* ${tp2}\n` +
+                          `*Stop:* ${stopLoss}\n\n` +
+                          `_Algorithmic execution from macro watchlist._`;
+        await notifyTelegram(alertText);
 
         // Update Watchlist
         await supabase.from("trade_watchlists").update({ 
