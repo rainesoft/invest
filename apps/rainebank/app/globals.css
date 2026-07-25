@@ -1,3 +1,5 @@
+@import "tailwindcss";
+
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
 :root {
@@ -179,4 +181,30 @@ body {
   .stat-grid {
     grid-template-columns: 1fr !important;
   }
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Background Animation */
+body {
+  animation: pulse-bg 15s infinite alternate;
+}
+
+@keyframes pulse-bg {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 100% 50%; }
 }
