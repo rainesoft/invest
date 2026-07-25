@@ -80,32 +80,16 @@ export default function AdminWithdrawalsPage() {
   const totalAmount = withdrawals.reduce((sum, w) => sum + Number(w.amount), 0);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-      <div style={{
-        background: 'rgba(30, 41, 59, 0.5)',
-        backdropFilter: 'blur(12px)',
-        border: '1px solid rgba(255,255,255,0.1)',
-        borderRadius: '16px',
-        padding: '24px',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        flexWrap: 'wrap',
-        gap: '24px'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{
-            background: 'rgba(248, 113, 113, 0.1)',
-            padding: '10px',
-            borderRadius: '12px',
-            color: '#f87171'
-          }}>
-            <ArrowUpRight size={24} />
+    <div className="flex flex-col gap-6 animate-in fade-in duration-500">
+      <div className="bg-white/5 border border-white/10 rounded-2xl p-6 flex justify-between items-center flex-wrap gap-6 backdrop-blur-xl shadow-2xl">
+        <div className="flex items-center gap-4">
+          <div className="p-3 bg-red-500/10 rounded-xl border border-red-500/20 shadow-[0_0_15px_rgba(239,68,68,0.2)]">
+            <ArrowUpRight size={24} className="text-red-400" />
           </div>
           <div>
-            <h2 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', margin: '0 0 4px 0' }}>Pending Withdrawals</h2>
-            <p style={{ fontSize: '14px', color: '#9ca3af', margin: 0 }}>
-              {withdrawals.length} request{withdrawals.length !== 1 ? 's' : ''} in queue • Total Batch: <span style={{ color: '#fff', fontWeight: 600 }}>${totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+            <h2 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400 tracking-tight m-0 mb-1">Pending Withdrawals</h2>
+            <p className="text-gray-400 text-sm font-medium m-0">
+              {withdrawals.length} request{withdrawals.length !== 1 ? 's' : ''} in queue • Total Batch: <span className="text-white font-bold">${totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
             </p>
           </div>
         </div>
@@ -113,66 +97,59 @@ export default function AdminWithdrawalsPage() {
         <button
           onClick={handleProcessBatch}
           disabled={processing || withdrawals.length === 0}
-          style={{
-            display: 'flex', alignItems: 'center', gap: '8px',
-            padding: '12px 24px', borderRadius: '12px',
-            background: processing || withdrawals.length === 0 ? '#374151' : '#f87171',
-            color: processing || withdrawals.length === 0 ? '#9ca3af' : '#fff',
-            border: 'none', fontWeight: 600, cursor: processing || withdrawals.length === 0 ? 'not-allowed' : 'pointer',
-            transition: 'all 0.2s'
-          }}
+          className={`inline-flex items-center gap-2 px-6 py-3 rounded-xl font-bold transition-all shadow-lg ${
+            processing || withdrawals.length === 0
+              ? 'bg-gray-800 text-gray-500 cursor-not-allowed border border-white/5'
+              : 'bg-gradient-to-r from-red-600 to-red-500 text-white shadow-red-500/30 hover:shadow-[0_0_20px_rgba(239,68,68,0.6)] hover:-translate-y-0.5'
+          }`}
         >
-          {processing ? <Loader2 size={18} className="spin" /> : <CheckCircle size={18} />}
+          {processing ? <Loader2 size={18} className="animate-spin" /> : <CheckCircle size={18} />}
           {processing ? 'Processing...' : 'Process Batch'}
         </button>
       </div>
 
-      <div style={{
-        background: 'rgba(30, 41, 59, 0.5)',
-        backdropFilter: 'blur(12px)',
-        border: '1px solid rgba(255,255,255,0.1)',
-        borderRadius: '16px',
-        overflow: 'hidden'
-      }}>
+      <div className="bg-white/5 border border-white/10 rounded-2xl shadow-2xl overflow-hidden backdrop-blur-xl">
         {loading ? (
-          <div style={{ padding: '48px', textAlign: 'center', color: '#9ca3af' }}>Loading withdrawals...</div>
+          <div className="flex justify-center py-16">
+            <Loader2 className="animate-spin text-red-500" size={32} />
+          </div>
         ) : withdrawals.length === 0 ? (
-          <div style={{ padding: '48px', textAlign: 'center', color: '#9ca3af' }}>
-            <Clock size={32} style={{ margin: '0 auto 16px auto', opacity: 0.5 }} />
-            No pending withdrawals to process.
+          <div className="text-center py-16 px-6 bg-black/20">
+            <Clock size={32} className="mx-auto mb-4 text-gray-600" />
+            <p className="text-gray-500 font-medium m-0">No pending withdrawals to process.</p>
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
               <thead>
-                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)', background: 'rgba(0,0,0,0.2)' }}>
-                  <th style={{ padding: '16px 24px', color: '#9ca3af', fontSize: '12px', fontWeight: 600 }}>USER</th>
-                  <th style={{ padding: '16px 24px', color: '#9ca3af', fontSize: '12px', fontWeight: 600 }}>REFERENCE</th>
-                  <th style={{ padding: '16px 24px', color: '#9ca3af', fontSize: '12px', fontWeight: 600 }}>NET AMOUNT</th>
-                  <th style={{ padding: '16px 24px', color: '#9ca3af', fontSize: '12px', fontWeight: 600 }}>FEE</th>
-                  <th style={{ padding: '16px 24px', color: '#9ca3af', fontSize: '12px', fontWeight: 600 }}>DESTINATION</th>
-                  <th style={{ padding: '16px 24px', color: '#9ca3af', fontSize: '12px', fontWeight: 600 }}>DATE</th>
+                <tr className="border-b border-white/10 text-xs text-gray-400 bg-black/40">
+                  <th className="p-5 font-bold uppercase tracking-wider">User</th>
+                  <th className="p-5 font-bold uppercase tracking-wider">Reference</th>
+                  <th className="p-5 font-bold uppercase tracking-wider">Net Amount</th>
+                  <th className="p-5 font-bold uppercase tracking-wider">Fee</th>
+                  <th className="p-5 font-bold uppercase tracking-wider">Destination</th>
+                  <th className="p-5 font-bold uppercase tracking-wider">Date</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-white/5">
                 {withdrawals.map((w) => (
-                  <tr key={w.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                    <td style={{ padding: '16px 24px', color: '#e5e7eb', fontSize: '14px' }}>
+                  <tr key={w.id} className="hover:bg-white/5 transition-colors group cursor-default">
+                    <td className="p-5 text-white text-sm font-medium">
                       {w.user_email}
                     </td>
-                    <td style={{ padding: '16px 24px', color: '#9ca3af', fontSize: '14px', fontFamily: 'monospace' }}>
+                    <td className="p-5 text-gray-400 text-sm font-mono bg-black/40 inline-block mt-3.5 mb-2 px-2 py-1 rounded border border-white/5">
                       {w.reference_code}
                     </td>
-                    <td style={{ padding: '16px 24px', color: '#fff', fontSize: '14px', fontWeight: 500 }}>
+                    <td className="p-5 text-white text-base font-bold">
                       {w.currency} {Number(w.amount).toFixed(2)}
                     </td>
-                    <td style={{ padding: '16px 24px', color: '#9ca3af', fontSize: '14px' }}>
+                    <td className="p-5 text-gray-400 text-sm font-medium">
                       {w.currency} {Number(w.performance_fee || 0).toFixed(2)}
                     </td>
-                    <td style={{ padding: '16px 24px', color: '#9ca3af', fontSize: '14px' }}>
+                    <td className="p-5 text-gray-400 text-sm">
                       {w.destination_details?.recipient_code || 'Unknown'}
                     </td>
-                    <td style={{ padding: '16px 24px', color: '#9ca3af', fontSize: '14px' }}>
+                    <td className="p-5 text-gray-400 text-sm font-medium">
                       {new Date(w.created_at).toLocaleDateString()}
                     </td>
                   </tr>

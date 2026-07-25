@@ -81,92 +81,65 @@ export default function AdminDepositsPage() {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-      <div style={{
-        background: 'rgba(30, 41, 59, 0.5)',
-        backdropFilter: 'blur(12px)',
-        border: '1px solid rgba(255,255,255,0.1)',
-        borderRadius: '16px',
-        padding: '24px',
-        overflow: 'hidden'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', marginBottom: '24px', gap: '12px' }}>
-          <div style={{
-            background: 'rgba(59, 130, 246, 0.1)',
-            padding: '10px',
-            borderRadius: '12px',
-            color: '#3b82f6'
-          }}>
-            <Clock size={24} />
+    <div className="flex flex-col gap-6 animate-in fade-in duration-500">
+      <div className="bg-white/5 border border-white/10 rounded-2xl p-6 backdrop-blur-xl shadow-2xl overflow-hidden">
+        <div className="flex items-center mb-6 gap-4 border-b border-white/5 pb-6">
+          <div className="p-3 bg-blue-500/10 rounded-xl border border-blue-500/20 shadow-[0_0_15px_rgba(59,130,246,0.2)]">
+            <Clock size={24} className="text-blue-400" />
           </div>
           <div>
-            <h2 style={{ color: '#fff', fontSize: '20px', fontWeight: 600, margin: '0 0 4px 0' }}>Pending Deposits</h2>
-            <p style={{ color: '#9ca3af', fontSize: '14px', margin: 0 }}>Review and clear funds routed to the Master Broker.</p>
+            <h2 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400 tracking-tight m-0 mb-1">Pending Deposits</h2>
+            <p className="text-gray-400 text-sm font-medium m-0">Review and clear funds routed to the Master Broker.</p>
           </div>
         </div>
 
         {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '48px 0' }}>
-            <Loader2 className="animate-spin" size={32} color="#3b82f6" />
+          <div className="flex justify-center py-12">
+            <Loader2 className="animate-spin text-blue-500" size={32} />
           </div>
         ) : deposits.length === 0 ? (
-          <div style={{
-            textAlign: 'center',
-            padding: '48px 24px',
-            background: 'rgba(0,0,0,0.2)',
-            borderRadius: '12px',
-            border: '1px dashed rgba(255,255,255,0.1)'
-          }}>
-            <p style={{ color: '#9ca3af', margin: 0 }}>No pending deposits to review.</p>
+          <div className="text-center py-16 px-6 bg-black/20 rounded-xl border border-dashed border-white/10">
+            <p className="text-gray-500 font-medium m-0">No pending deposits to review.</p>
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
               <thead>
-                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)', color: '#9ca3af', fontSize: '14px' }}>
-                  <th style={{ padding: '12px', fontWeight: 500 }}>User</th>
-                  <th style={{ padding: '12px', fontWeight: 500 }}>Reference</th>
-                  <th style={{ padding: '12px', fontWeight: 500 }}>Amount</th>
-                  <th style={{ padding: '12px', fontWeight: 500 }}>Date</th>
-                  <th style={{ padding: '12px', fontWeight: 500, textAlign: 'right' }}>Action</th>
+                <tr className="border-b border-white/10 text-sm text-gray-400 bg-black/20">
+                  <th className="p-4 font-bold uppercase tracking-wider">User</th>
+                  <th className="p-4 font-bold uppercase tracking-wider">Reference</th>
+                  <th className="p-4 font-bold uppercase tracking-wider">Amount</th>
+                  <th className="p-4 font-bold uppercase tracking-wider">Date</th>
+                  <th className="p-4 font-bold uppercase tracking-wider text-right">Action</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-white/5">
                 {deposits.map((req) => (
-                  <tr key={req.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                    <td style={{ padding: '16px 12px', color: '#fff', fontSize: '14px' }}>
+                  <tr key={req.id} className="hover:bg-white/5 transition-colors group cursor-default">
+                    <td className="p-4 text-white text-sm font-medium">
                       {req.user_email}
                     </td>
-                    <td style={{ padding: '16px 12px', color: '#9ca3af', fontSize: '14px', fontFamily: 'monospace' }}>
+                    <td className="p-4 text-gray-400 text-sm font-mono bg-black/20 inline-block mt-3 mb-2 px-2 py-1 rounded border border-white/5">
                       {req.reference_code}
                     </td>
-                    <td style={{ padding: '16px 12px', color: '#fff', fontSize: '16px', fontWeight: 600 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <DollarSign size={16} color="#3b82f6" />
+                    <td className="p-4 text-white text-base font-bold">
+                      <div className="flex items-center gap-1.5">
+                        <DollarSign size={16} className="text-blue-400" />
                         {Number(req.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                       </div>
                     </td>
-                    <td style={{ padding: '16px 12px', color: '#9ca3af', fontSize: '14px' }}>
+                    <td className="p-4 text-gray-400 text-sm font-medium">
                       {new Date(req.created_at).toLocaleDateString()}
                     </td>
-                    <td style={{ padding: '16px 12px', textAlign: 'right' }}>
+                    <td className="p-4 text-right">
                       <button
                         onClick={() => handleApprove(req.id)}
                         disabled={approving === req.id}
-                        style={{
-                          background: approving === req.id ? 'rgba(59, 130, 246, 0.5)' : '#3b82f6',
-                          color: '#fff',
-                          border: 'none',
-                          padding: '8px 16px',
-                          borderRadius: '8px',
-                          fontSize: '14px',
-                          fontWeight: 600,
-                          cursor: approving === req.id ? 'not-allowed' : 'pointer',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          transition: 'background 0.2s'
-                        }}
+                        className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                          approving === req.id 
+                            ? 'bg-blue-500/50 text-white cursor-not-allowed' 
+                            : 'bg-blue-600 hover:bg-blue-500 text-white shadow-[0_0_15px_rgba(37,99,235,0.4)] hover:shadow-[0_0_20px_rgba(59,130,246,0.6)] hover:-translate-y-0.5'
+                        }`}
                       >
                         {approving === req.id ? (
                           <Loader2 size={16} className="animate-spin" />
