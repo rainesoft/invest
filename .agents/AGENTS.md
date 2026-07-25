@@ -32,3 +32,6 @@ MetaAPI treats omitted parameters as explicit deletion commands. Failing to re-i
 ## Rule: Temporary Files and Diagnostics
 All temporary execution files, one-off Node scripts, and diagnostic database migrations MUST be saved in the `<appDataDir>/brain/<conversation-id>/scratch/` directory. 
 NEVER create temporary diagnostic files inside the project's source tree (e.g., `supabase/migrations/` or project roots) to prevent accidental commits and workspace pollution. If a diagnostic database migration is required, apply it from the scratch directory.
+
+### Scratch Scripts & Ad-Hoc Files
+When writing temporary scratch scripts (e.g., for ad-hoc database queries, testing APIs, or manual trade execution) or generating non-permanent files, you MUST create them inside the `temp/` folder in the project root. Never save temporary scripts in the root directory to avoid cluttering the repository and leaving behind untracked files during git commits.
