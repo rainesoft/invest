@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from '@lib/supabase';
-import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, Target } from 'lucide-react';
 
 type Opportunity = {
   id: string;
@@ -16,6 +16,7 @@ type Opportunity = {
   ai_summary: string | null;
   ai_risks: string | null;
   status: string;
+  confidence: number;
 };
 
 function parseAnalysisText(text: string) {
@@ -92,7 +93,7 @@ function TrendBadge({ agent, tier, structure, strategy }: { agent: string | null
   );
 }
 
-export default function AdminSignalsPage() {
+export default function SignalsTab({ liveTrades = [] }: { liveTrades?: any[] }) {
   const [opps, setOpps] = useState<Opportunity[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'ACTIVE' | 'INVALIDATED' | 'REJECTED'>('ACTIVE');
@@ -109,7 +110,7 @@ export default function AdminSignalsPage() {
 
       let query = supabase
         .from('trade_opportunities')
-        .select('id, symbol, side, timeframe, created_at, entry_plan_json, stop_plan_json, take_profit_json, ai_summary, ai_risks, status', { count: 'exact' })
+        .select('id, symbol, side, timeframe, created_at, entry_plan_json, stop_plan_json, take_profit_json, ai_summary, ai_risks, status, confidence', { count: 'exact' })
         .eq('is_archived', false)
         .order('created_at', { ascending: false })
         .range(from, to);
@@ -140,7 +141,7 @@ export default function AdminSignalsPage() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '16px' }}>
         <h2 style={{ fontSize: '24px', fontWeight: 800, color: '#fff', letterSpacing: '-0.5px', margin: 0 }}>
-          Published AI Signals
+          Active PAMM Execution Desk & AI Signals
         </h2>
         <div style={{ display: 'flex', background: '#111', padding: '4px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
           {(['ACTIVE', 'INVALIDATED', 'REJECTED'] as const).map(tab => (
@@ -191,9 +192,61 @@ export default function AdminSignalsPage() {
                     padding: '3px 10px', borderRadius: '100px', fontSize: '12px', fontWeight: 800
                   }}>{signal.side}</div>
                   <div style={{ color: '#9ca3af', fontSize: '13px', fontWeight: 600 }}>{signal.timeframe}</div>
+                  {signal.confidence && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(251,191,36,0.1)', color: '#fbbf24', padding: '3px 10px', borderRadius: '100px', fontSize: '12px', fontWeight: 800 }}>
+                      <Target size={14} />
+                      {signal.confidence}% CONFIDENCE
+                    </div>
+                  )}
                 </div>
                 <div style={{ color: '#6b7280', fontSize: '13px' }}>{new Date(signal.created_at).toLocaleString()}</div>
               </div>
+
+              {/* LIVE EXECUTION BANNER */}
+              {(() => {
+                const trade = liveTrades.find(t => t.trade_opportunities?.id === signal.id);
+                if (!trade) return null;
+                return (
+                  <div style={{
+                    background: 'rgba(16,185,129,0.05)',
+                    border: '1px solid rgba(16,185,129,0.2)',
+                    borderRadius: '12px',
+                    padding: '16px',
+                    marginBottom: '20px',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '16px',
+                    boxShadow: '0 0 20px rgba(16,185,129,0.05)'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', background: 'rgba(16,185,129,0.1)', padding: '6px 12px', borderRadius: '100px' }}>
+                        <span style={{ display: 'flex', position: 'relative', width: '8px', height: '8px' }}>
+                          <span style={{ animation: 'ping 1s cubic-bezier(0, 0, 0.2, 1) infinite', position: 'absolute', display: 'inline-flex', height: '100%', width: '100%', borderRadius: '9999px', backgroundColor: '#34d399', opacity: 0.75 }}></span>
+                          <span style={{ position: 'relative', display: 'inline-flex', borderRadius: '9999px', height: '8px', width: '8px', backgroundColor: '#10b981' }}></span>
+                        </span>
+                        <span style={{ color: '#34d399', fontSize: '11px', fontWeight: 800, letterSpacing: '0.05em' }}>LIVE EXECUTION</span>
+                      </div>
+                      <div style={{ color: '#9ca3af', fontSize: '12px', fontFamily: 'monospace' }}>ID: {trade.meta_api_order_id}</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '24px' }}>
+                      <div>
+                        <div style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '4px', fontWeight: 600 }}>RISK ALLOCATION</div>
+                        <div style={{ fontSize: '15px', fontWeight: 700, color: '#fff' }}>${trade.risk_amount?.toFixed(2) || '0.00'}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '4px', fontWeight: 600 }}>VOLUME</div>
+                        <div style={{ fontSize: '15px', fontWeight: 700, color: '#fff' }}>{trade.volume} Lots</div>
+                      </div>
+                      <div>
+                         <div style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '4px', fontWeight: 600 }}>TYPE</div>
+                         <div style={{ fontSize: '15px', fontWeight: 700, color: '#818cf8' }}>{trade.trade_type || 'STANDARD'}</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Price Grid */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '12px', marginBottom: '20px' }}>

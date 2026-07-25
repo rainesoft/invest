@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import { createClient } from '@supabase/supabase-js';
 import { supabaseServer } from '@lib/supabase-server';
 import { ThemeProvider } from '@components/ThemeProvider';
 import VaultNavbar from '@components/VaultNavbar';
@@ -12,8 +13,13 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     redirect('/login');
   }
 
-  // Check if the user is an admin
-  const { data: userData, error } = await supabase
+  const adminSupabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+
+  // Check if the user is an admin bypassing RLS
+  const { data: userData, error } = await adminSupabase
     .from('users')
     .select('is_admin')
     .eq('id', user.id)
