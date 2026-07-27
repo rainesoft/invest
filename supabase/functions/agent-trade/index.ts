@@ -1,6 +1,8 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
 import { isAutoTradingEnabled } from "../../../packages/core/settings.ts";
+import { fetchPaperBars } from "../../../packages/execution/index.ts";
+import { getContextSnapshot } from "../../../packages/strategy/indicators.ts";
 
 import { insertAuditLog } from "../../../packages/core/audit.ts";
 
@@ -15,7 +17,7 @@ interface WebhookPayload {
   type?: "INSERT" | "UPDATE";
   table?: "trade_opportunities";
   record?: any;
-  action?: "MANUAL_EXECUTION";
+  action?: "MANUAL_EXECUTION" | "RUNNER_HANDOFF" | "MANAGE_POSITIONS";
   user_id?: string;
   opportunity_id?: string;
 }
@@ -98,6 +100,174 @@ serve(async (req) => {
        
        return new Response("Runner handoff complete.", { status: 200 });
     }
+
+    // --- POSITION MANAGER LOGIC ---
+    if ((payload as any).action === "MANAGE_POSITIONS") {
+      console.log("[Position Manager] Starting sweep...");
+      if (!META_API_TOKEN || !META_API_ACCOUNT_ID) {
+        return new Response("Missing MetaAPI credentials", { status: 500 });
+      }
+
+      const { data: openTrades, error } = await supabase
+        .from("user_trades")
+        .select(`
+          id, meta_api_order_id, symbol, side, status, trade_type, user_id,
+          trade_opportunities (
+            entry_plan_json, stop_plan_json, take_profit_json
+          )
+        `)
+        .eq("status", "OPEN")
+        .not("meta_api_order_id", "is", null);
+
+      if (error || !openTrades || openTrades.length === 0) {
+        return new Response(JSON.stringify({ message: "No open trades to manage" }), { status: 200 });
+      }
+
+      const orderMap = new Map<string, any>();
+      for (const trade of openTrades) {
+        const id = trade.meta_api_order_id;
+        if (!id) continue;
+        const existing = orderMap.get(id);
+        if (!existing || trade.trade_type === "RUNNER") {
+          orderMap.set(id, trade);
+        }
+      }
+
+      const moves: { symbol: string; action: string; from: number; to: number }[] = [];
+      const errors: string[] = [];
+      const atrCache = new Map<string, number>();
+      const uniqueSymbols = [...new Set([...orderMap.values()].map(t => t.symbol))];
+
+      for (const symbol of uniqueSymbols) {
+        try {
+          const bars = await fetchPaperBars(symbol, "30m", 50, supabase);
+          if (bars.length >= 14) {
+            const snap = getContextSnapshot(
+              bars.map((b: any) => b.t),
+              bars.map((b: any) => b.o),
+              bars.map((b: any) => b.h),
+              bars.map((b: any) => b.l),
+              bars.map((b: any) => b.c)
+            );
+            atrCache.set(symbol, snap.atr_14 || 0);
+          }
+        } catch (_) { /* non-fatal */ }
+      }
+
+      for (const [orderId, trade] of orderMap) {
+        try {
+          const opp = trade.trade_opportunities;
+          if (!opp) continue;
+
+          const entryPrice = opp.entry_plan_json?.price || opp.entry_plan_json?.entry_price;
+          const originalSl = opp.stop_plan_json?.initial || opp.stop_plan_json?.stop;
+          const originalTp = opp.take_profit_json?.tp;
+
+          if (!entryPrice || !originalSl) continue;
+
+          const posRes = await fetch(
+            `${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/positions/${orderId}`,
+            { headers: { "auth-token": META_API_TOKEN } }
+          );
+
+          if (!posRes.ok) {
+            await supabase.from("user_trades").update({ status: "CLOSED" }).eq("meta_api_order_id", orderId).eq("status", "OPEN");
+            continue;
+          }
+
+          const position = await posRes.json();
+          if (position.error) continue;
+
+          const currentPrice = Number(position.currentPrice);
+          const currentSl = Number(position.stopLoss) || originalSl;
+          const profit = Number(position.profit) || 0;
+          const riskDist = Math.abs(entryPrice - originalSl);
+          
+          if (riskDist === 0) continue;
+
+          const isLong = trade.side === "LONG";
+          const priceMoveInR = isLong
+            ? (currentPrice - entryPrice) / riskDist
+            : (entryPrice - currentPrice) / riskDist;
+
+          const atr = atrCache.get(trade.symbol) || riskDist;
+          let newSl: number | null = null;
+          let actionName = "";
+
+          if (trade.trade_type === "RUNNER") {
+            const trailSl = isLong ? currentPrice - (atr * 1.5) : currentPrice + (atr * 1.5);
+            const isImprovement = isLong ? trailSl > currentSl : trailSl < currentSl;
+            const isSafeFromOriginal = isLong ? trailSl > originalSl : trailSl < originalSl;
+
+            if (isImprovement && isSafeFromOriginal && profit > 0) {
+              newSl = Number(trailSl.toFixed(5));
+              actionName = `TRAIL_RUNNER (+${priceMoveInR.toFixed(1)}R)`;
+            }
+          }
+
+          if (!newSl) {
+            if (priceMoveInR >= 2.0) {
+              const lockSl = isLong
+                ? Number((entryPrice + riskDist).toFixed(5))
+                : Number((entryPrice - riskDist).toFixed(5));
+              const isImprovement = isLong ? lockSl > currentSl : lockSl < currentSl;
+              if (isImprovement) {
+                newSl = lockSl;
+                actionName = `LOCK_IN_1R (profit +${priceMoveInR.toFixed(1)}R)`;
+              }
+            } else if (priceMoveInR >= 1.0) {
+              const beSl = Number(entryPrice.toFixed(5));
+              const isImprovement = isLong ? beSl > currentSl : beSl < currentSl;
+              if (isImprovement) {
+                newSl = beSl;
+                actionName = `BREAK_EVEN (profit +${priceMoveInR.toFixed(1)}R)`;
+              }
+            }
+          }
+
+          if (newSl !== null) {
+            console.log(`[Position Manager] ${trade.symbol} ${orderId}: ${actionName} — SL ${currentSl} → ${newSl}`);
+            const modRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+              method: "POST",
+              headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                actionType: "POSITION_MODIFY",
+                positionId: orderId,
+                stopLoss: newSl,
+                ...(originalTp ? { takeProfit: Number(originalTp.toFixed(5)) } : {})
+              })
+            });
+            if (modRes.ok) {
+              moves.push({ symbol: trade.symbol, action: actionName, from: currentSl, to: newSl });
+            } else {
+              errors.push(`${trade.symbol} ${orderId}: modify failed`);
+            }
+          }
+
+          await new Promise(r => setTimeout(r, 300));
+        } catch (err: any) {
+          errors.push(`${orderId}: ${err.message}`);
+        }
+      }
+
+      if (moves.length > 0) {
+        const TG_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
+        const TG_CHAT = Deno.env.get("TELEGRAM_CHAT_ID") ?? "";
+        if (TG_TOKEN && TG_CHAT) {
+          const lines = [`📐 <b>Position Manager — SL Updates</b>`, ``, ...moves.map(m => `• <b>${m.symbol}</b> ${m.action}: ${m.from} → <b>${m.to}</b>`)];
+          if (errors.length > 0) lines.push(``, `⚠️ ${errors.length} errors`);
+          await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: TG_CHAT, text: lines.join("\n"), parse_mode: "HTML" }),
+          }).catch(() => {});
+        }
+      }
+
+      const result = { evaluated: orderMap.size, moves: moves.length, errors: errors.length, details: moves };
+      return new Response(JSON.stringify(result), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+
 
     let signal: any = null;
     let isManual = payload.action === "MANUAL_EXECUTION";

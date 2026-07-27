@@ -35,3 +35,19 @@ NEVER create temporary diagnostic files inside the project's source tree (e.g., 
 
 ### Scratch Scripts & Ad-Hoc Files
 When writing temporary scratch scripts (e.g., for ad-hoc database queries, testing APIs, or manual trade execution) or generating non-permanent files, you MUST create them inside the `temp/` folder in the project root. Never save temporary scripts in the root directory to avoid cluttering the repository and leaving behind untracked files during git commits.
+
+### Agent Consolidation Rule
+When adding new functionality to the trading system, ALWAYS prefer expanding an
+existing agent (adding a new `action` type to its request dispatcher) over
+creating a new Edge Function. Only create a new function when:
+- The feature is a genuinely independent domain with no existing owner agent
+- The runtime characteristics differ significantly (e.g., long-running vs. fast webhook)
+- The existing agent would exceed ~800 lines and readability suffers significantly
+
+Examples of correct consolidation:
+- Position management (break-even, trailing stops) → `agent-trade` (action: MANAGE_POSITIONS)
+- Signal sleep mode check → `agent-scalper` (inline guard before AI call)
+- Weekend defense → `agent-kill-switch` (action: WEEKEND_DEFENSE)
+
+### Scratch Scripts & Ad-Hoc Files
+When writing temporary scratch scripts (e.g., for ad-hoc database queries, testing APIs, or manual trade execution) or generating non-permanent files, you MUST create them inside the `temp/` folder in the project root. Never save temporary scripts in the root directory to avoid cluttering the repository and leaving behind untracked files during git commits.

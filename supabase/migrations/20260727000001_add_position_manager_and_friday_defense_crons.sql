@@ -17,7 +17,7 @@ SELECT cron.schedule(
     api_key text;
     req_id bigint;
   begin
-    url := current_setting('app.supabase_url', true) || '/functions/v1/position-manager';
+    url := current_setting('app.supabase_url', true) || '/functions/v1/agent-trade';
     api_key := current_setting('app.supabase_anon_key', true);
     select net.http_post(
       url := url,
@@ -25,7 +25,7 @@ SELECT cron.schedule(
         'Authorization', 'Bearer ' || api_key,
         'Content-Type', 'application/json'
       ),
-      body := '{}'::jsonb
+      body := '{"action":"MANAGE_POSITIONS"}'::jsonb
     ) into req_id;
   end;
   $$
