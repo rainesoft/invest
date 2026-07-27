@@ -150,8 +150,44 @@ serve(async (req) => {
     const scaledEntries = entryPlan.scaled_entries && Array.isArray(entryPlan.scaled_entries) && entryPlan.scaled_entries.length > 0
       ? entryPlan.scaled_entries
       : [{ price: defaultEntryPrice, weight: 1.0 }];
-    const stopLoss = stopPlan.stop || stopPlan.stop_price;
-    const takeProfit = signal.take_profit_json?.tp || signal.take_profit_json?.tp_price;
+    let stopLoss = stopPlan.stop || stopPlan.stop_price;
+    let takeProfit = signal.take_profit_json?.tp || signal.take_profit_json?.tp_price;
+
+    // === EXECUTION GUARD 1: TP DIRECTION VALIDATION ===
+    // Prevents placing orders where TP is on the wrong side of entry.
+    // Root cause of USDJPY LONG having TP at 145.44 while entry was 163.7.
+    if (defaultEntryPrice && takeProfit && stopLoss) {
+      const isLong = signal.side === "LONG";
+      const tpOnWrongSide = isLong ? takeProfit < defaultEntryPrice : takeProfit > defaultEntryPrice;
+      if (tpOnWrongSide) {
+        const riskDist = Math.abs(defaultEntryPrice - stopLoss);
+        const correctedTp = isLong
+          ? Number((defaultEntryPrice + riskDist * 2).toFixed(5))
+          : Number((defaultEntryPrice - riskDist * 2).toFixed(5));
+        console.warn(`[Execution Guard] TP direction mismatch on ${signal.symbol} ${signal.side}! Entry=${defaultEntryPrice}, TP=${takeProfit}. Corrected to ${correctedTp} (2R).`);
+        takeProfit = correctedTp;
+      }
+    }
+
+    // === EXECUTION GUARD 2: MINIMUM SL DISTANCE ===
+    // Prevents ultra-tight stops that get swept by spread/volatility.
+    const minSlDistances: Record<string, number> = {
+      XAGUSD: 0.30, XAUUSD: 2.00, UKOIL: 0.30, BTCUSD: 150,
+      EURUSD: 0.0010, GBPUSD: 0.0010, USDJPY: 0.15, US30: 30, NAS100: 30,
+    };
+    if (defaultEntryPrice && stopLoss) {
+      const minDist = minSlDistances[signal.symbol];
+      if (minDist) {
+        const currentDist = Math.abs(defaultEntryPrice - stopLoss);
+        if (currentDist < minDist) {
+          const correctedSl = signal.side === "LONG"
+            ? Number((defaultEntryPrice - minDist).toFixed(5))
+            : Number((defaultEntryPrice + minDist).toFixed(5));
+          console.warn(`[Execution Guard] SL too tight on ${signal.symbol}: ${currentDist.toFixed(5)} < min ${minDist}. Widening from ${stopLoss} → ${correctedSl}.`);
+          stopLoss = correctedSl;
+        }
+      }
+    }
 
     let actionType = "ORDER_TYPE_BUY";
     const aiOrderType = (signal.entry_plan_json?.order_type || "Market").toUpperCase();
