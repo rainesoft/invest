@@ -24,10 +24,11 @@ When designing solutions, monitoring state, or handling edge cases, you MUST pri
 - **System Stability:** Avoid solutions that rely on transient environments (like chat-bound scripts) for mission-critical operations.
 
 
-## Rule: MetaAPI Modification Protocol
+## CRITICAL RULE: MetaAPI Modification Protocol (STRICT ENFORCEMENT)
 When using MetaAPI's `POSITION_MODIFY` or `ORDER_MODIFY` endpoints to adjust an existing trade, you MUST always fetch and explicitly re-inject all existing protective parameters (like `stopLoss` or `takeProfit`) into the payload, even if you are not changing them.
 
 MetaAPI treats omitted parameters as explicit deletion commands. Failing to re-include a Stop Loss when modifying a Take Profit will erase the Stop Loss on the broker, exposing the user to infinite risk.
+**THIS APPLIES TO MANUAL SCRIPTS:** Even when executing one-off diagnostic scripts in the scratch directory, you are strictly forbidden from sending a modification payload that does not contain BOTH `stopLoss` and `takeProfit`.
 
 ## Rule: Temporary Files and Diagnostics
 All temporary execution files, one-off Node scripts, and diagnostic database migrations MUST be saved in the `<appDataDir>/brain/<conversation-id>/scratch/` directory. 
