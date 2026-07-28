@@ -242,6 +242,7 @@ ${macroContext || "No major macro events in the window."}
    - DO NOT use the Daily ATR or a wide Daily swing low for your Stop Loss.
    - You MUST scan the LTF timeframe (1H or 30m) provided in the snapshot. Find the nearest SMC Order Block (ltf_bullish_ob_nearest / ltf_bearish_ob_nearest) or FVG.
    - Anchor your Stop Loss directly behind the LTF Order Block. This compresses the risk by 80%, instantly transforming a 1:1 trade into a massive 1:5.0 S-Tier setup.
+   - CRITICAL REQUIREMENT: Calculate your R:R mathematically before returning your parameters. If your R:R to TP2 is less than 2.5, you MUST tighten your Stop Loss behind a lower timeframe structural level until the mathematical ratio is >= 2.5, otherwise your trade will be mechanically rejected.
 
 3. MOMENTUM BREAKOUT STRATEGIES (IGNORING FIBS):
    - If the MACRO SENTIMENT SCORE is > 8 (Extremely Bullish) or < -8 (Extremely Bearish), you are authorized to IGNORE Fibonacci retracements.
@@ -473,6 +474,8 @@ serve(async (req) => {
     } catch (_) {}
   }
 
+  const isManual = reqBody.is_manual === true || searchParams.get("is_manual") === "true";
+
   // Swing pipeline always runs on 1D bars for maximum context
   const timeframe = reqBody.timeframe ?? searchParams.get("timeframe") ?? "1D";
   const lookback = Number(reqBody.lookback ?? searchParams.get("lookback") ?? 300);
@@ -627,8 +630,14 @@ serve(async (req) => {
                 // Since 'REJECTED' triggers auto-eject, we can update it to REJECTED but state it's a profit take.
                 // Wait, if we mark it as REJECTED, it triggers auto-eject to close the live positions.
                 await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Profit Secured by AI Risk Officer: ${evalResult.reason}` }).eq("id", signal.id);
-                // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
                 console.log(`[Validation] TAKE_PROFIT ${signal.symbol} by AI: ${evalResult.reason}`);
+                if (!isManual) {
+                  try {
+                    await fetch(`${Deno.env.get("WEBHOOK_URL")}/execution/cancel`, { method: "POST", body: JSON.stringify({ signal_id: signal.id }) });
+                  } catch (fallbackErr) {
+                    console.error(`[Fallback Webhook Error] ${fallbackErr}`);
+                  }
+                }
               } else {
                 console.log(`[Validation] MAINTAIN ${signal.symbol}: Thesis remains intact.`);
               }
@@ -708,7 +717,7 @@ serve(async (req) => {
 
           // === ASSET ISOLATION (PYRAMIDING) GUARD ===
           sendEvent({ type: "progress", message: `[Pre-AI Guard] Validating global signal constraints for ${symbol}...` });
-          const riskValidation = await validateGlobalSignal(supabase, symbol, snapshot);
+          const riskValidation = await validateGlobalSignal(supabase, symbol, snapshot, isManual);
           if (!riskValidation.valid) {
             console.log(`[Pre-AI Guard] [Trace: ${traceId}] REJECTED ${symbol}: ${riskValidation.reason}`);
             sendEvent({ type: "progress", message: `[Pre-AI Guard] Skipped ${symbol}: Exposure constraints violated.` });
@@ -1064,8 +1073,9 @@ serve(async (req) => {
           let requiredRR = 1.5;
           if (["XAGUSD", "UKOIL"].includes(symbol)) {
             requiredRR = 1.0; // Lower threshold due to high volatility and wider stops
-          } else {
-            if (confidence >= 90) requiredRR = 3.0;
+          }
+          if (tier === "S-Tier" || tier === "A-Tier") {
+            if (confidence >= 90) requiredRR = 2.5; // Relaxed for extremely high conviction macro trades
             else if (confidence >= 80) requiredRR = 2.0;
           }
 
@@ -1115,7 +1125,7 @@ serve(async (req) => {
               symbol,
               side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
               timeframe: timeframe.toLowerCase(),
-              status: "APPROVED",
+              status: isManual ? "PENDING_APPROVAL" : "APPROVED",
               entry_plan_json: {
                 price: entry,
                 order_type,
@@ -1157,7 +1167,8 @@ serve(async (req) => {
           await supabase.from("trade_watchlists").update({ status: 'CANCELLED' }).eq('symbol', symbol).eq('status', 'WATCHING');
           
           // FALLBACK: In case the DB webhook fails, we manually invoke the trade agent
-          try {
+          if (!isManual) {
+            try {
             await supabase.functions.invoke('agent-trade', {
               headers: { "x-webhook-secret": Deno.env.get("WEBHOOK_SECRET") || "FALLBACK_SECRET_123" },
               body: {
@@ -1183,7 +1194,8 @@ serve(async (req) => {
           } catch (e) {
             console.error(`[Agent Trade] Fallback invocation failed for ${symbol}:`, e);
           }
-          sendEvent({
+        }
+        sendEvent({
             type: "progress",
             message: `[${symbol}] ✅ SWING SIGNAL APPROVED — ${tier} | Entry: $${entry.toLocaleString()} | SL: $${sl.toLocaleString()} | TP2: $${tp2.toLocaleString()} | R:R 1:${rrToTp2.toFixed(1)}`,
           });
