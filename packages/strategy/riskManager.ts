@@ -21,8 +21,13 @@ const CORRELATION_GROUPS: Record<string, { group: string, weight: number }> = {
 export async function validateGlobalSignal(
   supabase: SupabaseClient,
   symbol: string,
-  currentSnapshot?: LogicContext
+  currentSnapshot?: LogicContext,
+  isManual: boolean = false
 ): Promise<RiskValidationResult> {
+  if (isManual) {
+    console.log(`[Risk Manager] Manual bypass engaged for ${symbol}. Skipping correlation and isolation guards.`);
+    return { valid: true };
+  }
   // Fetch active and pending signals
   const { data: activeSignals, error: activeError } = await supabase
     .from("trade_opportunities")
