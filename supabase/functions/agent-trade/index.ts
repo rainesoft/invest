@@ -154,8 +154,79 @@ serve(async (req) => {
         } catch (_) { /* non-fatal */ }
       }
 
+      // --- AI-DRIVEN INVALIDATION QUERY ---
+      const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+      const { data: latestOpps } = await supabase
+        .from("trade_opportunities")
+        .select("symbol, side, ai_summary, status, source")
+        .in("symbol", uniqueSymbols)
+        .gte("created_at", fourHoursAgo)
+        .order("created_at", { ascending: false });
+
+      const latestOppMap = new Map<string, any>();
+      if (latestOpps) {
+         for (const opp of latestOpps) {
+            if (!latestOppMap.has(opp.symbol)) {
+               latestOppMap.set(opp.symbol, opp); // Only keeps the most recent one
+            }
+         }
+      }
+      // --- END QUERY ---
+
       for (const [orderId, trade] of orderMap) {
         try {
+          // --- 1. BROKER SYNC CHECK ---
+          const posRes = await fetch(
+            `${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/positions/${orderId}`,
+            { headers: { "auth-token": META_API_TOKEN } }
+          );
+
+          let position = null;
+
+          if (!posRes.ok) {
+            // Check if it's a pending order before assuming it's closed
+            const ordRes = await fetch(
+              `${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/orders/${orderId}`,
+              { headers: { "auth-token": META_API_TOKEN } }
+            );
+            
+            if (ordRes.ok) {
+               // --- PENDING ORDER GARBAGE COLLECTION ---
+               // If the pending order is older than 24 hours, cancel it autonomously.
+               try {
+                 const orderData = await ordRes.json();
+                 if (orderData.time) {
+                   const orderTime = new Date(orderData.time).getTime();
+                   const now = Date.now();
+                   const ageHours = (now - orderTime) / (1000 * 60 * 60);
+                   
+                   if (ageHours >= 24) {
+                     console.log(`[Position Manager] Garbage Collection: Cancelling stale pending order ${orderId} for ${trade.symbol} (${Math.round(ageHours)}h old).`);
+                     await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                       method: "POST",
+                       headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                       body: JSON.stringify({ actionType: "ORDER_CANCEL", orderId })
+                     });
+                     await supabase.from("user_trades").update({ status: "CLOSED", ai_risks: "Order cancelled (stale limit order > 24h)" }).eq("meta_api_order_id", orderId);
+                   }
+                 }
+               } catch (e) {
+                 console.error(`[Position Manager] Failed to process pending order for GC:`, e);
+               }
+               // It's a pending order, skip trailing stop logic but do NOT mark as closed
+               continue;
+            } else {
+               // Not a position, not an order -> It is TRULY CLOSED
+               await supabase.from("user_trades").update({ status: "CLOSED" }).eq("meta_api_order_id", orderId).eq("status", "OPEN");
+               continue;
+            }
+          } else {
+            position = await posRes.json();
+          }
+
+          if (position?.error) continue;
+
+          // --- 2. TRAILING STOP LOGIC ---
           const opp = trade.trade_opportunities;
           if (!opp) continue;
 
@@ -165,19 +236,6 @@ serve(async (req) => {
 
           if (!entryPrice || !originalSl) continue;
 
-          const posRes = await fetch(
-            `${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/positions/${orderId}`,
-            { headers: { "auth-token": META_API_TOKEN } }
-          );
-
-          if (!posRes.ok) {
-            await supabase.from("user_trades").update({ status: "CLOSED" }).eq("meta_api_order_id", orderId).eq("status", "OPEN");
-            continue;
-          }
-
-          const position = await posRes.json();
-          if (position.error) continue;
-
           const currentPrice = Number(position.currentPrice);
           const currentSl = Number(position.stopLoss) || originalSl;
           const profit = Number(position.profit) || 0;
@@ -186,6 +244,40 @@ serve(async (req) => {
           if (riskDist === 0) continue;
 
           const isLong = trade.side === "LONG";
+          
+          // --- AI-DRIVEN INVALIDATION CHECK ---
+          const latestSignal = latestOppMap.get(trade.symbol);
+          if (latestSignal) {
+             const isOpposite = latestSignal.side !== trade.side && latestSignal.status !== "C-Tier"; 
+             const isCTier = latestSignal.ai_summary?.includes("C-Tier") || latestSignal.ai_summary?.includes("No setup");
+             
+             // Swing Protection: Ignore C-Tier if this is a Swing Runner. Only close on Opposite.
+             let shouldInvalidate = false;
+             let reason = "";
+             if (isOpposite) {
+                 shouldInvalidate = true;
+                 reason = "AI Trend Reversal Invalidation (Opposing Setup Detected)";
+             } else if (isCTier && trade.trade_type !== "RUNNER") {
+                 shouldInvalidate = true;
+                 reason = "AI Momentum Invalidation (C-Tier / No Setup Detected)";
+             }
+             
+             if (shouldInvalidate) {
+                 console.log(`[Position Manager] AI-Driven Invalidation triggered for ${trade.symbol}! ${reason}. Closing position.`);
+                 const closeRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                     method: "POST",
+                     headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                     body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: orderId })
+                 });
+                 if (closeRes.ok) {
+                     await supabase.from("user_trades").update({ status: "CLOSED", ai_risks: `Closed by Position Manager: ${reason}` }).eq("meta_api_order_id", orderId);
+                     moves.push({ symbol: trade.symbol, action: "AI Trend Reversal Close", from: currentPrice, to: currentPrice });
+                     continue; // Skip trailing stop logic and move to next trade
+                 }
+             }
+          }
+          // --- END INVALIDATION CHECK ---
+
           const priceMoveInR = isLong
             ? (currentPrice - entryPrice) / riskDist
             : (entryPrice - currentPrice) / riskDist;
@@ -215,7 +307,7 @@ serve(async (req) => {
                 newSl = lockSl;
                 actionName = `LOCK_IN_1R (profit +${priceMoveInR.toFixed(1)}R)`;
               }
-            } else if (priceMoveInR >= 1.0) {
+            } else if (priceMoveInR >= 0.75) {
               const beSl = Number(entryPrice.toFixed(5));
               const isImprovement = isLong ? beSl > currentSl : beSl < currentSl;
               if (isImprovement) {
@@ -297,10 +389,19 @@ serve(async (req) => {
       return match ? `${match[1]}-Tier` : null;
     })();
 
-    if (!isManual && signalTier === "C-Tier") {
-      console.log(`[PAMM Router] Skipping PAMM execution for ${signalTier} signal.`);
-      // We skip executing on the Master broker. B-Tier will still trigger a Telegram broadcast via its own webhook.
+    if (!isManual && (signalTier === "C-Tier" || signalTier === "B-Tier")) {
+      console.log(`[PAMM Router] Skipping PAMM execution for ${signalTier} signal (Minimum A-Tier required).`);
       return new Response(`Skipped execution for ${signalTier}`, { status: 200 });
+    }
+
+    // === EXECUTION GUARD: TIME OF DAY KILL ZONE ===
+    // Prevent automated execution during Asian session (22:00 - 06:00 UTC) to avoid low volume chop
+    if (!isManual) {
+      const currentHourUTC = new Date().getUTCHours();
+      if (currentHourUTC >= 22 || currentHourUTC < 6) {
+        console.log(`[PAMM Router] Execution blocked: Inside Asian Session Kill Zone (${currentHourUTC}:00 UTC).`);
+        return new Response(`Blocked by Kill Zone filter at ${currentHourUTC}:00 UTC`, { status: 200 });
+      }
     }
 
     // Fetch all active funded users in the PAMM
@@ -322,6 +423,36 @@ serve(async (req) => {
       : [{ price: defaultEntryPrice, weight: 1.0 }];
     let stopLoss = stopPlan.stop || stopPlan.stop_price;
     let takeProfit = signal.take_profit_json?.tp || signal.take_profit_json?.tp_price;
+
+    // === EXECUTION GUARD: DYNAMIC ATR STOP LOSS FLOOR ===
+    // Prevent stop losses that are too tight to survive market noise
+    if (!isManual && defaultEntryPrice && stopLoss) {
+      try {
+        const bars = await fetchPaperBars(signal.symbol, "30m", 50, supabase);
+        if (bars.length >= 14) {
+          const snap = getContextSnapshot(
+            bars.map((b: any) => b.t),
+            bars.map((b: any) => b.o),
+            bars.map((b: any) => b.h),
+            bars.map((b: any) => b.l),
+            bars.map((b: any) => b.c)
+          );
+          const atr = snap.atr_14 || 0;
+          if (atr > 0) {
+            const currentRisk = Math.abs(defaultEntryPrice - stopLoss);
+            if (currentRisk < atr) {
+              const isLong = signal.side === "LONG" || signal.side === "BUY";
+              stopLoss = isLong ? defaultEntryPrice - atr : defaultEntryPrice + atr;
+              // Format to 5 decimal places safely
+              stopLoss = Number(stopLoss.toFixed(5));
+              console.log(`[PAMM Router] Widen Stop Loss: Risk ${currentRisk.toFixed(4)} was less than 1.0x ATR (${atr.toFixed(4)}). Adjusted to ${stopLoss}.`);
+            }
+          }
+        }
+      } catch (err) {
+        console.error(`[PAMM Router] Failed to calculate ATR for SL floor:`, err);
+      }
+    }
 
     // === EXECUTION GUARD 1: TP DIRECTION VALIDATION ===
     // Prevents placing orders where TP is on the wrong side of entry.
@@ -540,12 +671,34 @@ serve(async (req) => {
     let masterOrderId: string | null = null;
     let masterError: string | null = null;
 
+    // --- EXECUTION DESK: PENDING ORDER DEDUPLICATION ---
+    if (!isMarketOrder) {
+      try {
+        const ordersUrl = `${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/orders`;
+        const ordRes = await fetch(ordersUrl, { headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" } });
+        if (ordRes.ok) {
+           const orders = await ordRes.json();
+           const existing = orders.find((o: any) => o.symbol === signal.symbol && o.type === actionType && Math.abs(o.openPrice - defaultEntryPrice) / defaultEntryPrice < 0.001);
+           if (existing) {
+              console.log(`[Execution Desk] Deduplication triggered: Pending order already exists for ${signal.symbol} at ${defaultEntryPrice}`);
+              const dedupReason = `Rejected by Execution Desk: Identical pending order already exists at ${defaultEntryPrice} (Order Stacking prevented).`;
+              await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + dedupReason, ai_risks: dedupReason }).eq("id", signal.id);
+              return new Response(JSON.stringify({ success: true, message: "Rejected due to order deduplication" }), { status: 200 });
+           }
+        }
+      } catch (e) {
+        console.error("Failed to check pending orders for deduplication:", e);
+      }
+    }
+    // --- END DEDUPLICATION ---
+
     // Split into Quick Exit and Runner for PAMM master account
     const halfVolume = Math.max(0.01, Math.round((totalMasterVolume / 2) * 100) / 100);
     const riskDistance = Math.abs(defaultEntryPrice - stopLoss);
+    // Enforce strict 1.0R hardcoded cashout on TP1 for early profit taking
     const quickExitTP = signal.side === "LONG"
-      ? Number((defaultEntryPrice + riskDistance).toFixed(5))
-      : Number((defaultEntryPrice - riskDistance).toFixed(5));
+      ? Number((defaultEntryPrice + (riskDistance * 1.0)).toFixed(5))
+      : Number((defaultEntryPrice - (riskDistance * 1.0)).toFixed(5));
 
     // --- EXECUTION DESK: SMART ROUTING / ORDER SLICING ---
     const MAX_LOT_SIZE = 1.0;
@@ -561,8 +714,14 @@ serve(async (req) => {
     }
 
     const atrRaw = signal.stop_plan_json?.atr;
-    if (atrRaw) {
-      payloadB.trailingStopLoss = { distance: { distance: Number((atrRaw * 2.0).toFixed(5)), units: "RELATIVE_PRICE" } };
+    if (riskDistance > 0) {
+      // Dynamic Trailing Stop Fix: Clamp trailing distance to 1.5x initial risk if ATR is too wide
+      let trailingDist = atrRaw ? Number((atrRaw * 2.0).toFixed(5)) : Number((riskDistance * 1.5).toFixed(5));
+      if (trailingDist > riskDistance * 2.0) {
+        trailingDist = Number((riskDistance * 1.5).toFixed(5));
+        console.log(`[Execution Desk] Clamped Trailing Stop distance to ${trailingDist} (1.5x risk) instead of huge ATR.`);
+      }
+      payloadB.trailingStopLoss = { distance: { distance: trailingDist, units: "RELATIVE_PRICE" } };
     }
 
     try {
