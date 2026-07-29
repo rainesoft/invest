@@ -6,9 +6,10 @@ serve(async (req) => {
 
   const url = Deno.env.get("SUPABASE_URL");
   const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const openaiKey = Deno.env.get("OPENAI_API_KEY");
   
-  if (!url || !key) {
-    return new Response(JSON.stringify({ ok: false, error: "Missing Supabase env vars" }), { status: 500 });
+  if (!url || !key || !openaiKey) {
+    return new Response(JSON.stringify({ ok: false, error: "Missing env vars" }), { status: 500 });
   }
 
   const authHeader = req.headers.get("Authorization");
@@ -144,13 +145,60 @@ serve(async (req) => {
       }
     }
 
-    // 3. The Ledger Update
+    // 3. Real-Time AI Post-Mortem (Feedback Loop)
+    let finalAiSummary = signal.ai_summary;
+    if (outcome === 'LOST') {
+      try {
+        console.log(`[Post-Mortem] Triggering real-time reflection for ${symbol}...`);
+        const recentCandles = candles.slice(-10); // Last 10 candles leading to the stop loss
+        const prompt = `You are a Post-Mortem AI for an algorithmic trading desk.
+A recent ${side} trade on ${symbol} just hit its Stop Loss.
+
+[ORIGINAL AI REASONING]:
+${signal.ai_summary}
+
+[TRADE PARAMETERS]:
+Entry: ${entryPrice}
+Stop Loss: ${stopLoss}
+Take Profit: ${takeProfit}
+
+[LAST 10 CANDLES BEFORE STOP LOSS]:
+${JSON.stringify(recentCandles)}
+
+Analyze the failure. Was the original reasoning flawed? Did we buy into resistance? Was it just market noise?
+Provide a concise, 1-2 sentence post-mortem explanation. Do not use markdown.`;
+
+        const res = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${openaiKey}` },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.2
+          })
+        });
+
+        if (res.ok) {
+          const json = await res.json();
+          const reflection = json.choices?.[0]?.message?.content?.trim();
+          if (reflection) {
+            finalAiSummary = `${signal.ai_summary}\n\n[POST-MORTEM]: ${reflection}`;
+            console.log(`[Post-Mortem] Generated reflection: ${reflection}`);
+          }
+        }
+      } catch (err: any) {
+        console.error(`[Post-Mortem] Error generating reflection for ${symbol}: ${err.message}`);
+      }
+    }
+
+    // 4. The Ledger Update
     if (outcome) {
       const { error: updateError } = await supabase
         .from("trade_opportunities")
         .update({
           status: outcome,
           r_multiple: rMultiple,
+          ai_summary: finalAiSummary,
           closed_at: closedAt
         })
         .eq("id", signal.id);
