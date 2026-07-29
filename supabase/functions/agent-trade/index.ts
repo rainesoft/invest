@@ -410,6 +410,10 @@ serve(async (req) => {
       .select("*")
       .gt("portfolio_capital", 0);
 
+    // Fetch Global Pyramiding with House Money (PHM) Settings
+    const { data: sysSettings } = await supabase.from("system_settings").select("value").eq("key", "phm_settings").maybeSingle();
+    const phmSettings = sysSettings?.value || { active: false, floor_capital: 0, risk_pct: 0.01 };
+
     if (usersError || !users || users.length === 0) {
       return new Response("No funded PAMM users found.", { status: 200 });
     }
@@ -608,12 +612,26 @@ serve(async (req) => {
         let tierRiskModifier = 1.0;
         if (signalTier === "B-Tier") tierRiskModifier = 0.5;
 
-        // --- ALL-TIME DRAWDOWN BREAKER ---
+        // --- ALL-TIME DRAWDOWN BREAKER & PHM ---
         let drawdownModifier = 1.0;
         const hwm = Number(user.high_water_mark_equity) || Number(user.portfolio_capital);
         const maxDrawdownPct = Number(user.max_drawdown_pct) || 0.05;
-        if (Number(user.portfolio_capital) < hwm * (1 - maxDrawdownPct)) {
-           console.log(`[Drawdown Breaker] User ${user.user_id} breached ${maxDrawdownPct*100}% all-time max drawdown! Blocking new execution.`);
+        
+        let effectiveHwm = hwm;
+        let effectiveRiskPct = Number(user.risk_per_trade_pct);
+        
+        // Global House Money Logic
+        if (phmSettings.active && phmSettings.floor_capital > 0) {
+            if (Number(user.portfolio_capital) > Number(phmSettings.floor_capital)) {
+                effectiveRiskPct = Number(phmSettings.risk_pct) || effectiveRiskPct;
+                console.log(`[PHM Active] User ${user.user_id} is playing with House Money! Risk escalated to ${effectiveRiskPct * 100}%`);
+            }
+            // Override HWM to force a soft-landing at the PHM Floor
+            effectiveHwm = Math.max(hwm, Number(phmSettings.floor_capital));
+        }
+
+        if (Number(user.portfolio_capital) < effectiveHwm * (1 - maxDrawdownPct)) {
+           console.log(`[Drawdown Breaker] User ${user.user_id} breached ${maxDrawdownPct*100}% all-time max drawdown (Relative HWM: ${effectiveHwm})! Blocking new execution.`);
            continue; // Skips allocating volume to this user
         }
 
@@ -627,7 +645,7 @@ serve(async (req) => {
             }
         }
         
-        const riskPerTrade = Number(user.portfolio_capital) * Number(user.risk_per_trade_pct) * entryWeight * tierRiskModifier * confluenceMultiplier * drawdownModifier;
+        const riskPerTrade = Number(user.portfolio_capital) * effectiveRiskPct * entryWeight * tierRiskModifier * confluenceMultiplier * drawdownModifier;
         let volume = pointsAtRisk > 0 ? riskPerTrade / (pointsAtRisk * pointValueUsd) : 0.01;
         volume = Math.max(0.01, Math.round(volume * 100) / 100);
         
