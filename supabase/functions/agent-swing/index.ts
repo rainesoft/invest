@@ -8,7 +8,7 @@ import { isAutoTradingEnabled } from "../../../packages/core/settings.ts";
 import { revalidateOpportunity } from "../../../packages/strategy/revalidation.ts";
 
 import { getContextSnapshot, LogicContext, isBullishEngulfing, isBearishRejection } from "../../../packages/strategy/indicators.ts";
-import { validateGlobalSignal } from "../../../packages/strategy/riskManager.ts";
+import { validateGlobalSignal } from "../../../packages/strategy/agent-risk.ts";
 import OpenAI from "npm:openai";
 import { z } from "npm:zod";
 

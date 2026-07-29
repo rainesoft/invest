@@ -6,7 +6,7 @@ import { insertAuditLog } from "../../../packages/core/audit.ts";
 import { isMarketOpen } from "../../../packages/core/market.ts";
 import { netEdge, transactionCost, slippage } from "../../../packages/strategy/index.ts";
 import { getContextSnapshot, LogicContext, calculatePivotPoints } from "../../../packages/strategy/indicators.ts";
-import { validateGlobalSignal } from "../../../packages/strategy/riskManager.ts";
+import { validateGlobalSignal } from "../../../packages/strategy/agent-risk.ts";
 import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews } from "../../../packages/core/news.ts";
 import { isAutoTradingEnabled } from "../../../packages/core/settings.ts";
 
