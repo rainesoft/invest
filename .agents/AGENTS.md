@@ -3,9 +3,14 @@
 - **High School Reading Level**: All blog posts, academy articles, tutorials, and user-facing educational copy MUST be written at a level that a high schooler can easily understand. Avoid overly dense financial jargon where possible. If complex algorithmic or institutional trading concepts (like "Pearson correlation coefficients" or "covariance") must be discussed, they must be broken down with simple, relatable real-world analogies (e.g., "It's like putting all your eggs in one basket").
 
 
-## Market Analysis Rule
-Never give knee-jerk financial or market assessments based on historical assumptions (e.g. "Gold always goes up during war"). Always pull live market data, chart levels, and recent macroeconomic news first to establish a factual baseline before advising the user on an asset.
+## Market Analysis Rule (Live Data Enforcement & Hierarchy)
+Never give knee-jerk financial or market assessments based on historical assumptions.
+**CRITICAL:** When asked to provide live market analysis, entry points, or S-Tier trade signals in chat, you MUST pull true real-time data to get the exact current price. You must strictly follow this fallback hierarchy:
+1. **VPS Data (Primary):** Query the `market_data_pti` table to see if the VPS has pushed a recent candle (within the last ~30-60 minutes).
+2. **MetaAPI (Secondary):** If the VPS data is stale, attempt to fetch the live price directly via MetaAPI, assuming rate limits and credits allow.
+3. **Web Search (Last Resort):** Only use `search_web` if both the VPS and MetaAPI fail. If you must use this fallback, you **MUST be highly cautious** (as web searches may return futures contracts or exaggerated news) and explicitly inform the user that you are using web data. You must also tell the user exactly what needs fixing (e.g., "MetaAPI is rate-limited" or "The VPS hasn't pushed data since [time]") so they can restore the primary data feeds.
 
+*Note:* You are STRICTLY FORBIDDEN from relying on non-VPS local database snapshots (like `market_context` or `trade_opportunities`) to determine the current price, as that data is only updated on cron cycles and will be stale.
 ## Security First Principle
 Whenever you identify a potential security vulnerability (e.g., exposing an unauthenticated endpoint, missing validation, hardcoded secrets), you MUST proactively suggest implementing the secure alternative. Never prioritize convenience over security in production systems. Specifically, if you deploy unauthenticated endpoints (like using `--no-verify-jwt` for internal webhooks), you must enforce internal authentication inside the function code (such as verifying Webhook Secrets or manually parsing user JWTs) to prevent spoofed payloads.
 
