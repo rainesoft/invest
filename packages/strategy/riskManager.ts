@@ -54,12 +54,12 @@ export async function validateGlobalSignal(
         if (entryPrice) {
           const priceDiff = Math.abs(currentSnapshot.current_price - entryPrice);
           const atr = currentSnapshot.atr_14;
-          // If the current price is at least 0.75 ATR away from the first entry, allow scaling in
-          if (priceDiff > atr * 0.75) {
-            console.log(`[Risk Manager] Pyramiding approved for ${symbol}. Current price is > 0.75 ATR from original entry.`);
+          // If the current price is at least 0.50 ATR away from the first entry, allow scaling in
+          if (priceDiff > atr * 0.50) {
+            console.log(`[Risk Manager] Pyramiding approved for ${symbol}. Current price is > 0.50 ATR from original entry.`);
             // DO NOT return valid yet, we must check correlation limits below
           } else {
-            return { valid: false, reason: `REJECTED: Asset isolation enforced. Active trade for ${symbol} is not far enough in profit (needs >0.75 ATR) to safely scale in.` };
+            return { valid: false, reason: `REJECTED: Asset isolation enforced. Active trade for ${symbol} is not far enough in profit (needs >0.50 ATR) to safely scale in.` };
           }
         }
       } else {
