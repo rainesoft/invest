@@ -307,7 +307,7 @@ serve(async (req) => {
                 newSl = lockSl;
                 actionName = `LOCK_IN_1R (profit +${priceMoveInR.toFixed(1)}R)`;
               }
-            } else if (priceMoveInR >= 0.75) {
+            } else if (priceMoveInR >= 0.50) {
               const beSl = Number(entryPrice.toFixed(5));
               const isImprovement = isLong ? beSl > currentSl : beSl < currentSl;
               if (isImprovement) {
