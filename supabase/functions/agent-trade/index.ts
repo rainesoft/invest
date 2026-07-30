@@ -113,7 +113,7 @@ serve(async (req) => {
         .select(`
           id, meta_api_order_id, symbol, side, status, trade_type, user_id,
           trade_opportunities (
-            entry_plan_json, stop_plan_json, take_profit_json
+            timeframe, entry_plan_json, stop_plan_json, take_profit_json
           )
         `)
         .eq("status", "OPEN")
@@ -137,6 +137,11 @@ serve(async (req) => {
       const errors: string[] = [];
       const atrCache = new Map<string, number>();
       const uniqueSymbols = [...new Set([...orderMap.values()].map(t => t.symbol))];
+
+      // --- EOD SCALP CHECK ---
+      const nyHour = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" })).getHours();
+      const isEodScalp = nyHour >= 16;
+      if (isEodScalp) console.log("[Position Manager] NY Time is >= 16:00 (4 PM). EOD Scalp Liquidation is ACTIVE.");
 
       for (const symbol of uniqueSymbols) {
         try {
@@ -226,9 +231,27 @@ serve(async (req) => {
 
           if (position?.error) continue;
 
-          // --- 2. TRAILING STOP LOGIC ---
           const opp = trade.trade_opportunities;
           if (!opp) continue;
+
+          // --- 2. END OF DAY (EOD) SCALP LIQUIDATION ---
+          // If it is 4 PM NY time or later, and the trade is a Scalp ('30m' timeframe), liquidate it immediately.
+          if (isEodScalp && opp.timeframe === "30m") {
+             console.log(`[Position Manager] EOD LIQUIDATION: Closing Scalp ${orderId} for ${trade.symbol} at ${nyHour}:00 NY Time.`);
+             try {
+                await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                   method: "POST",
+                   headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                   body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: orderId })
+                });
+                await supabase.from("user_trades").update({ status: "CLOSED", ai_risks: "EOD Liquidation (4 PM NY Time)", exit_price: position.currentPrice, profit_loss: position.profit }).eq("meta_api_order_id", orderId);
+             } catch (e) {
+                console.error(`[Position Manager] Failed EOD liquidation for ${orderId}:`, e);
+             }
+             continue; // Skip trailing stop logic
+          }
+
+          // --- 3. TRAILING STOP LOGIC ---
 
           const entryPrice = opp.entry_plan_json?.price || opp.entry_plan_json?.entry_price;
           const originalSl = opp.stop_plan_json?.initial || opp.stop_plan_json?.stop;
