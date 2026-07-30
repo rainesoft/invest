@@ -342,25 +342,23 @@ serve(async (req) => {
 
           if (newSl !== null) {
             console.log(`[Position Manager] ${trade.symbol} ${orderId}: ${actionName} — SL ${currentSl} → ${newSl}`);
-            const modRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
-              method: "POST",
-              headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
-              body: JSON.stringify({
-                actionType: "POSITION_MODIFY",
-                positionId: orderId,
-                stopLoss: newSl,
-                stopLossUnits: "ABSOLUTE_PRICE",
-                ...(originalTp ? { takeProfit: Number(originalTp.toFixed(5)), takeProfitUnits: "ABSOLUTE_PRICE" } : {})
-              })
-            });
-            if (modRes.ok) {
-              moves.push({ symbol: trade.symbol, action: actionName, from: currentSl, to: newSl });
-            } else {
-              errors.push(`${trade.symbol} ${orderId}: modify failed`);
+            
+            // --- VPS EA ROUTING: Save modification to DB instead of MetaAPI ---
+            // The vps-poll endpoint will detect the new SL and the EA will execute the modification.
+            const { data: currentOpp } = await supabase.from("trade_opportunities").select("stop_plan_json").eq("id", opp.id).single();
+            if (currentOpp) {
+               const updatedJson = { ...currentOpp.stop_plan_json, stop: newSl };
+               const modRes = await supabase.from("trade_opportunities").update({ stop_plan_json: updatedJson }).eq("id", opp.id);
+               
+               if (!modRes.error) {
+                 moves.push({ symbol: trade.symbol, action: actionName, from: currentSl, to: newSl });
+               } else {
+                 errors.push(`${trade.symbol} ${orderId}: modify failed (DB Error)`);
+               }
             }
           }
 
-          await new Promise(r => setTimeout(r, 300));
+          await new Promise(r => setTimeout(r, 100));
         } catch (err: any) {
           errors.push(`${orderId}: ${err.message}`);
         }
@@ -705,117 +703,23 @@ serve(async (req) => {
       return new Response("Paper execution complete", { status: 200 });
     }
 
-    // --- EXECUTE MASTER TRADE VIA META API ---
-    totalMasterVolume = Math.max(0.01, Math.round(totalMasterVolume * 100) / 100);
-    const metaApiUrl = `${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`;
-    
-    let masterStatus = "FAILED";
-    let masterOrderId: string | null = null;
-    let masterError: string | null = null;
-
-    // --- EXECUTION DESK: PENDING ORDER DEDUPLICATION ---
-    if (!isMarketOrder) {
-      try {
-        const ordersUrl = `${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/orders`;
-        const ordRes = await fetch(ordersUrl, { headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" } });
-        if (ordRes.ok) {
-           const orders = await ordRes.json();
-           const existing = orders.find((o: any) => o.symbol === signal.symbol && o.type === actionType && Math.abs(o.openPrice - defaultEntryPrice) / defaultEntryPrice < 0.001);
-           if (existing) {
-              console.log(`[Execution Desk] Deduplication triggered: Pending order already exists for ${signal.symbol} at ${defaultEntryPrice}`);
-              const dedupReason = `Rejected by Execution Desk: Identical pending order already exists at ${defaultEntryPrice} (Order Stacking prevented).`;
-              await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + dedupReason, ai_risks: dedupReason }).eq("id", signal.id);
-              return new Response(JSON.stringify({ success: true, message: "Rejected due to order deduplication" }), { status: 200 });
-           }
-        }
-      } catch (e) {
-        console.error("Failed to check pending orders for deduplication:", e);
-      }
-    }
-    // --- END DEDUPLICATION ---
-
-    // Split into Quick Exit and Runner for PAMM master account
-    const halfVolume = Math.max(0.01, Math.round((totalMasterVolume / 2) * 100) / 100);
+    // --- VPS EXECUTION ROUTING ---
     const riskDistance = Math.abs(defaultEntryPrice - stopLoss);
+    
     // Enforce strict 1.0R hardcoded cashout on TP1 for early profit taking
     const quickExitTP = signal.side === "LONG"
       ? Number((defaultEntryPrice + (riskDistance * 1.0)).toFixed(5))
       : Number((defaultEntryPrice - (riskDistance * 1.0)).toFixed(5));
 
-    // --- EXECUTION DESK: SMART ROUTING / ORDER SLICING ---
-    const MAX_LOT_SIZE = 1.0;
-    const numSlices = Math.ceil(halfVolume / MAX_LOT_SIZE);
-    const slicedVolume = Math.max(0.01, Math.round((halfVolume / numSlices) * 100) / 100);
-
-    const payloadA: any = { 
-      actionType, symbol: signal.symbol, volume: slicedVolume, 
-      stopLoss, stopLossUnits: stopLoss ? "ABSOLUTE_PRICE" : undefined, 
-      takeProfit: quickExitTP, takeProfitUnits: quickExitTP ? "ABSOLUTE_PRICE" : undefined 
-    };
-    const payloadB: any = { 
-      actionType, symbol: signal.symbol, volume: slicedVolume, 
-      stopLoss, stopLossUnits: stopLoss ? "ABSOLUTE_PRICE" : undefined, 
-      takeProfit, takeProfitUnits: takeProfit ? "ABSOLUTE_PRICE" : undefined 
-    };
-
-    if (!isMarketOrder) {
-      payloadA.openPrice = defaultEntryPrice;
-      payloadB.openPrice = defaultEntryPrice;
-    }
-
+    // Dynamic Trailing Stop Fix: Clamp trailing distance to 1.5x initial risk if ATR is too wide
     const atrRaw = signal.stop_plan_json?.atr;
-    if (riskDistance > 0) {
-      // Dynamic Trailing Stop Fix: Clamp trailing distance to 1.5x initial risk if ATR is too wide
-      let trailingDist = atrRaw ? Number((atrRaw * 2.0).toFixed(5)) : Number((riskDistance * 1.5).toFixed(5));
-      if (trailingDist > riskDistance * 2.0) {
-        trailingDist = Number((riskDistance * 1.5).toFixed(5));
-        console.log(`[Execution Desk] Clamped Trailing Stop distance to ${trailingDist} (1.5x risk) instead of huge ATR.`);
-      }
-      payloadB.trailingStopLoss = { distance: { distance: trailingDist, units: "RELATIVE_PRICE" } };
+    let trailingDist = atrRaw ? Number((atrRaw * 2.0).toFixed(5)) : Number((riskDistance * 1.5).toFixed(5));
+    if (trailingDist > riskDistance * 2.0) {
+      trailingDist = Number((riskDistance * 1.5).toFixed(5));
     }
 
-    try {
-      let allOk = true;
-      let finalOrderId = "EXECUTED";
-      
-      console.log(`[Execution Desk] Slicing order into ${numSlices} chunks of ${slicedVolume} lots to prevent slippage.`);
-      
-      for (let i = 0; i < numSlices; i++) {
-          const resA = await fetch(metaApiUrl, { method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" }, body: JSON.stringify(payloadA) });
-          const resB = await fetch(metaApiUrl, { method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" }, body: JSON.stringify(payloadB) });
-          
-          if (!resA.ok || !resB.ok) {
-              allOk = false;
-              masterError = (await resA.text()) + " | " + (await resB.text());
-              break;
-          } else if (i === 0) {
-              const dataA = await resA.json();
-              finalOrderId = dataA.orderId || dataA.positionId || dataA.id;
-              
-              if (!finalOrderId) {
-                 allOk = false;
-                 masterError = `Failed to extract numeric Order ID from MetaAPI response: ${JSON.stringify(dataA)}`;
-                 break;
-              }
-          }
-          
-          if (i < numSlices - 1) {
-              // Delay 500ms between slices
-              await new Promise(resolve => setTimeout(resolve, 500));
-          }
-      }
-      
-      if (allOk) {
-        masterStatus = isMarketOrder ? "OPEN" : "PENDING";
-        masterOrderId = finalOrderId;
-      }
-    } catch (e: any) {
-      masterError = e.message;
-    }
-
-    // --- DISTRIBUTE VIRTUAL LEDGER ENTRIES TO USERS ---
+    // --- DISTRIBUTE VIRTUAL LEDGER ENTRIES TO USERS (QUEUED FOR VPS) ---
     for (const alloc of userAllocations) {
-      if (masterStatus === "OPEN") {
         // Leg A (Quick Exit)
         await supabase.from("user_trades").insert({
           id: crypto.randomUUID(),
@@ -825,11 +729,12 @@ serve(async (req) => {
           side: signal.side,
           volume: alloc.volume / 2,
           risk_amount: alloc.risk_amount / 2,
-          status: "OPEN",
-          meta_api_order_id: masterOrderId,
+          status: "PENDING",
           trade_type: "QUICK_EXIT",
         });
+        
         // Leg B (Runner)
+        // Note: Trailing stop logic for RUNNER will be managed by position manager once OPEN.
         await supabase.from("user_trades").insert({
           id: crypto.randomUUID(),
           user_id: alloc.user_id,
@@ -838,28 +743,17 @@ serve(async (req) => {
           side: signal.side,
           volume: alloc.volume / 2,
           risk_amount: alloc.risk_amount / 2,
-          status: "OPEN",
-          meta_api_order_id: masterOrderId,
+          status: "PENDING",
           trade_type: "RUNNER",
         });
-      } else {
-        // Failed, Pending, or otherwise
-        await supabase.from("user_trades").insert({
-          id: crypto.randomUUID(),
-          user_id: alloc.user_id,
-          opportunity_id: signal.id,
-          symbol: signal.symbol,
-          side: signal.side,
-          volume: alloc.volume,
-          risk_amount: alloc.risk_amount,
-          status: masterStatus,
-          error_message: masterError,
-          trade_type: "STANDARD",
-        });
-      }
     }
 
-    return new Response(JSON.stringify({ success: true, masterStatus, masterError }), { status: 200 });
+    await supabase.from("trade_opportunities").update({
+      status: "QUEUED",
+      ai_summary: signal.ai_summary + `\n\n[Execution Desk] Trade allocations generated and queued for VPS execution. Waiting for MT5 EA pickup...`
+    }).eq("id", signal.id);
+
+    return new Response(JSON.stringify({ success: true, message: "Queued for VPS" }), { status: 200, headers: { "Content-Type": "application/json" } });
   } catch (error: any) {
     return new Response(`Error: ${error.message}`, { status: 500 });
   }

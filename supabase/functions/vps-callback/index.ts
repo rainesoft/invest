@@ -25,7 +25,18 @@ serve(async (req) => {
     if (ticket && ticket !== "0") updatePayload.meta_api_order_id = ticket;
     if (errorMsg) updatePayload.error_message = errorMsg;
 
+    const { data: tradeData, error: fetchError } = await supabase.from("user_trades").select("opportunity_id").eq("id", tradeId).single();
+    if (fetchError) throw fetchError;
+
     const { error } = await supabase.from("user_trades").update(updatePayload).eq("id", tradeId);
+    if (error) throw error;
+
+    if (status === "OPEN" && tradeData?.opportunity_id) {
+      await supabase.from("trade_opportunities").update({ 
+        status: "ACTIVE",
+        ai_summary: `[VPS Engine] Trade executed successfully. Ticket: ${ticket}`
+      }).eq("id", tradeData.opportunity_id);
+    }
 
     if (error) throw error;
 

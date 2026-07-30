@@ -16,27 +16,36 @@ serve(async (req) => {
     // 1. Update heartbeat for all users (since it's a single-bot central architecture)
     await supabase.from("user_risk_settings").update({ vps_last_heartbeat: new Date().toISOString() }).neq("user_id", "00000000-0000-0000-0000-000000000000");
 
-    // 2. Fetch all pending trades globally
-    const { data: pendingTrades, error: fetchError } = await supabase
+    // 2. Fetch HFT bias
+    const { data: riskSettings } = await supabase
+      .from("user_risk_settings")
+      .select("hft_bias")
+      .eq("user_id", "912d249b-9be8-4691-a11b-5b00f386a804") // use central user
+      .single();
+    
+    const currentBias = riskSettings?.hft_bias || "NEUTRAL";
+
+    // 3. Fetch pending and open trades for the VPS
+    const { data: activeTrades, error: fetchError } = await supabase
       .from("user_trades")
       .select(`
-        id, symbol, side, volume, trade_type,
+        id, symbol, side, volume, trade_type, status, meta_api_order_id,
         trade_opportunities (
           entry_plan_json,
           stop_plan_json,
           take_profit_json
         )
       `)
-      .eq("status", "VPS_PENDING");
+      .in("status", ["VPS_PENDING", "OPEN"]);
 
     if (fetchError) throw fetchError;
 
-    if (!pendingTrades || pendingTrades.length === 0) {
-      return new Response("NO_TRADES", { headers: { "Content-Type": "text/plain" } });
+    if (!activeTrades || activeTrades.length === 0) {
+      return new Response("NO_TRADES\nBIAS:" + currentBias, { headers: { "Content-Type": "text/plain" } });
     }
 
-    let csvResponse = "";
-    for (const trade of pendingTrades) {
+    let csvResponse = "BIAS:" + currentBias + "\n";
+    for (const trade of activeTrades) {
       const opp = trade.trade_opportunities;
       
       const entryPrice = opp?.entry_plan_json?.price || opp?.entry_plan_json?.entry_price || opp?.entry_plan_json?.limit_price || 0;
@@ -52,12 +61,16 @@ serve(async (req) => {
       }
       
       const orderType = opp?.entry_plan_json?.order_type || (trade.side === "LONG" ? "BUY MARKET" : "SELL MARKET");
+      const action = trade.status === "VPS_PENDING" ? "EXECUTE" : "MODIFY";
+      const ticket = trade.meta_api_order_id || "0";
 
-      // Format: ID,SYMBOL,SIDE,VOLUME,STOPLOSS,TAKEPROFIT,TRADE_TYPE,ENTRY_PRICE,ORDER_TYPE
-      csvResponse += `${trade.id},${trade.symbol},${trade.side},${trade.volume},${stopLossRaw},${targetTP},${trade.trade_type},${entryPrice},${orderType}\n`;
+      // Format: ID,SYMBOL,SIDE,VOLUME,STOPLOSS,TAKEPROFIT,TRADE_TYPE,ENTRY_PRICE,ORDER_TYPE,ACTION,TICKET
+      csvResponse += `${trade.id},${trade.symbol},${trade.side},${trade.volume},${stopLossRaw},${targetTP},${trade.trade_type},${entryPrice},${orderType},${action},${ticket}\n`;
       
-      // Lock the trade so it isn't picked up twice by multiple polls
-      await supabase.from("user_trades").update({ status: "VPS_PROCESSING" }).eq("id", trade.id);
+      // Lock the trade so it isn't picked up twice by multiple polls (only for new executions)
+      if (trade.status === "VPS_PENDING") {
+        await supabase.from("user_trades").update({ status: "VPS_PROCESSING" }).eq("id", trade.id);
+      }
     }
 
     return new Response(csvResponse.trim(), { headers: { "Content-Type": "text/plain" } });
