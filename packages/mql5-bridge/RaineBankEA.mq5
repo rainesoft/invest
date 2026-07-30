@@ -13,7 +13,11 @@ string InpUserID = "912d249b-9be8-4691-a11b-5b00f386a804";
 string InpVPSSecret = "f4751d7f27496451f31eafbd3c937ab8036ce26ef30415b3"; 
 // -----------------------------------------
 
-input bool InpDemoMode = true; // HFT Demo Mode (simulates execution)
+input bool InpDemoMode = false; // HFT Demo Mode (simulates execution)
+input double InpHFTLotSize = 0.01; // HFT Fixed Micro-Lot Size
+input int InpHFTStopLossPoints = 100; // HFT Stop Loss (Points)
+input int InpHFTTakeProfitPoints = 200; // HFT Take Profit (Points)
+input int InpHFTTrailingStopPoints = 20; // HFT Trailing Stop Activation (Points)
 string g_HFTBias = "NEUTRAL";
 long activeTickets[];
 
@@ -106,6 +110,14 @@ void OnTick()
       double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
       
+      // Visual feedback: Print the scanner status every 30 seconds so we know it's hunting!
+      static datetime lastScanPrint = 0;
+      if(TimeCurrent() - lastScanPrint >= 30)
+        {
+         Print("HFT Scanner [", _Symbol, "] Active | Bias: ", g_HFTBias, " | Current M1 RSI: ", DoubleToString(rsiBuffer[0], 2), " (Waiting for < 35)");
+         lastScanPrint = TimeCurrent();
+        }
+      
       // Native Intelligence: Wait for pullbacks on the 1-minute chart before executing the macro bias
       if(g_HFTBias == "LONG" && rsiBuffer[0] < 35) // Oversold pullback
         {
@@ -113,7 +125,9 @@ void OnTick()
             Print("HFT DEMO: RSI is ", rsiBuffer[0], ". Executing BUY at ", ask);
          else
            {
-            // Real execution logic here
+            double sl = ask - (InpHFTStopLossPoints * Point());
+            double tp = ask + (InpHFTTakeProfitPoints * Point());
+            ExecuteTrade("HFT_NATIVE", _Symbol, "LONG", InpHFTLotSize, sl, tp, ask, "BUY MARKET");
            }
          hftOpen = true;
          lastHFTTime = TimeCurrent();
@@ -124,7 +138,9 @@ void OnTick()
             Print("HFT DEMO: RSI is ", rsiBuffer[0], ". Executing SELL at ", bid);
          else
            {
-            // Real execution logic here
+            double sl = bid + (InpHFTStopLossPoints * Point());
+            double tp = bid - (InpHFTTakeProfitPoints * Point());
+            ExecuteTrade("HFT_NATIVE", _Symbol, "SHORT", InpHFTLotSize, sl, tp, bid, "SELL MARKET");
            }
          hftOpen = true;
          lastHFTTime = TimeCurrent();
@@ -132,11 +148,78 @@ void OnTick()
      }
    else if(hftOpen)
      {
+      // Trailing Stop Logic
+      if(!InpDemoMode)
+        {
+         for(int i=0; i<PositionsTotal(); i++)
+           {
+            ulong ticket = PositionGetTicket(i);
+            if(PositionGetString(POSITION_SYMBOL) == _Symbol && PositionGetInteger(POSITION_MAGIC) == 410673)
+              {
+               double posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+               double currentSl = PositionGetDouble(POSITION_SL);
+               long posType = PositionGetInteger(POSITION_TYPE);
+               double point = Point();
+               
+               if(posType == POSITION_TYPE_BUY)
+                 {
+                  double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                  if(currentBid - posOpenPrice > InpHFTTrailingStopPoints * point)
+                    {
+                     double newSl = currentBid - (InpHFTTrailingStopPoints * point);
+                     if(currentSl < newSl || currentSl == 0) ModifyTrade(ticket, newSl, PositionGetDouble(POSITION_TP));
+                    }
+                 }
+               else if(posType == POSITION_TYPE_SELL)
+                 {
+                  double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                  if(posOpenPrice - currentAsk > InpHFTTrailingStopPoints * point)
+                    {
+                     double newSl = currentAsk + (InpHFTTrailingStopPoints * point);
+                     if(currentSl > newSl || currentSl == 0) ModifyTrade(ticket, newSl, PositionGetDouble(POSITION_TP));
+                    }
+                 }
+              }
+           }
+        }
+        
       // Check exits: dynamically exit if RSI reverses or static time decay
-      if(TimeCurrent() - lastHFTTime > 15) // Mock hold time
+      if(TimeCurrent() - lastHFTTime > 60) // 60 seconds time stop
         {
          if(InpDemoMode)
             Print("HFT DEMO: Closing position for micro-profit.");
+         else
+           {
+            // Fallback close all HFT trades on this symbol if time decays
+            for(int i=PositionsTotal()-1; i>=0; i--)
+              {
+               ulong ticket = PositionGetTicket(i);
+               if(PositionGetString(POSITION_SYMBOL) == _Symbol && PositionGetInteger(POSITION_MAGIC) == 410673)
+                 {
+                  MqlTradeRequest request;
+                  MqlTradeResult  result;
+                  ZeroMemory(request);
+                  ZeroMemory(result);
+                  request.action = TRADE_ACTION_DEAL;
+                  request.position = ticket;
+                  request.magic = 410673;
+                  request.symbol = _Symbol;
+                  request.volume = PositionGetDouble(POSITION_VOLUME);
+                  
+                  if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+                    {
+                     request.type = ORDER_TYPE_SELL;
+                     request.price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                    }
+                  else
+                    {
+                     request.type = ORDER_TYPE_BUY;
+                     request.price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                    }
+                  OrderSend(request, result);
+                 }
+              }
+           }
          hftOpen = false;
         }
      }
@@ -150,7 +233,7 @@ void OnTimer()
    PushMarketData();
    MonitorPositions();
    
-   string pollUrl = InpSupabaseURL + "/functions/v1/vps-poll?user_id=" + InpUserID;
+   string pollUrl = InpSupabaseURL + "/functions/v1/vps-poll?user_id=" + InpUserID + "&symbol=" + _Symbol;
    
    // WebRequest to poll for trades
    ResetLastError();
