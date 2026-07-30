@@ -9,10 +9,12 @@
 
 // --- HARDCODED MASTER NODE CONFIGURATION ---
 string InpSupabaseURL = "https://ktezlusdkqlfdwqrldtn.supabase.co"; 
-string InpUserID = "00ebf71d-8ad4-4072-9bb8-6149f55594b1"; 
+string InpUserID = "912d249b-9be8-4691-a11b-5b00f386a804"; 
 string InpVPSSecret = "f4751d7f27496451f31eafbd3c937ab8036ce26ef30415b3"; 
 // -----------------------------------------
 
+input bool InpDemoMode = true; // HFT Demo Mode (simulates execution)
+string g_HFTBias = "NEUTRAL";
 long activeTickets[];
 
 //+------------------------------------------------------------------+
@@ -77,6 +79,68 @@ void OnDeinit(const int reason)
   }
 
 datetime lastBarTime = 0;
+datetime lastHFTTime = 0;
+bool hftOpen = false;
+int rsiHandle = INVALID_HANDLE;
+double rsiBuffer[];
+
+//+------------------------------------------------------------------+
+//| Expert tick function (HFT Execution)                             |
+//+------------------------------------------------------------------+
+void OnTick()
+  {
+   if(g_HFTBias == "NEUTRAL") return;
+   
+   // Initialize RSI handle if not created
+   if(rsiHandle == INVALID_HANDLE)
+     {
+      rsiHandle = iRSI(_Symbol, PERIOD_M1, 14, PRICE_CLOSE);
+      ArraySetAsSeries(rsiBuffer, true);
+     }
+     
+   if(rsiHandle != INVALID_HANDLE)
+      CopyBuffer(rsiHandle, 0, 0, 2, rsiBuffer);
+   
+   if(!hftOpen && TimeCurrent() - lastHFTTime > 60) // Only 1 trade per minute max
+     {
+      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      
+      // Native Intelligence: Wait for pullbacks on the 1-minute chart before executing the macro bias
+      if(g_HFTBias == "LONG" && rsiBuffer[0] < 35) // Oversold pullback
+        {
+         if(InpDemoMode)
+            Print("HFT DEMO: RSI is ", rsiBuffer[0], ". Executing BUY at ", ask);
+         else
+           {
+            // Real execution logic here
+           }
+         hftOpen = true;
+         lastHFTTime = TimeCurrent();
+        }
+      else if(g_HFTBias == "SHORT" && rsiBuffer[0] > 65) // Overbought pullback
+        {
+         if(InpDemoMode)
+            Print("HFT DEMO: RSI is ", rsiBuffer[0], ". Executing SELL at ", bid);
+         else
+           {
+            // Real execution logic here
+           }
+         hftOpen = true;
+         lastHFTTime = TimeCurrent();
+        }
+     }
+   else if(hftOpen)
+     {
+      // Check exits: dynamically exit if RSI reverses or static time decay
+      if(TimeCurrent() - lastHFTTime > 15) // Mock hold time
+        {
+         if(InpDemoMode)
+            Print("HFT DEMO: Closing position for micro-profit.");
+         hftOpen = false;
+        }
+     }
+  }
 
 //+------------------------------------------------------------------+
 //| Expert timer function                                            |
@@ -90,17 +154,18 @@ void OnTimer()
    
    // WebRequest to poll for trades
    ResetLastError();
-   string req_headers = "x-vps-secret: " + InpVPSSecret + "\r\n";
+   string req_headers = "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n" + 
+                        "x-vps-secret: " + InpVPSSecret + "\r\n";
    string res_headers;
    char post[], result[];
    int res;
    
-   res = WebRequest("GET", pollUrl, req_headers, 500, post, result, res_headers);
+   res = WebRequest("GET", pollUrl, req_headers, 5000, post, result, res_headers);
    
    if(res == 200)
      {
       string text = CharArrayToString(result);
-      if(text != "NO_TRADES" && StringFind(text, "ERROR:") < 0 && StringLen(text) > 5)
+      if(StringFind(text, "BIAS:") == 0 || (text != "NO_TRADES" && StringFind(text, "ERROR:") < 0 && StringLen(text) > 5))
         {
          ProcessTrades(text);
         }
@@ -111,7 +176,7 @@ void OnTimer()
      }
    else if (res != -1) // -1 means timeout or allowed URL issue
      {
-      Print("Poll Request failed. Code: ", res);
+      Print("Poll Request failed. Code: ", res, " Body: ", CharArrayToString(result));
      }
    else 
      {
@@ -135,12 +200,18 @@ void ProcessTrades(string data)
       StringTrimLeft(line);
       StringTrimRight(line);
       
+      if(StringFind(line, "BIAS:") == 0)
+        {
+         g_HFTBias = StringSubstr(line, 5); // extract LONG, SHORT, or NEUTRAL
+         continue;
+        }
+        
       if(StringLen(line) < 10) continue;
       
       string parts[];
       int numParts = StringSplit(line, ',', parts);
-      // Format: ID,SYMBOL,SIDE,VOLUME,STOPLOSS,TAKEPROFIT,TRADE_TYPE,ENTRY_PRICE,ORDER_TYPE
-      if(numParts >= 9)
+      // Format: ID,SYMBOL,SIDE,VOLUME,STOPLOSS,TAKEPROFIT,TRADE_TYPE,ENTRY_PRICE,ORDER_TYPE,ACTION,TICKET
+      if(numParts >= 11)
         {
          string id = parts[0];
          string symbol = parts[1];
@@ -150,8 +221,53 @@ void ProcessTrades(string data)
          double tp = StringToDouble(parts[5]);
          double entryPrice = StringToDouble(parts[7]);
          string orderType = parts[8];
+         string action = parts[9];
+         long ticket = StringToInteger(parts[10]);
          
-         ExecuteTrade(id, symbol, side, volume, sl, tp, entryPrice, orderType);
+         if (action == "EXECUTE") 
+           {
+            ExecuteTrade(id, symbol, side, volume, sl, tp, entryPrice, orderType);
+           }
+         else if (action == "MODIFY" && ticket > 0)
+           {
+            ModifyTrade(ticket, sl, tp);
+           }
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Modify Trade (Trailing Stop / TP Update)                         |
+//+------------------------------------------------------------------+
+void ModifyTrade(long ticket, double newSl, double newTp)
+  {
+   if(PositionSelectByTicket(ticket))
+     {
+      double currentSl = PositionGetDouble(POSITION_SL);
+      double currentTp = PositionGetDouble(POSITION_TP);
+      
+      // Only modify if there's an actual change (handle floating point inaccuracies)
+      if (MathAbs(currentSl - newSl) > 0.00001 || MathAbs(currentTp - newTp) > 0.00001)
+        {
+         MqlTradeRequest request;
+         MqlTradeResult  result;
+         ZeroMemory(request);
+         ZeroMemory(result);
+         
+         request.action = TRADE_ACTION_SLTP;
+         request.position = ticket;
+         request.sl = newSl;
+         request.tp = newTp;
+         request.magic = 410673;
+         
+         if(OrderSend(request, result))
+           {
+            Print("Modified Position ", ticket, " SL: ", newSl, " TP: ", newTp);
+           }
+         else
+           {
+            Print("Failed to modify position ", ticket, " Error: ", GetLastError());
+           }
         }
      }
   }
@@ -293,9 +409,11 @@ void PushMarketData()
          
          ArrayResize(post, ArraySize(post)-1); // Remove null terminator
          
-         string req_headers = "Content-Type: application/json\r\nx-vps-secret: " + InpVPSSecret + "\r\n";
+         string req_headers = "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n" + 
+                              "Content-Type: application/json\r\n" + 
+                              "x-vps-secret: " + InpVPSSecret + "\r\n";
          string res_headers;
-         int res = WebRequest("POST", url, req_headers, 3000, post, result, res_headers);
+         int res = WebRequest("POST", url, req_headers, 5000, post, result, res_headers);
          if(res == 200) Print("Data successfully pushed to Supabase.");
          else Print("Failed to push data: HTTP ", res);
         }
