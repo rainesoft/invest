@@ -25,6 +25,12 @@ serve(async (req) => {
     if (ticket && ticket !== "0") updatePayload.meta_api_order_id = ticket;
     if (errorMsg) updatePayload.error_message = errorMsg;
 
+    // Autonomous HFT execution bypasses the Cloud ledger intentionally for speed.
+    // We return 200 OK so the MT5 EA stops retrying and clears the queue.
+    if (tradeId === "HFT_NATIVE") {
+      return new Response("OK", { headers: { "Content-Type": "text/plain" } });
+    }
+
     const { data: tradeData, error: fetchError } = await supabase.from("user_trades").select("opportunity_id").eq("id", tradeId).single();
     if (fetchError) throw fetchError;
 

@@ -33,41 +33,63 @@ serve(async (req) => {
     // 1. Update VPS Heartbeat for all users (since it's a single-bot central architecture)
     await supabase.from("user_risk_settings").update({ vps_last_heartbeat: new Date().toISOString() }).neq("user_id", "00000000-0000-0000-0000-000000000000");
 
-    // 2. Save Bars to market_data_pti
+    // 2. Save Bars to market_data_pti (Optimized Bulk Insert)
     const tfLower = timeframe.toLowerCase();
-    for (const b of bars) {
-      // MQL5 sends time in seconds. Convert to ISO string for Postgres timestamptz.
+    
+    // Map timestamps
+    const mappedBars = await Promise.all(bars.map(async (b: any) => {
       const isoTime = typeof b.t === 'number' ? new Date(b.t * 1000).toISOString() : new Date(b.t).toISOString();
-      
       const hash = await hashBar({ ...b, t: isoTime });
-      const { data: existing } = await supabase
+      return { ...b, isoTime, hash };
+    }));
+
+    if (mappedBars.length > 0) {
+      const minTime = mappedBars.reduce((min, curr) => curr.isoTime < min ? curr.isoTime : min, mappedBars[0].isoTime);
+      const maxTime = mappedBars.reduce((max, curr) => curr.isoTime > max ? curr.isoTime : max, mappedBars[0].isoTime);
+
+      const { data: existingRows } = await supabase
         .from("market_data_pti")
-        .select("hash, revision")
+        .select("ts, hash, revision")
         .eq("symbol", symbol)
         .eq("timeframe", tfLower)
-        .eq("ts", isoTime)
-        .order("revision", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .gte("ts", minTime)
+        .lte("ts", maxTime);
 
-      if (existing && existing.hash === hash) continue;
+      const latestExisting = new Map<string, { hash: string, revision: number }>();
+      if (existingRows) {
+        for (const row of existingRows) {
+          const current = latestExisting.get(row.ts);
+          if (!current || row.revision > current.revision) {
+            latestExisting.set(row.ts, { hash: row.hash, revision: row.revision });
+          }
+        }
+      }
 
-      const revision = existing ? existing.revision + 1 : 0;
-      const { error: insertErr } = await supabase.from("market_data_pti").insert({
-        symbol,
-        timeframe: tfLower,
-        ts: isoTime,
-        o: b.o,
-        h: b.h,
-        l: b.l,
-        c: b.c,
-        v: b.v,
-        revision,
-        hash,
-      });
-      
-      if (insertErr) {
-        throw new Error(`DB Insert Error: ${insertErr.message}`);
+      const rowsToInsert = [];
+      for (const b of mappedBars) {
+        const existing = latestExisting.get(b.isoTime);
+        if (existing && existing.hash === b.hash) continue;
+        
+        const revision = existing ? existing.revision + 1 : 0;
+        rowsToInsert.push({
+          symbol,
+          timeframe: tfLower,
+          ts: b.isoTime,
+          o: b.o,
+          h: b.h,
+          l: b.l,
+          c: b.c,
+          v: b.v,
+          revision,
+          hash: b.hash,
+        });
+      }
+
+      if (rowsToInsert.length > 0) {
+        const { error: insertErr } = await supabase.from("market_data_pti").insert(rowsToInsert);
+        if (insertErr) {
+          throw new Error(`DB Bulk Insert Error: ${insertErr.message}`);
+        }
       }
     }
 

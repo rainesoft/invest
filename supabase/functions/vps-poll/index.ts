@@ -23,7 +23,11 @@ serve(async (req) => {
       .eq("user_id", "912d249b-9be8-4691-a11b-5b00f386a804") // use central user
       .single();
     
-    const currentBias = riskSettings?.hft_bias || "NEUTRAL";
+    const symbol = url.searchParams.get("symbol");
+    let currentBias = "NEUTRAL";
+    if (riskSettings && typeof riskSettings.hft_bias === "object" && riskSettings.hft_bias !== null && symbol) {
+      currentBias = (riskSettings.hft_bias as Record<string, string>)[symbol] || "NEUTRAL";
+    }
 
     // 3. Fetch pending and open trades for the VPS
     const { data: activeTrades, error: fetchError } = await supabase
