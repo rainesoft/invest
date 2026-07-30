@@ -87,7 +87,9 @@ export async function getAccountInformation(settings: any) {
   if (settings.active_broker !== 'METAAPI') {
     return null;
   }
-  return metaApiFetch('/accountInformation', { method: 'GET' }, settings.meta_api_token, settings.meta_api_account_id);
+  const token = settings.meta_api_token || getEnv('META_API_TOKEN') || '';
+  const account = settings.meta_api_account_id || getEnv('META_API_ACCOUNT_ID') || '';
+  return metaApiFetch('/accountInformation', { method: 'GET' }, token, account);
 }
 
 export async function placePaperOrder(
@@ -116,6 +118,9 @@ export async function placePaperOrder(
       actionType = order.side === 'buy' ? 'ORDER_TYPE_BUY_STOP' : 'ORDER_TYPE_SELL_STOP';
     }
 
+    const token = settings.meta_api_token || getEnv('META_API_TOKEN') || '';
+    const account = settings.meta_api_account_id || getEnv('META_API_ACCOUNT_ID') || '';
+
     res = await metaApiFetch('/trade', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -130,7 +135,7 @@ export async function placePaperOrder(
         takeProfitUnits: order.takeProfit ? 'ABSOLUTE_PRICE' : undefined,
         clientId: order.clientOrderId,
       }),
-    }, settings.meta_api_token, settings.meta_api_account_id);
+    }, token, account);
   } else {
     // Fallback to Alpaca
     res = await alpacaFetch('/orders', {
@@ -338,10 +343,13 @@ export async function fetchPaperBars(
       } else if (tfNorm.startsWith('d') && tfNorm.length > 1) {
         tfNorm = tfNorm.replace('d', '') + 'd'; // 'd1' -> '1d'
       }
+      const token = settings.meta_api_token || getEnv('META_API_TOKEN') || '';
+      const account = settings.meta_api_account_id || getEnv('META_API_ACCOUNT_ID') || '';
+
       const res = await metaApiMarketDataFetch(
         `/historical-market-data/symbols/${symbol}/timeframes/${tfNorm}/candles?limit=${limit}`,
-        settings.meta_api_token,
-        settings.meta_api_account_id
+        token,
+        account
       );
       
       const bars = (res || []).map((c: any) => ({
@@ -488,7 +496,9 @@ export async function syncBrokerPosition(
     }
     
     if (settings.active_broker === 'METAAPI') {
-      const res = await metaApiFetch(`/positions`, { method: 'GET' }, settings.meta_api_token, settings.meta_api_account_id);
+      const token = settings.meta_api_token || getEnv('META_API_TOKEN') || '';
+      const account = settings.meta_api_account_id || getEnv('META_API_ACCOUNT_ID') || '';
+      const res = await metaApiFetch(`/positions`, { method: 'GET' }, token, account);
       const position = (res || []).find((p: any) => p.symbol === symbol);
       if (position) {
         return { isOpen: true, pl: position.unrealizedProfit || 0, positionId: position.id };
@@ -529,6 +539,9 @@ export async function updateBrokerStopLoss(
     }
     
     if (settings.active_broker === 'METAAPI' && positionId) {
+      const token = settings.meta_api_token || getEnv('META_API_TOKEN') || '';
+      const account = settings.meta_api_account_id || getEnv('META_API_ACCOUNT_ID') || '';
+
       await metaApiFetch('/trade', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -538,7 +551,7 @@ export async function updateBrokerStopLoss(
           stopLoss: newStop,
           stopLossUnits: 'ABSOLUTE_PRICE'
         }),
-      }, settings.meta_api_token, settings.meta_api_account_id);
+      }, token, account);
       return true;
     } else {
       // For Alpaca, bracket orders must be replaced via the orders API. 
