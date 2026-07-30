@@ -1002,12 +1002,22 @@ serve(async (req) => {
           const entry = evaluation.execution_parameters.suggested_entry_price!;
           let sl = evaluation.execution_parameters.suggested_stop_loss!;
 
-          // --- OVERRIDE: HARDCODE STOP LOSS (1.5x ATR) ---
+          // --- OVERRIDE: DYNAMIC ATR MINIMUM (Respects wider AI structural stops) ---
           const atr = (snapshot as any).atr_14 || 10;
-          if (evaluation.recommended_direction === "LONG") {
-              sl = Number((entry - (atr * 1.5)).toFixed(3));
-          } else {
-              sl = Number((entry + (atr * 1.5)).toFixed(3));
+          if (atr > 0) {
+            const preciousMetalsAndCrypto = ['XAUUSD', 'XAGUSD', 'BTCUSD'];
+            const atrMultiplier = preciousMetalsAndCrypto.includes(symbol) ? 3.0 : 2.0;
+            const minAtrDistance = atr * atrMultiplier;
+            const currentDistance = Math.abs(entry - sl);
+            
+            if (currentDistance < minAtrDistance) {
+               console.log(`[Execution Desk] Widening tight AI swing stop loss to minimum ${atrMultiplier}x ATR for ${symbol}`);
+               if (evaluation.recommended_direction === "LONG") {
+                   sl = Number((entry - minAtrDistance).toFixed(3));
+               } else {
+                   sl = Number((entry + minAtrDistance).toFixed(3));
+               }
+            }
           }
           evaluation.execution_parameters.suggested_stop_loss = sl;
           const tp1 = evaluation.execution_parameters.take_profit_1;

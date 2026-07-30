@@ -63,6 +63,20 @@ async function saveBars(
   }
 }
 
+async function pingHFTDirector(symbol: string, bias: string) {
+  try {
+    const webhookUrl = (Deno.env.get("SUPABASE_URL") || "").replace(/\/$/, "") + "/functions/v1/agent-hft-director";
+    await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol, bias })
+    });
+    console.log(`[Hive Mind] Synchronized ${symbol} HFT bias to ${bias}`);
+  } catch (e) {
+    console.error(`[Hive Mind] Failed to synchronize HFT bias for ${symbol}:`, e);
+  }
+}
+
 const TradeEvaluationSchema = z.object({
   thought_process: z.string().describe("Briefly evaluate the EMAs, state the LTF BOS, calculate the Entry, SL, TP, and verify the R:R ratio mathematically BEFORE returning parameters."),
   calculated_rr: z.number().nullable().describe("The mathematical R:R calculated in the thought_process"),
@@ -873,13 +887,22 @@ serve(async (req) => {
             let entry_price = Number((evaluation.execution_parameters?.suggested_entry_price || snapshot.current_price).toFixed(3));
             let stop_loss = Number((evaluation.execution_parameters?.suggested_stop_loss || (dbSide === "LONG" ? snapshot.safe_long_stop_loss : snapshot.safe_short_stop_loss)).toFixed(3));
             
-            // --- OVERRIDE: HARDCODE STOP LOSS (1.5x ATR) ---
+            // --- OVERRIDE: DYNAMIC ATR MINIMUM (Respects wider AI structural stops) ---
             const atr = snapshot.atr_14 || 0;
             if (atr > 0) {
-              if (dbSide === "LONG") {
-                stop_loss = Number((entry_price - (atr * 1.5)).toFixed(3));
-              } else {
-                stop_loss = Number((entry_price + (atr * 1.5)).toFixed(3));
+              const preciousMetalsAndCrypto = ['XAUUSD', 'XAGUSD', 'BTCUSD'];
+              const atrMultiplier = preciousMetalsAndCrypto.includes(symbol) ? 3.0 : 2.0;
+              const minAtrDistance = atr * atrMultiplier;
+              const currentDistance = Math.abs(entry_price - stop_loss);
+              
+              // Only widen the stop loss if the AI suggested one is too tight
+              if (currentDistance < minAtrDistance) {
+                 console.log(`[Execution Desk] Widening tight AI stop loss to minimum ${atrMultiplier}x ATR for ${symbol}`);
+                 if (dbSide === "LONG") {
+                   stop_loss = Number((entry_price - minAtrDistance).toFixed(3));
+                 } else {
+                   stop_loss = Number((entry_price + minAtrDistance).toFixed(3));
+                 }
               }
             }
             let raw_confidence = evaluation.confidence_score || 50;
@@ -959,6 +982,9 @@ serve(async (req) => {
                 risk_summary: `RSI ${snapshot.rsi_14}`,
                 confidence: confidence_score
               });
+              
+              // Hive Mind: Reset HFT bias on major AI rejection
+              await pingHFTDirector(symbol, "NEUTRAL");
               return;
             }
 
@@ -1102,6 +1128,9 @@ serve(async (req) => {
                 model_version: modelVersion,
                 risk_summary: `RSI ${snapshot.rsi_14}`
               });
+              
+              // Hive Mind: Reset HFT bias on Execution Desk structural rejection
+              await pingHFTDirector(symbol, "NEUTRAL");
               return;
             }
 
@@ -1144,6 +1173,9 @@ serve(async (req) => {
             if (!error && data) {
               console.log(`[Success] Opportunity generated for ${symbol}: ID ${data.id}`);
               sendEvent({ type: 'progress', message: `[Success] Opportunity generated for ${symbol}` });
+              
+              // Hive Mind: Align HFT Director with the new macro thesis!
+              await pingHFTDirector(symbol, dbSide);
               
               // Clean up any active sniper watchlists for this symbol to prevent duplicate execution
               await supabase.from("trade_watchlists").update({ status: 'CANCELLED' }).eq('symbol', symbol).eq('status', 'WATCHING');

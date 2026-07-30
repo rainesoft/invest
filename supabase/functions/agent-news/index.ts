@@ -25,6 +25,20 @@ const DRY_RUN                  = Deno.env.get("SCOUT_DRY_RUN") === "true";
 const OPENAI_API_KEY           = Deno.env.get("OPENAI_API_KEY") ?? "";
 const TAVILY_API_KEY           = Deno.env.get("TAVILY_API_KEY") ?? "";
 
+async function pingHFTDirector(symbol: string, bias: string) {
+  try {
+    const webhookUrl = (SUPABASE_URL || "").replace(/\/$/, "") + "/functions/v1/agent-hft-director";
+    await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol, bias })
+    });
+    console.log(`[Hive Mind] Synchronized ${symbol} HFT bias to ${bias}`);
+  } catch (e) {
+    console.error(`[Hive Mind] Failed to synchronize HFT bias for ${symbol}:`, e);
+  }
+}
+
 // ── MACRO RULES ──────────────────────────────────────────────────────────────
 // Define exactly which events to trade, and how much deviation from the forecast
 // is required to trigger a trade.
@@ -314,6 +328,10 @@ serve(async (req) => {
                console.error(`[Macro Scout] [Trace: ${traceId}] Opportunity Insert Error:`, oppError);
                continue;
             }
+
+            // Hive Mind: Instantly align the HFT Director with the news catalyst
+            const hftBias = action.side === "BUY" ? "LONG" : "SHORT";
+            await pingHFTDirector(action.symbol, hftBias);
 
             // Write Volatility Lockout flag to prevent other agents from trading in chaos
             await supabase.from("market_context").insert({
