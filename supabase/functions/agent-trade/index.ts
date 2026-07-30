@@ -349,7 +349,8 @@ serve(async (req) => {
                 actionType: "POSITION_MODIFY",
                 positionId: orderId,
                 stopLoss: newSl,
-                ...(originalTp ? { takeProfit: Number(originalTp.toFixed(5)) } : {})
+                stopLossUnits: "ABSOLUTE_PRICE",
+                ...(originalTp ? { takeProfit: Number(originalTp.toFixed(5)), takeProfitUnits: "ABSOLUTE_PRICE" } : {})
               })
             });
             if (modRes.ok) {
@@ -746,8 +747,16 @@ serve(async (req) => {
     const numSlices = Math.ceil(halfVolume / MAX_LOT_SIZE);
     const slicedVolume = Math.max(0.01, Math.round((halfVolume / numSlices) * 100) / 100);
 
-    const payloadA: any = { actionType, symbol: signal.symbol, volume: slicedVolume, stopLoss, takeProfit: quickExitTP };
-    const payloadB: any = { actionType, symbol: signal.symbol, volume: slicedVolume, stopLoss, takeProfit };
+    const payloadA: any = { 
+      actionType, symbol: signal.symbol, volume: slicedVolume, 
+      stopLoss, stopLossUnits: stopLoss ? "ABSOLUTE_PRICE" : undefined, 
+      takeProfit: quickExitTP, takeProfitUnits: quickExitTP ? "ABSOLUTE_PRICE" : undefined 
+    };
+    const payloadB: any = { 
+      actionType, symbol: signal.symbol, volume: slicedVolume, 
+      stopLoss, stopLossUnits: stopLoss ? "ABSOLUTE_PRICE" : undefined, 
+      takeProfit, takeProfitUnits: takeProfit ? "ABSOLUTE_PRICE" : undefined 
+    };
 
     if (!isMarketOrder) {
       payloadA.openPrice = defaultEntryPrice;

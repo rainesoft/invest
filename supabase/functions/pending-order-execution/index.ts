@@ -111,7 +111,9 @@ serve(async (req) => {
             symbol: trade.symbol,
             volume: trade.volume,
             stopLoss: stopLoss,
+            stopLossUnits: stopLoss ? "ABSOLUTE_PRICE" : undefined,
             takeProfit: targetTP,
+            takeProfitUnits: targetTP ? "ABSOLUTE_PRICE" : undefined,
             clientId: trade.id, // Using user_trades.id as the MetaAPI clientId
           };
 
