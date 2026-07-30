@@ -872,6 +872,16 @@ serve(async (req) => {
             
             let entry_price = Number((evaluation.execution_parameters?.suggested_entry_price || snapshot.current_price).toFixed(3));
             let stop_loss = Number((evaluation.execution_parameters?.suggested_stop_loss || (dbSide === "LONG" ? snapshot.safe_long_stop_loss : snapshot.safe_short_stop_loss)).toFixed(3));
+            
+            // --- OVERRIDE: HARDCODE STOP LOSS (1.5x ATR) ---
+            const atr = snapshot.atr_14 || 0;
+            if (atr > 0) {
+              if (dbSide === "LONG") {
+                stop_loss = Number((entry_price - (atr * 1.5)).toFixed(3));
+              } else {
+                stop_loss = Number((entry_price + (atr * 1.5)).toFixed(3));
+              }
+            }
             let raw_confidence = evaluation.confidence_score || 50;
             const confidence_score = raw_confidence <= 1.0 ? raw_confidence * 100 : raw_confidence;
             let tier = "C-Tier";
@@ -891,6 +901,12 @@ serve(async (req) => {
 
             console.log(`[Layer B: Cognitive Guard] AI Response for ${symbol}: Valid Setup = ${is_valid}, Direction = ${evaluation.recommended_direction}`);
             console.log(`[Layer B] AI Rationale: ${institutional_rationale}`);
+
+            // --- OVERRIDE: ADX FILTER FOR MEAN REVERSION ---
+            if (is_valid && evaluation.strategy_applied === "MEAN_REVERSION" && snapshot.adx_14 && snapshot.adx_14 > 25) {
+               is_valid = false;
+               institutional_rationale = `Execution Desk Rejected: Attempted Mean Reversion in high-momentum environment (ADX > 25).`;
+            }
 
             if (!is_valid || confidence_score < 70) {
               let rejectReason = "";
@@ -961,7 +977,19 @@ serve(async (req) => {
             }
 
             const reward = Math.abs(take_profit - entry_price);
-            const rrRatio = reward / risk;
+            let rrRatio = reward / risk;
+
+            // --- OVERRIDE: CAP SCALPING R:R TO 3.0 ---
+            if (rrRatio > 3.0) {
+               console.log(`[Layer C: Execution Desk] OVERRIDE ${symbol}: Capping R:R from ${rrRatio.toFixed(2)} down to 3.0 max for Scalping.`);
+               institutional_rationale += ` [Execution Desk overrode Take Profit to hard cap 1:3 R:R for Scalp.]`;
+               if (dbSide === "LONG") {
+                  take_profit = Number((entry_price + (risk * 3.0)).toFixed(3));
+               } else {
+                  take_profit = Number((entry_price - (risk * 3.0)).toFixed(3));
+               }
+               rrRatio = 3.0;
+            }
 
             if (rrRatio < 1.20) {
                console.log(`[Layer C: Execution Desk] WARNING ${symbol}: R:R ratio (${rrRatio.toFixed(2)}) is below 1.2 optimal threshold, but publishing anyway.`);

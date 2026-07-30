@@ -930,6 +930,12 @@ serve(async (req) => {
           const confidence = evaluation.confidence_score;
           const tier = getTier(confidence);
 
+          // --- OVERRIDE: ADX FILTER FOR MEAN REVERSION ---
+          if (evaluation.recommended_direction !== "NONE" && evaluation.strategy_applied === "MEAN_REVERSION" && (snapshot as any).adx_14 && (snapshot as any).adx_14 > 25) {
+             evaluation.recommended_direction = "NONE";
+             evaluation.thought_process = `[Execution Desk Override] Attempted Mean Reversion in high-momentum environment (ADX > 25). Strategy blocked.`;
+          }
+
           if (evaluation.recommended_direction === "NONE" || evaluation.recommended_direction === "REQUIRE_LTF_DRILLDOWN" || confidence < 70) {
             let reason = "";
             if (evaluation.recommended_direction === "REQUIRE_LTF_DRILLDOWN") {
@@ -996,49 +1002,13 @@ serve(async (req) => {
           const entry = evaluation.execution_parameters.suggested_entry_price!;
           let sl = evaluation.execution_parameters.suggested_stop_loss!;
 
-          // === DYNAMIC LTF STOP-LOSS COMPRESSION ===
-          let compressed = false;
+          // --- OVERRIDE: HARDCODE STOP LOSS (1.5x ATR) ---
           const atr = (snapshot as any).atr_14 || 10;
-          
           if (evaluation.recommended_direction === "LONG") {
-             if (sl >= entry) {
-                // Fix invalid AI SL
-                sl = entry - (atr * 0.2); 
-             }
-             if ((snapshot as any).ltf_bullish_ob_nearest && entry > (snapshot as any).ltf_bullish_ob_nearest && (snapshot as any).ltf_bullish_ob_nearest > sl) {
-                 sl = (snapshot as any).ltf_bullish_ob_nearest;
-                 compressed = true;
-             } else if (evaluation.strategy_applied?.includes("MACRO_MOMENTUM_BREAKOUT")) {
-                 if (sl < entry) {
-                     sl = entry - ((entry - sl) * 0.2); // Force 80% compression
-                 } else {
-                     sl = entry - (atr * 0.2);
-                 }
-                 compressed = true;
-             }
-          } else if (evaluation.recommended_direction === "SHORT") {
-             if (sl <= entry) {
-                // Fix invalid AI SL
-                sl = entry + (atr * 0.2);
-             }
-             if ((snapshot as any).ltf_bearish_ob_nearest && entry < (snapshot as any).ltf_bearish_ob_nearest && (snapshot as any).ltf_bearish_ob_nearest < sl) {
-                 sl = (snapshot as any).ltf_bearish_ob_nearest;
-                 compressed = true;
-             } else if (evaluation.strategy_applied?.includes("MACRO_MOMENTUM_BREAKOUT")) {
-                 if (sl > entry) {
-                     sl = entry + ((sl - entry) * 0.2); // Force 80% compression
-                 } else {
-                     sl = entry + (atr * 0.2);
-                 }
-                 compressed = true;
-             }
+              sl = Number((entry - (atr * 1.5)).toFixed(3));
+          } else {
+              sl = Number((entry + (atr * 1.5)).toFixed(3));
           }
-          
-          if (compressed) {
-              console.log(`[LTF Compression] Anchored ${symbol} Stop Loss tightly at ${sl} (80% risk reduction)`);
-              sendEvent({ type: "progress", message: `[LTF Compression] Slashed risk by 80%. Anchored Stop Loss tightly at ${sl}` });
-          }
-          // Always update in case we fixed an invalid AI SL
           evaluation.execution_parameters.suggested_stop_loss = sl;
           const tp1 = evaluation.execution_parameters.take_profit_1;
           const tp2 = evaluation.execution_parameters.take_profit_2;
