@@ -124,7 +124,7 @@ export function generateMacroContext(symbol: string, events: FFEvent[] | null, h
   if (headlines && headlines.length > 0) {
     report += `[LIVE BREAKING HEADLINES (LAST 24H) FOR ${symbol}]:\n`;
     headlines.forEach(h => report += `- ${h}\n`);
-    report += `\nCRITICAL DIRECTIVE: If these headlines indicate severe geopolitical shocks, unannounced rate hikes, or sudden crashes that OPPOSE the technical trend, you MUST abort the setup.\n\n`;
+    report += `\nCRITICAL DIRECTIVE: If these headlines indicate severe geopolitical shocks, unannounced rate hikes, or sudden crashes that OPPOSE the technical trend, you MUST abort the setup. Alternatively, if these headlines indicate an overwhelming fundamental trend (e.g., extremely weak demand + supply glut), you MUST classify the macro bias as EXTREMELY_BULLISH or EXTREMELY_BEARISH, which authorizes Breakout Logic.\n\n`;
   }
 
   if (!events) {
@@ -178,8 +178,162 @@ export function generateMacroContext(symbol: string, events: FFEvent[] | null, h
   }
 
   if (hasHighImpact) {
-    report += "\n[CRITICAL MACRO DIRECTIVE]: High-impact events are scheduled today. If your technical bias (B-Tier or A-Tier) aligns with the anticipated volatility of these events (e.g. going LONG on USD pairs during hawkish Fed data), you MUST upgrade the setup to S-Tier.";
+    report += "\n[CRITICAL MACRO DIRECTIVE]: High-impact events are scheduled today. If the fundamentals are heavily skewed and overwhelming the market (e.g. extremely weak demand + supply glut for Oil), you MUST classify the macro bias as EXTREMELY_BULLISH or EXTREMELY_BEARISH instead of standard bullish/bearish, which authorizes Breakout Logic.";
   }
 
   return report;
+}
+
+// ============================================================
+// FOMC / CENTRAL BANK EVENT DETECTION
+// Returns whether a high-impact central bank event has fired
+// within the last `windowHours` hours. Used by agent-swing to
+// activate Volatility Expansion Mode (wider INFLECTION threshold).
+// ============================================================
+export interface CentralBankEventStatus {
+  isActive: boolean;
+  events: FFEvent[];
+  windowHours: number;
+}
+
+const CENTRAL_BANK_PATTERNS = [
+  /Federal Funds Rate/i,
+  /FOMC/i,
+  /Fed Rate/i,
+  /Main Refinancing Rate/i,
+  /ECB Rate/i,
+  /Official Bank Rate/i,
+  /BOE Rate/i,
+  /BOJ Rate/i,
+  /Cash Rate/i,
+  /Overnight Rate/i,
+  /Interest Rate Decision/i,
+  /Monetary Policy/i,
+];
+
+export function detectCentralBankEvent(
+  events: FFEvent[] | null,
+  windowHours = 6
+): CentralBankEventStatus {
+  if (!events || events.length === 0) {
+    return { isActive: false, events: [], windowHours };
+  }
+
+  const now = Date.now();
+  const windowMs = windowHours * 60 * 60 * 1000;
+
+  const matched = events.filter((e) => {
+    if (e.impact !== "High") return false;
+    const eventTime = new Date(e.date).getTime();
+    const msAgo = now - eventTime;
+    // Event fired within the past windowHours AND has actual data published
+    return msAgo >= 0 && msAgo <= windowMs && CENTRAL_BANK_PATTERNS.some((p) => p.test(e.title));
+  });
+
+  return {
+    isActive: matched.length > 0,
+    events: matched,
+    windowHours,
+  };
+}
+
+// ============================================================
+// NEWS-ENHANCED CONFIDENCE BOOST
+// Returns 0–8 bonus confidence points when a high-impact macro
+// event has recently fired AND aligns with the technical direction
+// of the proposed trade. This is the macro-technical convergence
+// trigger that pushes A-Tier setups to S-Tier.
+// ============================================================
+const USD_BULLISH_PATTERNS = [
+  /Non-Farm Employment/i,
+  /NFP/i,
+  /CPI y\/y/i,
+  /Federal Funds Rate/i,
+  /GDP/i,
+  /Retail Sales/i,
+];
+
+// Symbols where USD strength → asset weakness (inverse correlation)
+const USD_INVERSE_SYMBOLS = ["XAUUSD", "XAGUSD", "BTCUSD", "EURUSD", "GBPUSD"];
+// Symbols where USD strength → asset strength or no direct inverse
+const USD_DIRECT_SYMBOLS = ["USDJPY", "USDCHF", "USDCAD", "UKOIL"];
+
+export function computeMacroConfidenceBoost(
+  symbol: string,
+  direction: "LONG" | "SHORT" | string,
+  events: FFEvent[] | null,
+  headlines: string[] | null
+): number {
+  if (!events || events.length === 0) return 0;
+
+  const now = Date.now();
+  const threeHoursMs = 3 * 60 * 60 * 1000;
+
+  // Check for a recently-fired high-impact event (actual data published within 3H)
+  const recentHighImpact = events.filter((e) => {
+    if (e.impact !== "High") return false;
+    const eventTime = new Date(e.date).getTime();
+    const msAgo = now - eventTime;
+    // Has actual data and fired within 3 hours
+    return msAgo >= 0 && msAgo <= threeHoursMs;
+  });
+
+  if (recentHighImpact.length === 0) return 0;
+
+  // Check headline sentiment for alignment signal
+  const bullishSignals = [
+    /beat/i, /surged/i, /stronger/i, /hawkish/i, /rally/i, /breakout/i, /bullish/i,
+    /higher than expected/i, /above forecast/i,
+  ];
+  const bearishSignals = [
+    /miss/i, /fell/i, /weaker/i, /dovish/i, /sell.off/i, /crash/i, /bearish/i,
+    /lower than expected/i, /below forecast/i,
+  ];
+
+  let headlineBullish = 0;
+  let headlineBearish = 0;
+  if (headlines && headlines.length > 0) {
+    for (const h of headlines) {
+      if (bullishSignals.some((p) => p.test(h))) headlineBullish++;
+      if (bearishSignals.some((p) => p.test(h))) headlineBearish++;
+    }
+  }
+
+  // Determine macro directional bias for this symbol
+  const isUsdInverse = USD_INVERSE_SYMBOLS.includes(symbol);
+  const isUsdDirect = USD_DIRECT_SYMBOLS.includes(symbol);
+  const isOil = symbol.includes("OIL");
+
+  // For oil: bullish macro (strong demand, Middle East tension) → bullish oil
+  // For gold/silver/BTC (USD inverse): USD weakness (dovish/miss) → bullish
+  // For USDJPY: USD strength (hawkish/beat) → bullish
+
+  let macroAlignsBullish = false;
+  let macroAlignsBearish = false;
+
+  if (isUsdInverse) {
+    // USD weakness = LONG on Gold/Silver/BTC
+    macroAlignsBullish = headlineBearish > headlineBullish; // bearish USD news → bullish asset
+    macroAlignsBearish = headlineBullish > headlineBearish;
+  } else if (isUsdDirect) {
+    macroAlignsBullish = headlineBullish > headlineBearish;
+    macroAlignsBearish = headlineBearish > headlineBullish;
+  } else if (isOil) {
+    // Oil has complex drivers — use net headline sentiment directly
+    macroAlignsBullish = headlineBullish > headlineBearish;
+    macroAlignsBearish = headlineBearish > headlineBullish;
+  }
+
+  const tradeIsLong = direction === "LONG";
+  const tradeIsShort = direction === "SHORT";
+
+  // Boost if macro aligns with trade direction
+  if ((tradeIsLong && macroAlignsBullish) || (tradeIsShort && macroAlignsBearish)) {
+    console.log(
+      `[MacroBoost] +8 confidence for ${symbol} ${direction}: macro event alignment confirmed (${recentHighImpact.map((e) => e.title).join(", ")})`
+    );
+    return 8;
+  }
+
+  return 0;
 }

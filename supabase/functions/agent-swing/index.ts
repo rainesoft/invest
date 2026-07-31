@@ -2,12 +2,12 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2.108.2";
 import { fetchPaperBars, Bar } from "../../../packages/execution/index.ts";
 import { insertAuditLog } from "../../../packages/core/audit.ts";
-import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews } from "../../../packages/core/news.ts";
+import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews, detectCentralBankEvent, computeMacroConfidenceBoost } from "../../../packages/core/news.ts";
 import { isAutoTradingEnabled } from "../../../packages/core/settings.ts";
 
 import { revalidateOpportunity } from "../../../packages/strategy/revalidation.ts";
 
-import { getContextSnapshot, LogicContext, isBullishEngulfing, isBearishRejection } from "../../../packages/strategy/indicators.ts";
+import { getContextSnapshot, LogicContext, isBullishEngulfing, isBearishRejection, computeHtfFibAlignment, calibrateProbability } from "../../../packages/strategy/indicators.ts";
 import { validateGlobalSignal } from "../../../packages/strategy/agent-risk.ts";
 import OpenAI from "npm:openai";
 import { z } from "npm:zod";
@@ -37,15 +37,25 @@ export type FibLevels = {
 
 export function calculateFibonacciLevels(high: number[], low: number[], close: number[]): FibLevels {
   // Limit to the last 80 bars for Fibonacci to avoid massive macro swings on 300-bar datasets
-  const lookbackBars = 80;
-  const recentHigh = high.slice(-lookbackBars);
-  const recentLow = low.slice(-lookbackBars);
+  let lookbackBars = 80;
+  let recentHigh = high.slice(-lookbackBars);
+  let recentLow = low.slice(-lookbackBars);
 
   // Identify the dominant swing: look at recent history for the major high and low
-  const swing_high = Math.max(...recentHigh);
-  const swing_low = Math.min(...recentLow);
-  const swing_range = swing_high - swing_low;
+  let swing_high = Math.max(...recentHigh);
+  let swing_low = Math.min(...recentLow);
+  let swing_range = swing_high - swing_low;
   const current_price = close[close.length - 1];
+
+  // Dynamic Lookback Expansion: If volatility is extremely low (range < 0.5% of price), expand lookback to find the real structural range
+  if (swing_range / current_price < 0.005 && high.length >= 150) {
+    lookbackBars = 150;
+    recentHigh = high.slice(-lookbackBars);
+    recentLow = low.slice(-lookbackBars);
+    swing_high = Math.max(...recentHigh);
+    swing_low = Math.min(...recentLow);
+    swing_range = swing_high - swing_low;
+  }
 
   // Determine if we are in a bullish retracement (came from low, pulled back from high)
   // or bearish retracement (came from high, bouncing from low)
@@ -181,6 +191,8 @@ async function evaluateSwingOpportunity(
   timeframe: string,
   historicalMemory: string,
   macroContext: string,
+  fomcModeActive: boolean,
+  inflectionThresholdPct: number,
 ): Promise<SwingTrade> {
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
   if (!openaiKey) throw new Error("No OpenAI key found");
@@ -227,7 +239,7 @@ ${macroContext || "No major macro events in the window."}
 0. ORDER OF OPERATIONS (CRITICAL PRIORITY):
    - STEP 1: Always check for MACRO OVERRIDES (Rule 3) and SNIPER OVERRIDES (Rule 4) FIRST. If Macro Sentiment is 10/10 or a Liquidity Sweep is present, you MUST originate the trade. Do NOT look for reasons to reject.
    - STEP 2: If no overrides apply, calculate your Fib distances.
-   - STEP 3: Only if distance is <= 0.5% and overrides are absent, you may consider an INFLECTION_POINT_WAIT rejection.
+   - STEP 3: Only if distance is <= ${inflectionThresholdPct}% (current mode: ${fomcModeActive ? 'POST-EVENT VOLATILITY — threshold EXPANDED' : 'standard'}) and overrides are absent, you may consider an INFLECTION_POINT_WAIT rejection.
    - NEVER invoke a rejection guardrail without explicitly explaining why the Overrides in Step 1 did not apply.
 
 1. FIBONACCI & SMC CONFLUENCE:
@@ -244,11 +256,12 @@ ${macroContext || "No major macro events in the window."}
    - Anchor your Stop Loss directly behind the LTF Order Block. This compresses the risk by 80%, instantly transforming a 1:1 trade into a massive 1:5.0 S-Tier setup.
    - CRITICAL REQUIREMENT: Calculate your R:R mathematically before returning your parameters. If your R:R to TP2 is less than 2.5, you MUST tighten your Stop Loss behind a lower timeframe structural level until the mathematical ratio is >= 2.5, otherwise your trade will be mechanically rejected.
 
-3. MOMENTUM BREAKOUT STRATEGIES (IGNORING FIBS):
-   - If the MACRO SENTIMENT SCORE is > 8 (Extremely Bullish) or < -8 (Extremely Bearish), you are authorized to IGNORE Fibonacci retracements.
+3. MACRO-BACKED MOMENTUM BREAKOUT STRATEGIES (IGNORING FIBS):
+   - If the MACRO CONTEXT indicates an overwhelming fundamental trend (e.g., extremely bearish due to weak demand and supply increases), you are authorized to IGNORE Fibonacci retracements.
    - In a massive fundamental run, price will not pull back to 61.8%.
-   - In this state, approve a MACRO_MOMENTUM_BREAKOUT_LONG or SHORT trade. Buy/sell the breakout of structural resistance/support using a tighter trailing ATR stop instead of waiting for a deep pullback.
-   - EXECUTION DIRECTIVE: For momentum breakouts, you MUST use a MARKET order with 'suggested_entry_price' set exactly to the 'current_price'. Do not wait for a limit pullback.
+   - If macro is extremely BULLISH and price is within 1% of the swing_high, approve an S-Tier MACRO_MOMENTUM_BREAKOUT_LONG. Set entry_type to "Buy Stop" placed just above the swing_high.
+   - If macro is extremely BEARISH and price is within 1% of the swing_low, approve an S-Tier MACRO_MOMENTUM_BREAKOUT_SHORT. Set entry_type to "Sell Stop" placed just below the swing_low.
+   - You MUST use "Buy Stop" or "Sell Stop" so the execution layer only enters IF the breakout actually triggers.
 
 4. LIQUIDITY SWEEP "SNIPER" MODE (TURTLESOUP):
    - Institutional algorithms buy below support after retail stops are hunted, and sell above resistance.
@@ -272,8 +285,9 @@ ${macroContext || "No major macro events in the window."}
    
 8. INFLECTION POINT AMBIGUITY GUARD (CRITICAL):
    - BEFORE invoking this guard, you MUST calculate the percentage distance between the Current Price and the nearest Fibonacci or Structural level. (Formula: abs(Current Price - Nearest Level) / Nearest Level * 100)
-   - If the Percentage Distance is > 0.5%, the price is NOT resting on a level. You CANNOT use INFLECTION_POINT_WAIT.
-   - If price is resting squarely on a boundary (<= 0.5%) AND momentum indicators (RSI flat, ADX low) do not provide overwhelming confirmation, you MUST explicitly reject the trade.
+   - [CURRENT THRESHOLD = ${inflectionThresholdPct}%] ${fomcModeActive ? '[POST-EVENT VOLATILITY MODE ACTIVE: A central bank event fired recently. Threshold expanded to ' + inflectionThresholdPct + '% to account for wider ATR. Do NOT reject setups that are merely within the standard 0.5% zone — the market needs room to breathe.]' : 'Standard 0.5% threshold applies.'}
+   - If the Percentage Distance is > ${inflectionThresholdPct}%, the price is NOT resting on a level. You CANNOT use INFLECTION_POINT_WAIT.
+   - If price is resting squarely on a boundary (<= ${inflectionThresholdPct}%) AND momentum indicators (RSI flat, ADX low) do not provide overwhelming confirmation, you MUST explicitly reject the trade.
    - Invoke the reject_trade tool with the exact reason: 'INFLECTION_POINT_WAIT' to sideline capital until a definitive bounce or breakdown is confirmed via a candle close.
 
 9. DYNAMIC ADX OSCILLATOR THRESHOLDS (NO MEAN REVERSION):
@@ -552,6 +566,18 @@ serve(async (req) => {
         allEvents = await fetchAllMacroEvents().catch(() => null);
       }
 
+      // === FEATURE 1: FOMC VOLATILITY EXPANSION MODE ===
+      // Detect if a central bank event fired in the last 6 hours and expand
+      // the INFLECTION_POINT_WAIT threshold from 0.5% → 1.5% accordingly.
+      const cbStatus = detectCentralBankEvent(allEvents, 6);
+      const fomcModeActive = cbStatus.isActive;
+      const inflectionThresholdPct = fomcModeActive ? 1.5 : 0.5;
+      if (fomcModeActive) {
+        const cbNames = cbStatus.events.map((e: any) => e.title).join(", ");
+        console.log(`[FOMC Mode] Central bank event detected: ${cbNames}. Expanding INFLECTION threshold to 1.5%.`);
+        sendEvent({ type: 'progress', message: `[POST-EVENT VOLATILITY MODE] Central bank event within 6H: ${cbNames}. INFLECTION threshold expanded to 1.5% for all symbols.` });
+      }
+
         // ==========================================
         // PHASE 1: ACTIVE SIGNAL VALIDATION SWEEP
         // ==========================================
@@ -780,6 +806,35 @@ serve(async (req) => {
             console.warn(`[${symbol}] [Trace: ${traceId}] LTF fetch failed, continuing without it: ${err.message}`);
           }
 
+          // === FEATURE 3: HTF WEEKLY FIBONACCI ALIGNMENT ===
+          // Compute weekly Fib and check if it aligns with the daily Fib within 0.3%.
+          // If aligned, set htf_fib_alignment = true and apply +5 confidence bonus post-AI.
+          let weeklyFibLevels: any[] = [];
+          try {
+            const weeklyBarsForFib = await fetchPaperBars(symbol, "1W", 52, supabase);
+            if (weeklyBarsForFib.length > 10) {
+              const wHigh = weeklyBarsForFib.map((b) => b.h);
+              const wLow = weeklyBarsForFib.map((b) => b.l);
+              const wClose = weeklyBarsForFib.map((b) => b.c);
+              const weeklyFib = calculateFibonacciLevels(wHigh, wLow, wClose);
+              weeklyFibLevels = weeklyFib.levels;
+            }
+          } catch (_) {
+            console.warn(`[${symbol}] Weekly Fib computation failed, skipping HTF alignment check.`);
+          }
+
+          const fibAlignment = computeHtfFibAlignment(fib.levels, weeklyFibLevels, currentPrice, 0.003);
+          (snapshot as any).htf_fib_alignment = fibAlignment.aligned;
+          (snapshot as any).htf_fib_daily_level = fibAlignment.dailyLevel;
+          (snapshot as any).htf_fib_weekly_level = fibAlignment.weeklyLevel;
+          (snapshot as any).htf_fib_overlap_pct = fibAlignment.overlapPct !== null
+            ? Number((fibAlignment.overlapPct * 100).toFixed(3))
+            : null;
+
+          if (fibAlignment.aligned) {
+            sendEvent({ type: 'progress', message: `[HTF Fib Alignment] Daily ${fibAlignment.dailyLevel?.toFixed(2)} ≈ Weekly ${fibAlignment.weeklyLevel?.toFixed(2)} (${((fibAlignment.overlapPct ?? 0) * 100).toFixed(3)}% overlap) → +5 confidence queued` });
+          }
+
           // === MACRO CONTEXT & SENTIMENT SCORING ===
           const headlines = await fetchRealtimeNews(symbol).catch(() => []);
           
@@ -895,7 +950,7 @@ serve(async (req) => {
 
           let evaluation: SwingTrade;
           try {
-            evaluation = await evaluateSwingOpportunity(symbol, snapshot, fib, timeframe, historicalMemory, macroContext);
+            evaluation = await evaluateSwingOpportunity(symbol, snapshot, fib, timeframe, historicalMemory, macroContext, fomcModeActive, inflectionThresholdPct);
             
             // --- SHADOW LEDGER: Log raw AI prediction instantly ---
             if (evaluation && evaluation.recommended_direction !== "NONE") {
@@ -928,7 +983,62 @@ serve(async (req) => {
           }
 
           const confidence = evaluation.confidence_score;
-          const tier = getTier(confidence);
+          let adjustedConfidence = confidence;
+          const confidenceAdjustments: string[] = [];
+
+          // === FEATURE 4: NEWS-ENHANCED CONFIDENCE BOOST (+8) ===
+          // Applies when a high-impact macro event aligns with the trade direction.
+          const newsBoost = computeMacroConfidenceBoost(
+            symbol,
+            evaluation.recommended_direction,
+            allEvents,
+            headlines
+          );
+          if (newsBoost > 0) {
+            adjustedConfidence = Math.min(100, adjustedConfidence + newsBoost);
+            confidenceAdjustments.push(`+${newsBoost} News-Macro Alignment`);
+            sendEvent({ type: 'progress', message: `[${symbol}] News-Macro Boost: +${newsBoost} (macro event aligns with ${evaluation.recommended_direction} direction)` });
+          }
+
+          // === FEATURE 3 (applied): HTF FIB ALIGNMENT BONUS (+5) ===
+          if ((snapshot as any).htf_fib_alignment === true) {
+            adjustedConfidence = Math.min(100, adjustedConfidence + 5);
+            confidenceAdjustments.push(`+5 HTF Fib Alignment (Daily ${(snapshot as any).htf_fib_daily_level?.toFixed(2)} ≈ Weekly ${(snapshot as any).htf_fib_weekly_level?.toFixed(2)})`);
+            sendEvent({ type: 'progress', message: `[${symbol}] HTF Fib Alignment Bonus: +5 (daily/weekly Fib zones overlap within 0.3%)` });
+          }
+
+          // === FEATURE 5: KELLY CRITERION PROBABILITY CALIBRATION ===
+          // Query historical WON/LOST counts for this symbol and calibrate AI's probability estimate.
+          let calibratedProbability = 50; // default
+          try {
+            const { data: wonLostCounts } = await supabase
+              .from('trade_opportunities')
+              .select('status')
+              .eq('symbol', symbol)
+              .in('status', ['WON', 'LOST']);
+
+            const wonCount = wonLostCounts?.filter((r: any) => r.status === 'WON').length ?? 0;
+            const lostCount = wonLostCounts?.filter((r: any) => r.status === 'LOST').length ?? 0;
+            const rawProbability = (evaluation as any).probability_estimate ?? 50;
+            calibratedProbability = calibrateProbability(rawProbability, wonCount, lostCount);
+
+            if (wonCount + lostCount >= 5) {
+              // Only log the calibration adjustment if we have meaningful history
+              const delta = calibratedProbability - rawProbability;
+              if (Math.abs(delta) > 1) {
+                confidenceAdjustments.push(`Kelly: P(win) ${rawProbability.toFixed(1)}% → ${calibratedProbability.toFixed(1)}% (n=${wonCount + lostCount})`);
+                sendEvent({ type: 'progress', message: `[${symbol}] Kelly Calibration: AI probability adjusted ${rawProbability.toFixed(1)}% → ${calibratedProbability.toFixed(1)}%` });
+              }
+            }
+          } catch (kellyErr: any) {
+            console.warn(`[Kelly] Failed to calibrate probability for ${symbol}: ${kellyErr.message}`);
+          }
+
+          if (confidenceAdjustments.length > 0) {
+            sendEvent({ type: 'progress', message: `[${symbol}] Confidence adjusted: ${confidence} → ${adjustedConfidence} (${confidenceAdjustments.join(', ')})` });
+          }
+
+          const tier = getTier(adjustedConfidence);
 
           // --- OVERRIDE: ADX FILTER FOR MEAN REVERSION ---
           if (evaluation.recommended_direction !== "NONE" && evaluation.strategy_applied === "MEAN_REVERSION" && (snapshot as any).adx_14 && (snapshot as any).adx_14 > 25) {
@@ -1042,7 +1152,7 @@ serve(async (req) => {
               status: "REJECTED",
               ai_summary: `[SWING][${tier}] ${evaluation.fibonacci_rationale}`,
               ai_risks: msg,
-              confidence,
+              confidence: adjustedConfidence,
               trace_id: traceId,
             });
             rejections.push({ symbol, reason: msg, layer: "Execution Desk" });
@@ -1069,7 +1179,7 @@ serve(async (req) => {
               status: "REJECTED",
               ai_summary: `[SWING][${tier}] ${evaluation.fibonacci_rationale}`,
               ai_risks: `Rejected by Swing Desk: ${msg}`,
-              confidence,
+              confidence: adjustedConfidence,
               trace_id: traceId,
             });
             rejections.push({ symbol, reason: msg, layer: "Execution Desk" });
@@ -1123,7 +1233,7 @@ serve(async (req) => {
                 tp3,
               },
               risk_summary: `RSI ${snapshot.rsi_14} | ATR ${snapshot.atr_14}`,
-              confidence,
+              confidence: adjustedConfidence,
               ai_summary: aiSummary,
               ai_risks: "Managed by Swing AI Risk Officer",
               trace_id: traceId,
@@ -1194,6 +1304,12 @@ serve(async (req) => {
               tp2,
               tp3,
               rr_to_tp2: rrToTp2,
+              raw_confidence: confidence,
+              adjusted_confidence: adjustedConfidence,
+              confidence_adjustments: confidenceAdjustments,
+              calibrated_probability: calibratedProbability,
+              htf_fib_alignment: (snapshot as any).htf_fib_alignment,
+              fomc_mode_active: fomcModeActive,
               fib_swing_high: fib.swing_high,
               fib_swing_low: fib.swing_low,
               fibonacci_rationale: evaluation.fibonacci_rationale,
