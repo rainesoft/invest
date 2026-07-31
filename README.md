@@ -20,8 +20,6 @@ its performance to scale a retail and institutional subscriber base.
     free-tier accounts.
   - **The Vault (`/dashboard`):** Real-time ledger tracking signals, win-rates,
     active trades, and treasury solvency.
-  - **Developer Portal (`/docs`):** Swagger-less, custom-styled institutional
-    API integration documentation for B2B prop firms.
 
 ### 2. Backend (Supabase Core)
 
@@ -84,11 +82,11 @@ execution, monitoring, and marketing.
   S-Tier and A-Tier signals directly to the RaineBank retail Telegram channel
   instantly via MarkdownV2 formatting, explicitly ignoring rejected trades.
 - **The Retail Lifecycle (Email Drip):** Using the **Resend API**, an automated
-  cron job nurtures free-tier users:
+  cron job nurtures Performance Plan users:
   - **Day 0:** Welcome email.
-  - **Day 3:** "Proof of Edge" highlighting the best trade they missed by not
-    upgrading.
-  - **Day 7:** Direct Paystack checkout upsell.
+  - **Day 3:** "Fee Savings Report" highlighting how much they would have saved
+    in performance fees on winning trades by upgrading.
+  - **Day 7:** Direct Paystack checkout upsell to Autopilot Pro.
 - **The Watchdog (`system-health-ping`):** Monitors the database timestamps. If
   the primary engine stalls, it isolates the failure and emails the CIO
   directly, keeping errors away from the retail Telegram.
@@ -108,7 +106,6 @@ execution, monitoring, and marketing.
 2. **Environment Configuration** Copy `.env.example` to `.env` and fill in the
    required keys:
    - `NEXT_PUBLIC_SUPABASE_URL` & `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-   - `UNKEY_ROOT_KEY` & `UNKEY_API_ID`
    - Edge Secrets (Set via `supabase secrets set`): `TELEGRAM_BOT_TOKEN`,
      `META_API_TOKEN`, `RESEND_API_KEY`, `PAYSTACK_SECRET_KEY`,
      `OPENAI_API_KEY`, `TAVILY_API_KEY`.
