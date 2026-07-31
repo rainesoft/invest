@@ -49,7 +49,7 @@ You are building a high-margin B2C SaaS product in the wealth generation space. 
 
 ### The Math to $1,000,000 / Year (ARR)
 To generate $1,000,000 a year in revenue through the new PAMM model, you only need:
-- **418 users** subscribing to **Autopilot Pro ($199/month)**.
+- **1,042 users** subscribing to **Autopilot Pro ($80/month)**.
 - **OR** around **555 users** on the **Performance Plan** (assuming an average $10,000 deposit generating 5% monthly return, yielding $150/mo in performance fees per user).
 - **OR** a single institutional whale who deposits **$5.5M** into the Performance Plan (at a 5% monthly return, your 30% cut is $82k/mo or ~$1M/year).
 
@@ -61,6 +61,6 @@ To generate $1,000,000 a year in revenue through the new PAMM model, you only ne
    - They click your bio link to the landing page.
    - They sign up for the **Performance Plan (Free to Start)**.
    - They deposit capital into the PAMM and watch the AI trade live in the dashboard.
-   - As their account grows, the 30% performance fees start adding up. The FOMO hits, and they upgrade to **Autopilot Pro ($199/mo)** to keep 100% of their profits.
+   - As their account grows, the 30% performance fees start adding up. The FOMO hits, and they upgrade to **Autopilot Pro ($80/mo)** to keep 100% of their profits.
 
-You are combining deep technical expertise (CIO) with a highly scalable software product. If the AI is profitable and you document the journey authentically on X, scaling to 500 paid users is entirely within your reach.
+You are combining deep technical expertise (CIO) with a highly scalable software product. If the AI is profitable and you document the journey authentically on X, scaling to 1,000 paid users is entirely within your reach.
