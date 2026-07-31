@@ -50,9 +50,7 @@ its performance to scale a retail and institutional subscriber base.
 
 - **The Execution Router (`agent-trade`):** A multi-tenant execution engine that
   iterates through subscribed users upon an approved S-Tier or A-Tier AI signal.
-- **Bring-Your-Own-Broker (BYOB):** Users securely connect their own MT4/MT5
-  accounts via MetaApi.cloud tokens to execute live trades alongside the Master
-  Account.
+- **Master Execution:** Trades are exclusively executed on the Master Account, and distributed automatically to PAMM followers at the broker level.
 - **Post-Mortem Engine (`resolve-outcomes`):** Autonomously tracks live trades
   against a price action simulator. If a trade hits a Stop Loss, it leverages
   OpenAI to automatically generate a post-mortem analysis of the failure based
