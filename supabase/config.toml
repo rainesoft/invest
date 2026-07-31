@@ -333,12 +333,7 @@ s3_access_key = "env(S3_ACCESS_KEY)"
 # Configures AWS_SECRET_ACCESS_KEY for S3 bucket
 s3_secret_key = "env(S3_SECRET_KEY)"
 
-# Trigger the Alpha Engine every 30 minutes
-[functions.agent-scalper]
-verify_jwt = false
 
-# [functions.agent-scalper.schedule]
-# cron = "0 * * * *"
 
 # Trigger the Outcome Simulator at 2 and 32 past the hour
 [functions.resolve-outcomes]

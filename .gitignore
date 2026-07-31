@@ -57,7 +57,6 @@ next-env.d.ts
 supabase/config.toml
 scratch/
 .env*
-docs/
 temp/
 
 # Temporary Files
