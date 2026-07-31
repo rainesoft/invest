@@ -98,7 +98,7 @@ ORDER BY created_at DESC
 LIMIT 10;
 ```
 
-The `created_at` timestamps should fall within the last 30 minutes for `agent-scalper` and within the last hour for `agent-news`.
+The `created_at` timestamps should fall within the last 4 hours for `agent-swing` and within the last hour for `agent-news`.
 
 ### Expected Cron Schedule Reference
 
@@ -107,7 +107,6 @@ The `created_at` timestamps should fall within the last 30 minutes for `agent-sc
 | `agent-news-poll` | `0 * * * 1-5` | Fires at the top of every hour, Mon–Fri |
 | `agent-swing-poll` | `0 */4 * * 1-5` | Fires every 4 hours, Mon–Fri |
 | `agent-trade-poll` | `3-59/5 * * * 1-5` | Fires every 5 min (offset 3m), Mon–Fri |
-| `invoke_agent_sniper_1m` | `* * * * *` | Fires every 1 minute |
 | `position-manager-poll` | `*/30 * * * 1-5` | Fires every 30 min, Mon–Fri |
 | `invoke_reset_daily_drawdown` | `0 22 * * *` | Fires at 22:00 UTC daily |
 | `weekend-defense-cron` | `30 20 * * 5` | Fires Friday 20:30 UTC |
@@ -314,6 +313,22 @@ Sudden failures across agents or broker executions are often tied to hard limits
 - [ ] **MetaAPI Limits (`agent-trade`, `position-manager`):** MetaAPI operates on strict request concurrency and monthly execution quotas. If `agent-trade` logs show `QuotaExceededError` or 429 errors when attempting to sync or place trades, log into the MetaAPI portal to upgrade the tier or purchase extra volume.
 - [ ] **Tavily Credits (`agent-news`):** If `agent-news` is failing to return macro insights and Edge Function logs show API rejection for Tavily, verify the Tavily developer dashboard to confirm the search query quota for the month hasn't been exhausted.
 - [ ] **VPS & MT5 Health (`vps-poll`):** The `vps-poll` Edge Function should log a 200 OK ping every second. If `vps-poll` logs suddenly stop or show `5xx` errors, the Windows VPS hosting the MetaTrader 5 EA has either lost internet connectivity, restarted, or the EA was detached from the chart. Log into the VPS remotely via RDP to ensure MT5 is running with Auto Trading enabled.
+
+## 6. Trade Resolution & AI Post-Mortems (`resolve-outcomes`)
+The system features an autonomous trade simulator that monitors active trades against live price action. When a trade hits its Stop Loss, it triggers an AI Post-Mortem.
+- [ ] **Outcome Grading:** Query `trade_opportunities` to ensure signals are correctly transitioning from `APPROVED` to `WON` or `LOST`.
+- [ ] **AI Post-Mortems:** Verify the `resolve-outcomes` edge function is firing correctly (no 5xx errors) and generating Post-Mortem text inside `ai_summary` for lost trades.
+
+## 7. Treasury Management & Solvency (`cron-treasury-snapshot`)
+The system calculates a monthly Solvency Ratio (Assets / Liability) and syncs master account balances with Exness.
+- [ ] **Snapshot Generation:** Verify the `treasury_snapshots` table is generating rows correctly.
+- [ ] **Solvency Safety:** Ensure the `solvency_ratio` in `treasury_snapshots` remains ≥ 1.0. A ratio below 1.0 means customer liabilities exceed current broker and bank assets.
+- [ ] **Exness Sync:** Check the edge function logs for `sync-exness-treasury` to ensure it is authenticating properly with the broker and updating balances.
+
+## 8. Subscription Billing & User Onboarding (`paystack-webhook`)
+The backend manages recurring billing and onboarding emails automatically.
+- [ ] **Billing Webhooks:** Check Edge Function logs for `paystack-webhook` and `process-recurring-billing`. Ensure there are no `401 Unauthorized` or timeout errors that would prevent users from maintaining active subscriptions.
+- [ ] **Email Delivery:** Verify `email-onboarding` and `daily-drip-campaign` are running without errors.
 
 > [!CAUTION]
 > If any critical execution pipelines (such as missing `user_trades` for `APPROVED` signals) or external broker integrations are failing, escalate to the Engineering Team immediately and consider temporarily disabling `isAutoTradingEnabled` in global settings to prevent orphaned signals.
