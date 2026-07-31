@@ -39,7 +39,7 @@ export async function POST(req: Request) {
       },
       body: JSON.stringify({
         email: user.email,
-        amount: 19900, // $199.00 in cents
+        amount: 8000, // $80.00 in cents
         plan: ALPHA_PLAN_CODE,
         callback_url: callbackUrl,
         metadata: {
@@ -48,7 +48,7 @@ export async function POST(req: Request) {
             {
               display_name: "Billing Amount USD",
               variable_name: "billing_amount_usd",
-              value: "199"
+              value: "80"
             }
           ]
         }

@@ -24,7 +24,7 @@ export default function PricingSlider({ isLoggedIn }: PricingSliderProps) {
       <div style={{ fontSize: '20px', fontWeight: 700, color: '#38bdf8', marginBottom: '16px' }}>Autopilot Pro</div>
       
       <div style={{ fontSize: '48px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-2px' }}>
-        $199
+        $80
         <span style={{ fontSize: '18px', color: '#9ca3af', fontWeight: 500, letterSpacing: '0' }}>/mo</span>
       </div>
 
