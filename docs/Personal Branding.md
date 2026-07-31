@@ -48,19 +48,19 @@ X is where you generate massive traffic, build a cult following, and sell subscr
 You are building a high-margin B2C SaaS product in the wealth generation space. The financial niche commands the highest subscription prices on the internet.
 
 ### The Math to $1,000,000 / Year (ARR)
-To generate $1,000,000 a year in revenue, you only need:
-- **833 users** paying **$100/month**
-- Or **416 users** paying **$200/month**
+To generate $1,000,000 a year in revenue through the new PAMM model, you only need:
+- **418 users** subscribing to **Autopilot Pro ($199/month)**.
+- **OR** around **555 users** on the **Performance Plan** (assuming an average $10,000 deposit generating 5% monthly return, yielding $150/mo in performance fees per user).
+- **OR** a single institutional whale who deposits **$5.5M** into the Performance Plan (at a 5% monthly return, your 30% cut is $82k/mo or ~$1M/year).
 
 ### How to get there using X:
-1. **Build in Public:** Post daily screenshots of the AI's trades (both wins and losses). Transparency builds cult-like trust.
-2. **The "Prop Firm" Angle:** As a builder, document your journey using Rainebank to pass a $100,000 FTMO or FundingPips challenge entirely on autopilot. When you post the certificate on X showing the AI passed the test for you, you will go viral. Retail traders will beg for access to the bot.
+1. **Build in Public:** Post daily screenshots of the AI's trades (both wins and losses) from the Master Account. Transparency builds cult-like trust.
+2. **The "Prop Firm" Angle:** As a builder, document your journey using Rainebank to pass a $100,000 FTMO or FundingPips challenge entirely on autopilot. When you post the certificate on X showing the AI passed the test for you, you will go viral. Retail traders will beg for access to the fund.
 3. **The Funnel:**
    - They see your viral Prop Firm pass on X.
-   - They click your bio link to the Alpha Academy.
-   - They read the "High-School Level" guides we wrote.
-   - They sign up for the Free Tier (Spectator Mode).
-   - They watch the AI trade live in the dashboard.
-   - The FOMO hits, and they upgrade to the $100/mo Pro Tier to connect their own broker.
+   - They click your bio link to the landing page.
+   - They sign up for the **Performance Plan (Free to Start)**.
+   - They deposit capital into the PAMM and watch the AI trade live in the dashboard.
+   - As their account grows, the 30% performance fees start adding up. The FOMO hits, and they upgrade to **Autopilot Pro ($199/mo)** to keep 100% of their profits.
 
 You are combining deep technical expertise (CIO) with a highly scalable software product. If the AI is profitable and you document the journey authentically on X, scaling to 500 paid users is entirely within your reach.
