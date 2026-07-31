@@ -395,3 +395,99 @@ export function isBearishRejection(prev: any, curr: any) {
   const isStar    = upperWick > body * 1.5 && curr.c < curr.o;
   return isStar;
 }
+
+// ============================================================
+// HTF FIBONACCI ALIGNMENT
+// Checks whether the nearest daily Fib level and the nearest
+// weekly Fib level converge within `tolerancePct` of each other.
+// When aligned, the zone has dual-timeframe institutional weight
+// and qualifies for a +5 confidence bonus in agent-swing.
+// ============================================================
+export interface FibAlignmentResult {
+  aligned: boolean;
+  dailyLevel: number | null;
+  weeklyLevel: number | null;
+  overlapPct: number | null;
+}
+
+export interface SimpleFibLevel {
+  label: string;
+  price: number;
+  pct: number;
+}
+
+export function computeHtfFibAlignment(
+  dailyFibLevels: SimpleFibLevel[],
+  weeklyFibLevels: SimpleFibLevel[],
+  currentPrice: number,
+  tolerancePct = 0.003 // 0.3%
+): FibAlignmentResult {
+  if (!dailyFibLevels?.length || !weeklyFibLevels?.length) {
+    return { aligned: false, dailyLevel: null, weeklyLevel: null, overlapPct: null };
+  }
+
+  // Find the nearest daily Fib level to current price
+  const nearestDaily = dailyFibLevels
+    .map((l) => ({ ...l, dist: Math.abs(l.price - currentPrice) }))
+    .sort((a, b) => a.dist - b.dist)[0];
+
+  // Find the nearest weekly Fib level to current price
+  const nearestWeekly = weeklyFibLevels
+    .map((l) => ({ ...l, dist: Math.abs(l.price - currentPrice) }))
+    .sort((a, b) => a.dist - b.dist)[0];
+
+  if (!nearestDaily || !nearestWeekly) {
+    return { aligned: false, dailyLevel: null, weeklyLevel: null, overlapPct: null };
+  }
+
+  const overlapPct = Math.abs(nearestDaily.price - nearestWeekly.price) / nearestDaily.price;
+  const aligned = overlapPct <= tolerancePct;
+
+  if (aligned) {
+    console.log(
+      `[HtfFibAlign] Daily ${nearestDaily.label} @ ${nearestDaily.price} ≈ Weekly ${nearestWeekly.label} @ ${nearestWeekly.price} (overlap ${(overlapPct * 100).toFixed(3)}%) → +5 confidence`
+    );
+  }
+
+  return {
+    aligned,
+    dailyLevel: nearestDaily.price,
+    weeklyLevel: nearestWeekly.price,
+    overlapPct,
+  };
+}
+
+// ============================================================
+// KELLY CRITERION — BAYESIAN PROBABILITY CALIBRATION
+// Blends the AI's raw probability estimate with the symbol's
+// historical win rate from trade_opportunities (WON / total).
+// Alpha weight grows from 0 → 1 as the history reaches 20 trades,
+// ensuring the prior only dominates once sufficient data exists.
+//
+// Formula: calibrated = α × historicalWinRate + (1−α) × rawProbability
+// where    α = min(1, totalTrades / 20)
+// ============================================================
+export function calibrateProbability(
+  rawProbability: number,   // AI-generated 1–99
+  wonCount: number,
+  lostCount: number
+): number {
+  const totalTrades = wonCount + lostCount;
+
+  if (totalTrades === 0) {
+    // No history — return AI estimate unchanged
+    return rawProbability;
+  }
+
+  const historicalWinRate = (wonCount / totalTrades) * 100; // convert to 1-99 scale
+  const alpha = Math.min(1, totalTrades / 20); // weight grows with sample size
+
+  const calibrated = alpha * historicalWinRate + (1 - alpha) * rawProbability;
+  const rounded = Math.round(calibrated * 10) / 10;
+
+  console.log(
+    `[KellyCalibration] Raw=${rawProbability.toFixed(1)}% | Historical=${historicalWinRate.toFixed(1)}% (n=${totalTrades}) | α=${alpha.toFixed(2)} | Calibrated=${rounded}%`
+  );
+
+  return rounded;
+}
