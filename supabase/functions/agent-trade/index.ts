@@ -673,13 +673,16 @@ serve(async (req) => {
         
         const riskAmount = pointsAtRisk * volume * pointValueUsd;
         
+        // Only send to Master Broker if auto-execution is on for the user and they aren't paper trading
+        if (user.auto_trade_enabled && user.is_live_execution_enabled) {
+          totalMasterVolume += volume;
+        }
+
         userAllocations.push({
           user_id: user.user_id,
           volume,
           risk_amount: riskAmount,
         });
-
-        totalMasterVolume += volume;
       }
     }
 
