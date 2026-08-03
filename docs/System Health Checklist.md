@@ -108,6 +108,7 @@ The `created_at` timestamps should fall within the last 4 hours for `agent-swing
 | `agent-swing-poll` | `0 */4 * * *` | Fires every 4 hours, 7 days a week |
 | `agent-trade-poll` | `3-59/5 * * * *` | Fires every 5 min (offset 3m), 7 days a week |
 | `position-manager-poll` | `*/30 * * * *` | Fires every 30 min, 7 days a week |
+| `system-health-check-poll` | `15 * * * *` | Fires hourly to scan `cron.job_run_details` for silent failures |
 | `invoke_reset_daily_drawdown` | `0 22 * * *` | Fires at 22:00 UTC daily |
 | `weekend-defense-cron` | `30 20 * * 5` | Fires Friday 20:30 UTC |
 

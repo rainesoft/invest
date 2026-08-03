@@ -13,7 +13,7 @@ interface WebhookPayload {
   table?: string;
   record?: any;
   old_record?: any;
-  action?: "GLOBAL_ABORT" | "WEEKEND_DEFENSE";
+  action?: "GLOBAL_ABORT" | "WEEKEND_DEFENSE" | "SYSTEM_HEALTH_CHECK";
 }
 
 async function notifyTelegram(text: string) {
@@ -186,6 +186,41 @@ serve(async (req) => {
 
       await insertAuditLog(supabase, { actor_type: "SYSTEM", action: "WEEKEND_DEFENSE_EXECUTED", entity_type: "system", entity_id: "global", payload_json: report });
       return new Response(JSON.stringify(report), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+
+    // --- 4. SYSTEM HEALTH CHECK ---
+    if (payload.action === "SYSTEM_HEALTH_CHECK") {
+      console.log("🏥 [System Health Check] Querying recent cron failures...");
+      const { data: failures, error } = await supabase.rpc("check_cron_failures");
+
+      if (error) {
+        console.error("[System Health Check] RPC error:", error);
+        return new Response("Error executing check_cron_failures", { status: 500 });
+      }
+
+      if (failures && failures.length > 0) {
+        console.log(`[System Health Check] 🚨 Detected ${failures.length} cron failures!`);
+        
+        // Group failures by jobname to avoid massive telegram spam
+        const grouped: Record<string, number> = {};
+        let sampleError = "";
+        
+        for (const f of failures) {
+          grouped[f.jobname] = (grouped[f.jobname] || 0) + 1;
+          if (!sampleError) sampleError = f.return_message;
+        }
+
+        const details = Object.entries(grouped).map(([job, count]) => `• <code>${job}</code>: ${count} failures`).join("\n");
+        
+        const tgMessage = `🚨 <b>SYSTEM HEALTH ALERT</b> 🚨\n\nBackground cron jobs have <b>FAILED</b> in the last hour!\n\n${details}\n\n<b>Sample Error:</b>\n<code>${sampleError.substring(0, 500)}</code>\n\n⚠️ <i>Administrator intervention required.</i>`;
+        
+        await notifyTelegram(tgMessage);
+        await insertAuditLog(supabase, { actor_type: "SYSTEM", action: "SYSTEM_HEALTH_ALERT", entity_type: "system", entity_id: "global", payload_json: { failures: failures.length, details: grouped } });
+        return new Response(`Alert sent for ${failures.length} failures.`, { status: 200 });
+      }
+
+      console.log("[System Health Check] All systems operational.");
+      return new Response("All systems operational.", { status: 200 });
     }
 
     return new Response("Invalid payload", { status: 400 });
