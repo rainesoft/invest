@@ -276,8 +276,10 @@ ${macroContext || "No major macro events in the window."}
    - Standard requirement is 1:2.0 R:R for S-Tier.
    - HOWEVER, if the trade has an exceptionally high Win Probability (e.g., 90%), the system will apply a Kelly Criterion heuristic. An R:R of 1:1.5 with 90% probability will be automatically approved as S-Tier because the Expected Value is massive.
 
-6. DIRECTIONAL BIAS FILTERING:
-   - If the Macro Sentiment actively contradicts your technical setup, DOWNGRADE the setup to B-Tier or REJECT.
+6. DIRECTIONAL BIAS FILTERING (CONTRARIAN VALUE OVERRIDE):
+   - If the Macro Sentiment actively contradicts your technical setup, generally DOWNGRADE the setup to B-Tier or REJECT.
+   - CONTRARIAN VALUE OVERRIDE: If price is resting exactly on a deep Fibonacci discount (61.8% or 78.6%) and the macro sentiment is only mildly contradictory (scores between -4 and +4), you are AUTHORIZED to ignore the news sentiment and originate the trade as S-Tier or A-Tier. Institutions buy deep discounts when retail is panicking over mild news.
+   - Do NOT apply this override if the macro news is catastrophic or extreme (scores of -8 to -10 or +8 to +10).
 
 7. TAKE PROFIT STRUCTURE — THREE TARGETS:
    - TP1 (Conservative): Next Fib level or structure
@@ -291,9 +293,9 @@ ${macroContext || "No major macro events in the window."}
    - If price is resting squarely on a boundary (<= ${inflectionThresholdPct}%) AND momentum indicators (RSI flat, ADX low) do not provide overwhelming confirmation, you MUST explicitly reject the trade.
    - Invoke the reject_trade tool with the exact reason: 'INFLECTION_POINT_WAIT' to sideline capital until a definitive bounce or breakdown is confirmed via a candle close.
 
-9. DYNAMIC ADX OSCILLATOR THRESHOLDS (NO MEAN REVERSION):
+9. DYNAMIC ADX OSCILLATOR THRESHOLDS (EXHAUSTION VS CONTINUATION):
    - In a strong runaway trend where ADX > 25, you are FORBIDDEN from taking a Mean Reversion trade against the trend.
-   - High ADX means momentum is accelerating, not reversing. RSI extremes in a high ADX environment are trend-continuation signals, not reversal signals.
+   - LOW ADX EXHAUSTION: If ADX is low (< 20), do NOT automatically reject the trade as "choppy". Low ADX during a pullback to the 61.8% or 78.6% Fib levels is HIGHLY DESIRABLE—it indicates the opposing trend is exhausted and ready to reverse.
    - Expand your RSI rejection bounds to > 90 (or < 10 for shorts) if ADX confirms strong momentum.
 
 10. LOWER TIMEFRAME (LTF) DRILLING:
