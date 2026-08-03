@@ -38,7 +38,7 @@ SELECT cron.schedule(
     '15 * * * *',
     $$
     SELECT net.http_post(
-        url := 'https://' || current_setting('custom.project_id', true) || '.supabase.co/functions/v1/agent-kill-switch',
+        url := 'https://ktezlusdkqlfdwqrldtn.supabase.co/functions/v1/agent-kill-switch',
         headers := jsonb_build_object(
             'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key', true),
             'Content-Type', 'application/json'

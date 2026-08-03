@@ -18,7 +18,7 @@ SELECT cron.schedule(
     '0 */4 * * *',
     $$
     SELECT net.http_post(
-        url := 'https://' || current_setting('custom.project_id', true) || '.supabase.co/functions/v1/agent-swing',
+        url := 'https://ktezlusdkqlfdwqrldtn.supabase.co/functions/v1/agent-swing',
         headers := jsonb_build_object(
             'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key', true),
             'Content-Type', 'application/json'
@@ -34,7 +34,7 @@ SELECT cron.schedule(
     '0 * * * *',
     $$
     SELECT net.http_post(
-        url := 'https://' || current_setting('custom.project_id', true) || '.supabase.co/functions/v1/agent-news',
+        url := 'https://ktezlusdkqlfdwqrldtn.supabase.co/functions/v1/agent-news',
         headers := jsonb_build_object(
             'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key', true),
             'Content-Type', 'application/json'
@@ -50,7 +50,7 @@ SELECT cron.schedule(
     '3-59/5 * * * *',
     $$
     SELECT net.http_post(
-        url := 'https://' || current_setting('custom.project_id', true) || '.supabase.co/functions/v1/agent-trade',
+        url := 'https://ktezlusdkqlfdwqrldtn.supabase.co/functions/v1/agent-trade',
         headers := jsonb_build_object(
             'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key', true),
             'Content-Type', 'application/json'
@@ -66,7 +66,7 @@ SELECT cron.schedule(
   '*/30 * * * *',
   $$
     SELECT net.http_post(
-      url := 'https://' || current_setting('custom.project_id', true) || '.supabase.co/functions/v1/agent-trade',
+      url := 'https://ktezlusdkqlfdwqrldtn.supabase.co/functions/v1/agent-trade',
       headers := jsonb_build_object(
         'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key', true),
         'Content-Type', 'application/json'
