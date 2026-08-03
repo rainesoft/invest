@@ -1,5 +1,5 @@
 -- ============================================================
--- Migration: Enable 24/7 Weekend Execution (Crypto)
+-- Migration: Enable 24/7 Weekend Execution (Crypto) & Fix pg_cron Auth Syntax
 -- ============================================================
 
 -- 1. Unschedule old restricted weekday jobs
@@ -17,19 +17,14 @@ SELECT cron.schedule(
     'agent-swing-poll',
     '0 */4 * * *',
     $$
-    declare
-        url text;
-        api_key text;
-        req_id bigint;
-    begin
-        url := current_setting('app.supabase_url', true) || '/functions/v1/agent-swing';
-        api_key := current_setting('app.settings.service_role_key', true);
-        
-        select net.http_post(
-            url := url,
-            headers := jsonb_build_object('Authorization', 'Bearer ' || api_key)
-        ) into req_id;
-    end;
+    SELECT net.http_post(
+        url := 'https://' || current_setting('custom.project_id', true) || '.supabase.co/functions/v1/agent-swing',
+        headers := jsonb_build_object(
+            'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key', true),
+            'Content-Type', 'application/json'
+        ),
+        body := '{}'::jsonb
+    );
     $$
 );
 
@@ -38,19 +33,14 @@ SELECT cron.schedule(
     'agent-news-poll',
     '0 * * * *',
     $$
-    declare
-        url text;
-        api_key text;
-        req_id bigint;
-    begin
-        url := current_setting('app.supabase_url', true) || '/functions/v1/agent-news';
-        api_key := current_setting('app.settings.service_role_key', true);
-        
-        select net.http_post(
-            url := url,
-            headers := jsonb_build_object('Authorization', 'Bearer ' || api_key)
-        ) into req_id;
-    end;
+    SELECT net.http_post(
+        url := 'https://' || current_setting('custom.project_id', true) || '.supabase.co/functions/v1/agent-news',
+        headers := jsonb_build_object(
+            'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key', true),
+            'Content-Type', 'application/json'
+        ),
+        body := '{}'::jsonb
+    );
     $$
 );
 
@@ -59,19 +49,14 @@ SELECT cron.schedule(
     'agent-trade-poll',
     '3-59/5 * * * *',
     $$
-    declare
-        url text;
-        api_key text;
-        req_id bigint;
-    begin
-        url := current_setting('app.supabase_url', true) || '/functions/v1/agent-trade';
-        api_key := current_setting('app.settings.service_role_key', true);
-        
-        select net.http_post(
-            url := url,
-            headers := jsonb_build_object('Authorization', 'Bearer ' || api_key)
-        ) into req_id;
-    end;
+    SELECT net.http_post(
+        url := 'https://' || current_setting('custom.project_id', true) || '.supabase.co/functions/v1/agent-trade',
+        headers := jsonb_build_object(
+            'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key', true),
+            'Content-Type', 'application/json'
+        ),
+        body := '{}'::jsonb
+    );
     $$
 );
 
@@ -80,21 +65,13 @@ SELECT cron.schedule(
   'position-manager-poll',
   '*/30 * * * *',
   $$
-  declare
-    url text;
-    api_key text;
-    req_id bigint;
-  begin
-    url := current_setting('app.supabase_url', true) || '/functions/v1/agent-trade';
-    api_key := current_setting('app.settings.service_role_key', true);
-    select net.http_post(
-      url := url,
+    SELECT net.http_post(
+      url := 'https://' || current_setting('custom.project_id', true) || '.supabase.co/functions/v1/agent-trade',
       headers := jsonb_build_object(
-        'Authorization', 'Bearer ' || api_key,
+        'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key', true),
         'Content-Type', 'application/json'
       ),
       body := '{"action":"MANAGE_POSITIONS"}'::jsonb
-    ) into req_id;
-  end;
+    );
   $$
 );
