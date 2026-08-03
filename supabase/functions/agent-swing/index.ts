@@ -445,9 +445,9 @@ ${macroContext || "No major macro events in the window."}
         const expectedValueR = (prob * rr) - ((1 - prob) * 1);
 
         let requiredRR = 1.5;
-        if (data.confidence_score >= 90) requiredRR = 2.0;
-        else if (data.confidence_score >= 80) requiredRR = 1.5;
-        else if (data.confidence_score >= 70) requiredRR = 1.2;
+        if (data.confidence_score >= 90) requiredRR = 1.0;
+        else if (data.confidence_score >= 80) requiredRR = 1.2;
+        else if (data.confidence_score >= 70) requiredRR = 1.5;
 
         if (rr < requiredRR - 0.1 && expectedValueR < 0.5) {
           // It didn't meet the rules, force reject
@@ -1149,7 +1149,7 @@ serve(async (req) => {
           }
 
           const riskPct = Math.abs(entry - sl) / entry;
-          const maxRiskPct = ["XAUUSD", "XAGUSD"].includes(symbol) ? 0.10 : 0.08;
+          const maxRiskPct = ["XAUUSD", "XAGUSD", "BTCUSD"].includes(symbol) ? 0.15 : 0.10;
 
           if (riskPct > maxRiskPct) {
             const msg = `Stop loss ${(riskPct * 100).toFixed(2)}% exceeds swing maximum of ${(maxRiskPct * 100).toFixed(0)}%`;
@@ -1174,8 +1174,8 @@ serve(async (req) => {
             requiredRR = 1.0; // Lower threshold due to high volatility and wider stops
           }
           if (tier === "S-Tier" || tier === "A-Tier") {
-            if (confidence >= 90) requiredRR = 2.5; // Relaxed for extremely high conviction macro trades
-            else if (confidence >= 80) requiredRR = 2.0;
+            if (confidence >= 90) requiredRR = 1.0; // Relaxed for extremely high conviction macro trades
+            else if (confidence >= 80) requiredRR = 1.2;
           }
 
           if (rrToTp2 < requiredRR - 0.1) {
