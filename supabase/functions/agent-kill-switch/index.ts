@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
 import { insertAuditLog } from "../../../packages/core/audit.ts";
+import { isMarketOpen } from "../../../packages/core/market.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -92,8 +93,15 @@ serve(async (req) => {
         return new Response("No open trades to defend.", { status: 200 });
       }
 
-      const uniqueOrders = [...new Set(openTrades.map(t => t.meta_api_order_id))];
-      console.log(`[Weekend Defense] Found ${uniqueOrders.length} unique master orders to evaluate.`);
+      // Exempt Crypto from weekend defense because Crypto trades 24/7 and has no Sunday gap risk
+      // isMarketOpen will return false for Forex on Friday night, but true for Crypto.
+      const vulnerableTrades = openTrades.filter(t => {
+        // We only defend trades whose market is actually closed or closing for the weekend
+        return t.symbol ? !isMarketOpen(t.symbol) : true;
+      });
+
+      const uniqueOrders = [...new Set(vulnerableTrades.map(t => t.meta_api_order_id))];
+      console.log(`[Weekend Defense] Found ${uniqueOrders.length} unique master orders to evaluate (exempting 24/7 crypto).`);
 
       let closedCount = 0, movedToBeCount = 0, errorCount = 0;
       const closedSymbols: string[] = [];

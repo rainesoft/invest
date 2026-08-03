@@ -4,6 +4,7 @@ import { fetchPaperBars, Bar } from "../../../packages/execution/index.ts";
 import { insertAuditLog } from "../../../packages/core/audit.ts";
 import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews, detectCentralBankEvent, computeMacroConfidenceBoost } from "../../../packages/core/news.ts";
 import { isAutoTradingEnabled } from "../../../packages/core/settings.ts";
+import { isMarketOpen } from "../../../packages/core/market.ts";
 
 import { revalidateOpportunity } from "../../../packages/strategy/revalidation.ts";
 
@@ -678,6 +679,14 @@ serve(async (req) => {
 
 
       for (const symbol of symbols) {
+        // --- LAYER -1: MARKET HOURS CHECK ---
+        if (!isMarketOpen(symbol)) {
+          console.log(`[Market Hours] Skipping ${symbol} as market is currently closed.`);
+          sendEvent({ type: 'progress', message: `[Market Hours] Skipping ${symbol}: Market Closed.` });
+          rejections.push({ symbol, reason: "Market is currently closed", layer: "Market Hours" });
+          continue;
+        }
+
         // --- LAYER 0: MACRO BLACKOUT WINDOW ---
         if (["XAUUSD", "XAGUSD", "BTCUSD", "UKOIL"].includes(symbol) && allEvents) {
           const nowMs = Date.now();
