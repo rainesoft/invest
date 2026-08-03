@@ -1151,7 +1151,7 @@ serve(async (req) => {
           }
 
           const riskPct = Math.abs(entry - sl) / entry;
-          const maxRiskPct = ["XAUUSD", "XAGUSD", "BTCUSD"].includes(symbol) ? 0.15 : 0.10;
+          const maxRiskPct = ["XAUUSD", "XAGUSD", "BTCUSD", "UKOIL"].includes(symbol) ? 0.15 : 0.10;
 
           if (riskPct > maxRiskPct) {
             const msg = `Stop loss ${(riskPct * 100).toFixed(2)}% exceeds swing maximum of ${(maxRiskPct * 100).toFixed(0)}%`;
