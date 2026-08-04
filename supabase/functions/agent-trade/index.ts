@@ -723,6 +723,11 @@ serve(async (req) => {
 
     // --- DISTRIBUTE VIRTUAL LEDGER ENTRIES TO USERS (QUEUED FOR VPS) ---
     for (const alloc of userAllocations) {
+        let legAVolume = Math.floor((alloc.volume / 2) * 100) / 100;
+        if (legAVolume < 0.01) legAVolume = alloc.volume; // Default to full volume on single leg if too small
+        
+        let legBVolume = Math.round((alloc.volume - legAVolume) * 100) / 100;
+
         // Leg A (Quick Exit)
         await supabase.from("user_trades").insert({
           id: crypto.randomUUID(),
@@ -730,25 +735,27 @@ serve(async (req) => {
           opportunity_id: signal.id,
           symbol: signal.symbol,
           side: signal.side,
-          volume: alloc.volume / 2,
-          risk_amount: alloc.risk_amount / 2,
+          volume: legAVolume,
+          risk_amount: alloc.risk_amount / (alloc.volume > 0 ? (alloc.volume / legAVolume) : 2),
           status: "VPS_PENDING",
           trade_type: "QUICK_EXIT",
         });
         
         // Leg B (Runner)
         // Note: Trailing stop logic for RUNNER will be managed by position manager once OPEN.
-        await supabase.from("user_trades").insert({
-          id: crypto.randomUUID(),
-          user_id: alloc.user_id,
-          opportunity_id: signal.id,
-          symbol: signal.symbol,
-          side: signal.side,
-          volume: alloc.volume / 2,
-          risk_amount: alloc.risk_amount / 2,
-          status: "VPS_PENDING",
-          trade_type: "RUNNER",
-        });
+        if (legBVolume >= 0.01) {
+          await supabase.from("user_trades").insert({
+            id: crypto.randomUUID(),
+            user_id: alloc.user_id,
+            opportunity_id: signal.id,
+            symbol: signal.symbol,
+            side: signal.side,
+            volume: legBVolume,
+            risk_amount: alloc.risk_amount / (alloc.volume > 0 ? (alloc.volume / legBVolume) : 2),
+            status: "VPS_PENDING",
+            trade_type: "RUNNER",
+          });
+        }
     }
 
     await supabase.from("trade_opportunities").update({
