@@ -117,7 +117,7 @@ The `created_at` timestamps should fall within the last 4 hours for `agent-swing
 ## ⚠️ 1C. pg_cron Diagnostic — Authentication Failure Check (401 Unauthorized)
 
 > [!CAUTION]
-> **Incident (2026-07-31):** `agent-swing-poll` and `agent-news-poll` silently failed to execute for an entire day because the `pg_cron` HTTP POST request was hardcoded with the `SUPABASE_ANON_KEY`. The Edge Functions require the `SUPABASE_SERVICE_ROLE_KEY` to authenticate background cron triggers. This resulted in silent `401 Unauthorized` errors inside the edge function logs, and no signals were generated.
+> **Incident (2026-08-04):** `agent-swing-poll` silently failed to execute because `current_setting('app.settings.service_role_key', true)` resolves to `null` inside the background `pg_cron` worker. This resulted in silent `401 Unauthorized` errors inside the edge function logs. Edge functions strictly enforce the **Security First Principle** and reject invalid tokens.
 
 ### Step 1 — Check for 401 Errors in Edge Function Logs
 
@@ -137,21 +137,24 @@ FROM cron.job
 WHERE command LIKE '%net.http_post%';
 ```
 
-Check the `Authorization` header inside the JSON payload. 
+Check how the authentication is being passed.
 
-- ❌ **BROKEN:** Hardcoded token string (usually the Anon key).
-```sql
-headers := jsonb_build_object('Authorization', 'Bearer eyJhbGciOiJ...')
-```
-
-- ✅ **CORRECT:** Securely injected Service Role Key using `current_setting()`.
+- ❌ **BROKEN:** Hardcoded token string or relying on `current_setting(...)` for the Authorization header.
 ```sql
 headers := jsonb_build_object('Authorization', 'Bearer ' || current_setting('app.settings.service_role_key', true))
 ```
 
+- ✅ **CORRECT:** Securely injected `x-cron-secret` fetched from the internal vault using `new_cron_secret` (which contains no libcurl-breaking newlines).
+```sql
+headers := jsonb_build_object(
+  'Content-Type', 'application/json',
+  'x-cron-secret', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'new_cron_secret' LIMIT 1)
+)
+```
+
 ### Step 3 — Apply the Fix
 
-If any job is using a hardcoded or incorrect key, update it immediately using `cron.alter_job()` or by dropping and recreating it:
+If any job is using an outdated or insecure key resolution method, update it immediately using `cron.alter_job()`:
 
 ```sql
 SELECT cron.alter_job(
@@ -161,12 +164,23 @@ SELECT cron.alter_job(
       url := 'https://ktezlusdkqlfdwqrldtn.supabase.co/functions/v1/agent-swing',
       headers := jsonb_build_object(
         'Content-Type', 'application/json',
-        'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key', true)
+        'x-cron-secret', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'new_cron_secret' LIMIT 1)
       ),
-      body := '{}'::jsonb
+      body := '{}'::jsonb,
+      timeout_milliseconds := 150000
     );
   $$
 );
+```
+
+### Step 4 — Check Database Triggers for Agent Handoffs
+
+Edge Functions also receive webhook handoffs directly from database triggers (e.g., `trigger_trade_executor` calling `agent-trade`). Ensure these triggers dynamically fetch the `webhook_secret` from the vault, avoiding hardcoded legacy keys (`r4in3_...`).
+
+- ✅ **CORRECT:**
+```sql
+SELECT decrypted_secret INTO secret_val FROM vault.decrypted_secrets WHERE name = 'webhook_secret' LIMIT 1;
+... headers := jsonb_build_object('Content-Type', 'application/json', 'x-webhook-secret', secret_val)
 ```
 
 ---
@@ -199,6 +213,47 @@ url := 'https://ktezlusdkqlfdwqrldtn.supabase.co/functions/v1/agent-trade'
 ```
 
 Use `cron.alter_job()` to update the command.
+
+---
+
+## ⚠️ 1E. pg_cron Diagnostic — Execution Timeout (Silent Aborts)
+
+> [!CAUTION]
+> **Incident (2026-08-04):** `agent-swing-poll` silently aborted after exactly 5 seconds without inserting any signals. `pg_net` defaults to a 5000ms timeout for HTTP POSTs. Because the parallelized Edge Function took 77 seconds, the client closed the connection and Deno silently killed the execution without errors.
+
+### Step 1 — Check for Missing Timeouts
+
+Verify that all long-running cron jobs explicitly declare a `timeout_milliseconds` parameter in their `pg_net` payload.
+
+```sql
+SELECT jobname, command
+FROM cron.job
+WHERE command LIKE '%net.http_post%';
+```
+
+- ❌ **BROKEN:** No timeout parameter, meaning it defaults to 5 seconds.
+- ✅ **CORRECT:** `timeout_milliseconds := 150000` is explicitly set (matching the Edge Function maximum limit of 150 seconds).
+
+### Step 2 — Apply the Fix
+
+Alter the job to inject the timeout parameter:
+
+```sql
+SELECT cron.alter_job(
+  job_id := (SELECT jobid FROM cron.job WHERE jobname = 'agent-swing-poll'),
+  command := $$
+    SELECT net.http_post(
+      url := 'https://ktezlusdkqlfdwqrldtn.supabase.co/functions/v1/agent-swing',
+      headers := jsonb_build_object(
+        'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key', true),
+        'Content-Type', 'application/json'
+      ),
+      body := '{}'::jsonb,
+      timeout_milliseconds := 150000
+    );
+  $$
+);
+```
 
 ---
 
@@ -258,6 +313,45 @@ WHERE macro_bias = 'VOLATILITY_LOCKOUT'
 ```
 
 - [ ] **Kill Switch & Isolation Locks:** Verify that `agent-kill-switch` hasn't triggered an unintended global system pause. Query `shadow_ledger` and `audit_log` to ensure no permanent isolation locks have been placed on key assets like `XAUUSD` or `BTCUSD` unless macro events dictate so.
+
+---
+
+## ⚠️ 3A. Trade Execution — Status Mismatch (Orphaned PENDING)
+
+> [!WARNING]
+> **Incident (2026-08-04):** Trades were successfully inserted by `agent-trade` but never picked up by the MT5 VPS EA because they were inserted with `status = 'PENDING'`, but the EA was explicitly polling for `status = 'VPS_PENDING'`.
+
+Check for orphaned signals that are stuck in the database and being ignored by the Execution EA:
+
+```sql
+SELECT id, symbol, status, created_at 
+FROM user_trades 
+WHERE status = 'PENDING' 
+  AND created_at < NOW() - INTERVAL '1 hour';
+```
+
+If this query returns rows, investigate a routing failure or a hardcoded status mismatch between the edge function inserts and the `vps-poll` fetch logic.
+
+---
+
+## ⚠️ 3B. Trade Execution — MT5 Invalid Volume (Code 10014)
+
+> [!WARNING]
+> **Incident (2026-08-04):** The strategy logic split the minimum lot size (0.01) into two legs (0.005 lots each). MetaTrader 5 strictly enforces a minimum of 0.01 lots and instantly rejected the trades with `TRADE_RETCODE_INVALID_VOLUME` (Code 10014).
+
+Monitor for execution blocks on the broker side:
+
+```sql
+SELECT id, symbol, volume, error_message, created_at 
+FROM user_trades 
+WHERE status = 'FAILED' 
+  AND error_message LIKE '%10014%'
+ORDER BY created_at DESC;
+```
+
+If this query returns rows, ensure that volume splitting algorithms enforce a strict mathematical floor of `0.01` lots for each independently inserted leg.
+
+---
 
 ## 3. Trade Execution & PAMM Routing
 Verify that approved signals are actually materializing into user trades and correctly interfacing with brokers.

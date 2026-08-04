@@ -516,11 +516,14 @@ serve(async (req) => {
 
   const authHeader = req.headers.get("Authorization");
   const cronSecretHeader = req.headers.get("x-cron-secret");
+  const webhookSecretHeader = req.headers.get("x-webhook-secret");
   const cronSecretEnv = Deno.env.get("CRON_SECRET");
+  const webhookSecretEnv = Deno.env.get("WEBHOOK_SECRET");
 
   const isAuthorized =
     authHeader === `Bearer ${key}` ||
-    (cronSecretHeader && cronSecretEnv && cronSecretHeader === cronSecretEnv);
+    (cronSecretHeader && cronSecretEnv && cronSecretHeader === cronSecretEnv) ||
+    (webhookSecretHeader && webhookSecretEnv && webhookSecretHeader === webhookSecretEnv);
 
   if (!isAuthorized) {
     return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {

@@ -27,6 +27,22 @@ serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    const authHeader = req.headers.get("Authorization");
+    const cronSecretHeader = req.headers.get("x-cron-secret");
+    const cronSecretEnv = Deno.env.get("CRON_SECRET");
+
+    const isAuthorized =
+      authHeader === `Bearer ${supabaseKey}` ||
+      (cronSecretHeader && cronSecretEnv && cronSecretHeader === cronSecretEnv);
+
+    if (!isAuthorized) {
+      return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     const isAutoTrading = await isAutoTradingEnabled(supabase);

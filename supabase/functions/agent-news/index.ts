@@ -221,12 +221,16 @@ async function verifyWithTavily(query: string): Promise<string | null> {
 // ── MAIN HANDLER ──────────────────────────────────────────────────────────────
 serve(async (req) => {
   const secret = req.headers.get("x-webhook-secret");
-  const auth   = req.headers.get("authorization");
+  const authHeader = req.headers.get("Authorization") || req.headers.get("authorization");
+  const cronSecretHeader = req.headers.get("x-cron-secret");
+  const cronSecretEnv = Deno.env.get("CRON_SECRET");
 
-  if (WEBHOOK_SECRET && secret !== WEBHOOK_SECRET) {
-    if (!auth?.startsWith("Bearer ")) {
-      return new Response("Unauthorized", { status: 401 });
-    }
+  const isCronAuthorized = cronSecretHeader && cronSecretEnv && cronSecretHeader === cronSecretEnv;
+  const isBearerAuthorized = authHeader === `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`;
+  const isWebhookAuthorized = WEBHOOK_SECRET && secret === WEBHOOK_SECRET;
+
+  if (!isCronAuthorized && !isBearerAuthorized && !isWebhookAuthorized) {
+    return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), { status: 401 });
   }
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);

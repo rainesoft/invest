@@ -35,11 +35,17 @@ serve(async (req) => {
 
     // --- SECURITY AUTHORIZATION CHECK ---
     const webhookSecret = req.headers.get("x-webhook-secret");
+    const cronSecretHeader = req.headers.get("x-cron-secret");
     const authHeader = req.headers.get("Authorization");
-    const expectedSecret = Deno.env.get("WEBHOOK_SECRET");
+    const expectedWebhookSecret = Deno.env.get("WEBHOOK_SECRET");
+    const cronSecretEnv = Deno.env.get("CRON_SECRET");
 
-    if (webhookSecret) {
-      if (webhookSecret !== expectedSecret && webhookSecret !== "FALLBACK_SECRET_123") {
+    if (cronSecretHeader && cronSecretEnv && cronSecretHeader === cronSecretEnv) {
+      // Authorized via cron
+    } else if (authHeader === `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`) {
+      // Authorized via service role key
+    } else if (webhookSecret) {
+      if (webhookSecret !== expectedWebhookSecret && webhookSecret !== "FALLBACK_SECRET_123") {
         return new Response("Unauthorized Webhook Secret", { status: 401 });
       }
     } else if (authHeader) {

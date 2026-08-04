@@ -57,3 +57,8 @@ Examples of correct consolidation:
 
 ### Scratch Scripts & Ad-Hoc Files
 When writing temporary scratch scripts (e.g., for ad-hoc database queries, testing APIs, or manual trade execution) or generating non-permanent files, you MUST create them inside the `temp/` folder in the project root. Never save temporary scripts in the root directory to avoid cluttering the repository and leaving behind untracked files during git commits.
+
+## Incident Response & Health Checks
+Whenever you investigate and resolve a critical system bug, execution failure, or silent failure:
+1. You MUST update the workspace's System Health Checklist (e.g., `docs/System Health Checklist.md`) to include a diagnostic query or check that can detect this specific failure mode in the future.
+2. You MUST update the corresponding `system-health` skill (`SKILL.md`) so that the automated health check incorporates your new diagnostic.
