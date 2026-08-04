@@ -732,7 +732,7 @@ serve(async (req) => {
           side: signal.side,
           volume: alloc.volume / 2,
           risk_amount: alloc.risk_amount / 2,
-          status: "PENDING",
+          status: "VPS_PENDING",
           trade_type: "QUICK_EXIT",
         });
         
@@ -746,7 +746,7 @@ serve(async (req) => {
           side: signal.side,
           volume: alloc.volume / 2,
           risk_amount: alloc.risk_amount / 2,
-          status: "PENDING",
+          status: "VPS_PENDING",
           trade_type: "RUNNER",
         });
     }
