@@ -18,7 +18,7 @@ Verify that the underlying Supabase infrastructure is responsive and background 
 ## ⚠️ 1B. pg_cron Diagnostic — Critical Failure Check
 
 > [!CAUTION]
-> **Incident (2026-07-30):** `agent-scalper-poll`, `agent-news-poll`, and `position-manager-poll` silently failed for 1.5+ hours due to a PL/pgSQL syntax error in the cron job SQL commands. Because pg_cron fires asynchronously, **no alerts were raised** — signals simply stopped being generated. Run this check at the start of every trading day.
+> **Incident (2026-07-30):** `agent-scalper-poll`, `agent-news-poll`, and `agent-trade-manage-positions` silently failed for 1.5+ hours due to a PL/pgSQL syntax error in the cron job SQL commands. Because pg_cron fires asynchronously, **no alerts were raised** — signals simply stopped being generated. Run this check at the start of every trading day.
 
 ### Step 1 — Query the last run status for every cron job
 
@@ -107,7 +107,7 @@ The `created_at` timestamps should fall within the last 4 hours for `agent-swing
 | `agent-news-poll` | `0 * * * *` | Fires at the top of every hour, 7 days a week |
 | `agent-swing-poll` | `0 */4 * * *` | Fires every 4 hours, 7 days a week |
 | `agent-trade-poll` | `3-59/5 * * * *` | Fires every 5 min (offset 3m), 7 days a week |
-| `position-manager-poll` | `*/30 * * * *` | Fires every 30 min, 7 days a week |
+| `agent-trade-manage-positions` | `*/30 * * * *` | Fires every 30 min, 7 days a week |
 | `system-health-check-poll` | `15 * * * *` | Fires hourly to scan `cron.job_run_details` for silent failures |
 | `invoke_reset_daily_drawdown` | `0 22 * * *` | Fires at 22:00 UTC daily |
 | `weekend-defense-cron` | `30 20 * * 5` | Fires Friday 20:30 UTC |
@@ -188,7 +188,7 @@ SELECT decrypted_secret INTO secret_val FROM vault.decrypted_secrets WHERE name 
 ## ⚠️ 1D. pg_cron Diagnostic — Null URL Constraint Error (net.http_request_queue)
 
 > [!WARNING]
-> **Incident (2026-07-31):** The `position-manager-poll` job repeatedly failed with a `violates not-null constraint` error on the `url` column in `net.http_request_queue`.
+> **Incident (2026-07-31):** The `agent-trade-manage-positions` job repeatedly failed with a `violates not-null constraint` error on the `url` column in `net.http_request_queue`.
 
 ### Step 1 — Check for NULL URL errors
 
@@ -219,7 +219,7 @@ Use `cron.alter_job()` to update the command.
 ## ⚠️ 1E. pg_cron Diagnostic — Execution Timeout (Silent Aborts)
 
 > [!CAUTION]
-> **Incident (2026-08-04):** `agent-swing-poll` silently aborted after exactly 5 seconds without inserting any signals. `pg_net` defaults to a 5000ms timeout for HTTP POSTs. Because the parallelized Edge Function took 77 seconds, the client closed the connection and Deno silently killed the execution without errors.
+> **Incident (2026-08-04 / 2026-08-06):** Edge Functions like `agent-swing-poll`, `agent-trade-manage-positions`, and `agent-news-poll` silently aborted after exactly 5 seconds. `pg_net` defaults to a 5000ms timeout for HTTP POSTs. Because these functions take longer than 5 seconds to run (e.g., managing positions via MetaAPI or scraping news), the client closed the connection and Deno silently killed the execution without throwing an error log. This caused a week-long agent flatline and failed to trail live Stop Losses.
 
 ### Step 1 — Check for Missing Timeouts
 
@@ -384,7 +384,7 @@ Any signal with `hours_open > 10` should be reviewed manually. If the limit orde
 - [ ] **Drawdown Breaker & House Money (PHM):** 
   - Check `user_risk_settings`. Ensure no critical master/PAMM accounts have their `high_water_mark_equity` threshold breached by more than their `max_drawdown_pct`.
   - Check `system_settings` for `phm_settings`. Confirm if the master account is currently playing with **House Money**. If active, verify that the escalated risk (e.g. 15%) is correctly overriding standard risk, and that the Drawdown Breaker correctly locks to the PHM Floor to ensure a safe soft-landing if a loss streak occurs.
-- [ ] **Pending Order Garbage Collection:** Verify `position-manager-poll` is successfully executing every 30 minutes. Check the edge function logs for `agent-trade` to confirm it is scanning MetaAPI and autonomously cancelling stale pending limit orders (older than 24 hours) to prevent ghost executions.
+- [ ] **Pending Order Garbage Collection:** Verify `agent-trade-manage-positions` is successfully executing every 30 minutes. Check the edge function logs for `agent-trade` to confirm it is scanning MetaAPI and autonomously cancelling stale pending limit orders (older than 24 hours) to prevent ghost executions.
 - [ ] **Database & Broker Reconciliation (Ghost Trades):** Ensure that `agent-trade` is successfully syncing closed broker positions back to the database. Query `user_trades` for `status = 'OPEN'` and cross-reference with MetaAPI. If a trade is closed on the broker but stuck as `OPEN` in the database, the Execution Desk may incorrectly block new signals due to synthetic hedge correlation limits.
 
 ## 4. External Integrations
