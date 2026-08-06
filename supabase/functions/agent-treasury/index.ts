@@ -38,6 +38,22 @@ serve(async (req) => {
       throw new Error(`Failed to insert snapshot: ${insertError.message}`);
     }
 
+    // 3. Update Treasury Health Flag for Execution Engine
+    const isSolvent = solvencyRatio >= 1.0;
+    const { error: settingsError } = await supabase.from('system_settings').upsert({
+      key: 'treasury_status',
+      value: {
+        is_solvent: isSolvent,
+        solvency_ratio: solvencyRatio,
+        free_margin: exnessTotal,
+        updated_at: new Date().toISOString()
+      }
+    }, { onConflict: 'key' });
+
+    if (settingsError) {
+      throw new Error(`Failed to update treasury health flag: ${settingsError.message}`);
+    }
+
     return new Response(JSON.stringify({ 
       status: "success", 
       solvency_ratio: solvencyRatio,
