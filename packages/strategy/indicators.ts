@@ -185,7 +185,8 @@ export function getContextSnapshot(
   open: number[],
   high: number[],
   low: number[],
-  close: number[]
+  close: number[],
+  symbol?: string
 ): LogicContext {
   // Edge case: Not enough data
   if (close.length === 0) {
@@ -294,7 +295,11 @@ export function getContextSnapshot(
     const emaSpread = Math.abs(current_ema_50 - current_ema_200) / current_ema_200;
     
     // 1. ADX Method: Trend strength is too weak
-    if (current_adx_14 !== null && current_adx_14 < 20) {
+    let minAdxThreshold = 20;
+    if (symbol && ['UKOIL', 'XAUUSD', 'XAGUSD'].includes(symbol)) {
+      minAdxThreshold = 15;
+    }
+    if (current_adx_14 !== null && current_adx_14 < minAdxThreshold) {
       trend_alignment = 'CHOP';
     } 
     // 2. EMA Distance Method: MAs are tangling (less than 0.1% apart)

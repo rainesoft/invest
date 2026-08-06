@@ -124,7 +124,9 @@ export function generateMacroContext(symbol: string, events: FFEvent[] | null, h
   if (headlines && headlines.length > 0) {
     report += `[LIVE BREAKING HEADLINES (LAST 24H) FOR ${symbol}]:\n`;
     headlines.forEach(h => report += `- ${h}\n`);
-    report += `\nCRITICAL DIRECTIVE: If these headlines indicate severe geopolitical shocks, unannounced rate hikes, or sudden crashes that OPPOSE the technical trend, you MUST abort the setup. Alternatively, if these headlines indicate an overwhelming fundamental trend (e.g., extremely weak demand + supply glut), you MUST classify the macro bias as EXTREMELY_BULLISH or EXTREMELY_BEARISH, which authorizes Breakout Logic.\n\n`;
+    report += `\nCRITICAL DIRECTIVE: 
+1. If these headlines indicate severe geopolitical shocks, unannounced rate hikes, or sudden crashes that OPPOSE the technical trend, you MUST abort the setup. 
+2. SENTIMENT DECAY CURVE: Markets price in news quickly. If a news event or headline appears to be older than 24 hours, its sentiment impact is decaying (50% Relevance). If it is older than 48 hours, it is fully priced in (10% Relevance) and MUST NOT invalidate structural technical setups. Do NOT let stale news overrule a high-probability Fibonacci entry.\n\n`;
   }
 
   if (!events) {

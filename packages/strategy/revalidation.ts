@@ -19,7 +19,7 @@ export async function revalidateOpportunity(signal: any, snapshot: LogicContext,
     throw new Error("No OpenAI or Azure OpenAI keys found");
   }
 
-  const systemPrompt = `You are a Senior Risk Officer re-evaluating a previously published trading signal.
+  const systemPrompt = `You are agent-risk, re-evaluating a previously published trading signal.
 Your job is to determine if the original thesis is still valid given the NEW live market snapshot and NEW breaking news context.
 
 [ORIGINAL SIGNAL THESIS]
@@ -35,15 +35,17 @@ Current Price: ${snapshot.current_price}
 Breaking News & Macro: ${newsContext || "No major macro events."}
 
 [VALIDATION RULES]
-1. MACRO CONTRADICTION: If the new breaking news fundamentally contradicts the original thesis (e.g. a 'risk-off' geopolitical shock occurs but the signal is LONG equities), you MUST reject the signal.
-2. STRUCTURAL DECAY: If the price action has significantly shifted and the original structural rationale no longer makes sense, reject it.
-3. DO NOT HALLUCINATE MATH: The system has ALREADY mathematically verified that the current price has NOT hit the stop loss or take profit. Do NOT reject the setup claiming the stop loss was hit. You must only reject based on fundamental macro shifts or severe structural decay.
-4. PROFIT SECURING: If the trade is currently in profit, but the momentum has slowed, the market is ranging, or we are approaching a strong structural barrier, issue a TAKE_PROFIT command to secure the bag early. Do not get greedy.
-5. If the thesis remains strongly valid and supported by the new context, issue MAINTAIN.
+1. MACRO CONTRADICTION: If the new breaking news fundamentally contradicts the original thesis (e.g. a 'risk-off' geopolitical shock occurs but the signal is LONG equities), you must act.
+2. DYNAMIC CONFIDENCE WEIGHTING: Look at the Original Signal Thesis. If it is an "S-Tier" signal (highest technical conviction), DO NOT issue a hard REJECT unless the news is a catastrophic black-swan event. Instead, issue a REDUCE_RISK command to cut the position size, or a TIGHTEN_STOP command to secure the position.
+3. BUY THE RUMOR, SELL THE NEWS: Evaluate if the fundamental news has already been priced in. If the asset has already completed a massive directional move prior to the news breaking, assume 'buy the rumor, sell the news' and DO NOT reject opposing technical signals.
+4. STRUCTURAL DECAY: If the price action has significantly shifted and the original structural rationale no longer makes sense, reject it (or reduce risk).
+5. DO NOT HALLUCINATE MATH: The system has ALREADY mathematically verified that the current price has NOT hit the stop loss or take profit. Do NOT reject the setup claiming the stop loss was hit.
+6. PROFIT SECURING: If the trade is currently in profit, but momentum has slowed or we are approaching a strong structural barrier, issue a TAKE_PROFIT command to secure the bag early. 
+7. If the thesis remains strongly valid and supported by the new context, issue MAINTAIN.
 
 You MUST respond strictly with a raw JSON object:
 {
-  "action": "MAINTAIN" | "REJECT" | "TAKE_PROFIT",
+  "action": "MAINTAIN" | "REJECT" | "TAKE_PROFIT" | "REDUCE_RISK" | "TIGHTEN_STOP",
   "reason": "Explain why you chose this action."
 }`;
 
@@ -62,7 +64,7 @@ You MUST respond strictly with a raw JSON object:
         schema: {
           type: "object",
           properties: {
-            action: { type: "string", enum: ["MAINTAIN", "REJECT", "TAKE_PROFIT"] },
+            action: { type: "string", enum: ["MAINTAIN", "REJECT", "TAKE_PROFIT", "REDUCE_RISK", "TIGHTEN_STOP"] },
             reason: { type: "string" }
           },
           required: ["action", "reason"],

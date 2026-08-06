@@ -60,7 +60,7 @@ serve(async (req) => {
       console.log(`🚨 [Auto-Eject] AI downgraded signal ${signal.symbol}. ${openTrades.length} open trades found.`);
       const tgMessage = `⚠️ <b>AI INVALIDATION ALERT (${signal.symbol})</b> ⚠️\n\nThe AI has dynamically downgraded and REJECTED an active signal.\n\n<i>${signal.ai_risks || "AI invalidated the setup."}</i>\n\n<b>${openTrades.length} open PAMM trades are tied to this setup!</b>\n\n⚠️ <i>Manual Assessment Required:</i> Administrator must log in to assess/close these open positions.`;
       await notifyTelegram(tgMessage);
-      await insertAuditLog(supabase, { actor_type: "SYSTEM", action: "AUTO_EJECT_ALERT", entity_type: "research", entity_id: signal.id, payload_json: { reason: "Signal rejected by AI Risk Officer. Manual intervention requested." } });
+      await insertAuditLog(supabase, { actor_type: "SYSTEM", action: "AUTO_EJECT_ALERT", entity_type: "research", entity_id: signal.id, payload_json: { reason: "Signal rejected by agent-risk. Manual intervention requested." } });
       return new Response("Auto-eject alert sent.", { status: 200 });
     }
 
