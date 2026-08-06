@@ -3,7 +3,7 @@ import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2.108.2"
 import { fetchPaperBars, Bar } from "../../../packages/execution/index.ts";
 import { insertAuditLog } from "../../../packages/core/audit.ts";
 import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews, detectCentralBankEvent, computeMacroConfidenceBoost } from "../../../packages/core/news.ts";
-import { isAutoTradingEnabled } from "../../../packages/core/settings.ts";
+import { isAutoTradingEnabled, getTradingSymbols } from "../../../packages/core/settings.ts";
 import { isMarketOpen } from "../../../packages/core/market.ts";
 
 import { revalidateOpportunity } from "../../../packages/strategy/revalidation.ts";
@@ -501,7 +501,6 @@ serve(async (req) => {
     searchParams.get("symbols") ||
     Deno.env.get("SWING_SYMBOLS") ||
     "XAUUSD,XAGUSD,BTCUSD,UKOIL,EURUSD,GBPUSD,USDJPY,US30,NAS100";
-  const symbols = symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean);
   const newsContext = searchParams.get("news") ?? undefined;
 
   const url = Deno.env.get("SUPABASE_URL");
@@ -536,6 +535,11 @@ serve(async (req) => {
     auth: { persistSession: false },
     global: { headers: { Authorization: `Bearer ${key}` } },
   });
+
+  const dbSymbols = await getTradingSymbols(supabase);
+  const symbols = dbSymbols && dbSymbols.length > 0 
+      ? dbSymbols 
+      : symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean);
 
   const traceId = crypto.randomUUID();
 
@@ -629,7 +633,8 @@ serve(async (req) => {
                 result.map((b: any) => b.o),
                 result.map((b: any) => b.h),
                 result.map((b: any) => b.l),
-                result.map((b: any) => b.c)
+                result.map((b: any) => b.c),
+                signal.symbol
               );
 
               // 3. Math Validation (Stop Loss Hit)
@@ -654,14 +659,11 @@ serve(async (req) => {
               const evalResult = await revalidateOpportunity(signal, snapshot, currentContext);
               
               if (evalResult.action === "REJECT") {
-                await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Invalidated by AI Risk Officer: ${evalResult.reason}` }).eq("id", signal.id);
+                await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Invalidated by agent-risk: ${evalResult.reason}` }).eq("id", signal.id);
                 // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
                 console.log(`[Validation] REJECTED ${signal.symbol} by AI: ${evalResult.reason}`);
               } else if (evalResult.action === "TAKE_PROFIT") {
-                // For scalping, if AI decides to secure profits early, we mark it as WON (or REJECTED with profit info) 
-                // Since 'REJECTED' triggers auto-eject, we can update it to REJECTED but state it's a profit take.
-                // Wait, if we mark it as REJECTED, it triggers auto-eject to close the live positions.
-                await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Profit Secured by AI Risk Officer: ${evalResult.reason}` }).eq("id", signal.id);
+                await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Profit Secured by agent-risk: ${evalResult.reason}` }).eq("id", signal.id);
                 console.log(`[Validation] TAKE_PROFIT ${signal.symbol} by AI: ${evalResult.reason}`);
                 if (!isManual) {
                   try {
@@ -669,6 +671,30 @@ serve(async (req) => {
                   } catch (fallbackErr) {
                     console.error(`[Fallback Webhook Error] ${fallbackErr}`);
                   }
+                }
+              } else if (evalResult.action === "TIGHTEN_STOP" || evalResult.action === "REDUCE_RISK") {
+                console.log(`[Validation] ${evalResult.action} ${signal.symbol} by AI: ${evalResult.reason}`);
+                const isLong = signal.side === "LONG";
+                const newSl = evalResult.action === "TIGHTEN_STOP" 
+                   ? (isLong ? snapshot.current_price - snapshot.atr_14 : snapshot.current_price + snapshot.atr_14) // Tighten to current price - 1 ATR
+                   : null;
+                   
+                try {
+                   await fetch(`${Deno.env.get("WEBHOOK_URL")}/agent-trade`, { 
+                       method: "POST", 
+                       headers: { 
+                           "Content-Type": "application/json",
+                           "x-webhook-secret": Deno.env.get("WEBHOOK_SECRET") || ""
+                       },
+                       body: JSON.stringify({ 
+                           action: "MODIFY_ORDER", 
+                           opportunity_id: signal.id,
+                           modification_type: evalResult.action,
+                           new_sl: newSl ? Number(newSl.toFixed(5)) : undefined
+                       }) 
+                   });
+                } catch (fallbackErr) {
+                   console.error(`[Webhook Error] Failed to modify order: ${fallbackErr}`);
                 }
               } else {
                 console.log(`[Validation] MAINTAIN ${signal.symbol}: Thesis remains intact.`);
@@ -753,7 +779,7 @@ serve(async (req) => {
           });
 
           // === MARKET SNAPSHOT ===
-          const snapshot = getContextSnapshot(timestamps, open, high, low, close);
+          const snapshot = getContextSnapshot(timestamps, open, high, low, close, symbol);
 
           // === ASSET ISOLATION (PYRAMIDING) GUARD ===
           sendEvent({ type: "progress", message: `[Pre-AI Guard] Validating global signal constraints for ${symbol}...` });
@@ -781,6 +807,7 @@ serve(async (req) => {
                 weeklyBars.map((b) => b.h),
                 weeklyBars.map((b) => b.l),
                 weeklyBars.map((b) => b.c),
+                symbol
               );
               (snapshot as any).weekly_trend = weeklySnap.trend_alignment;
               (snapshot as any).weekly_ema_50 = weeklySnap.ema_50;
@@ -802,6 +829,7 @@ serve(async (req) => {
                 ltfBars.map((b) => b.h),
                 ltfBars.map((b) => b.l),
                 ltfBars.map((b) => b.c),
+                symbol
               );
               (snapshot as any).ltf_timeframe = ltfTimeframe;
               (snapshot as any).ltf_trend = ltfSnap.trend_alignment;
@@ -1249,7 +1277,7 @@ serve(async (req) => {
               risk_summary: `RSI ${snapshot.rsi_14} | ATR ${snapshot.atr_14}`,
               confidence: adjustedConfidence,
               ai_summary: aiSummary,
-              ai_risks: "Managed by Swing AI Risk Officer",
+              ai_risks: "Managed by agent-risk",
               trace_id: traceId,
             })
             .select("id")
@@ -1290,7 +1318,7 @@ serve(async (req) => {
                   risk_summary: `RSI ${snapshot.rsi_14} | ATR ${snapshot.atr_14}`,
                   confidence,
                   ai_summary: aiSummary,
-                  ai_risks: "Managed by Swing AI Risk Officer",
+                  ai_risks: "Managed by agent-risk",
                   trace_id: traceId,
                 }
               }

@@ -15,3 +15,19 @@ export async function isAutoTradingEnabled(supabase: SupabaseClient): Promise<bo
     return true; // Failsafe default
   }
 }
+
+export async function getTradingSymbols(supabase: SupabaseClient): Promise<string[] | null> {
+  try {
+    const { data, error } = await supabase
+      .from("system_settings")
+      .select("value")
+      .eq("key", "trading_symbols")
+      .single();
+      
+    if (error || !data || !Array.isArray(data.value)) return null;
+    return data.value;
+  } catch (err) {
+    console.error("[Settings] Error fetching trading_symbols:", err);
+    return null;
+  }
+}
