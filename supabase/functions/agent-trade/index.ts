@@ -107,6 +107,36 @@ serve(async (req) => {
        return new Response("Runner handoff complete.", { status: 200 });
     }
 
+    // --- ORDER MODIFICATION LOGIC (agent-risk) ---
+    if ((payload as any).action === "MODIFY_ORDER") {
+       const oppId = (payload as any).opportunity_id;
+       const modType = (payload as any).modification_type; // "TIGHTEN_STOP" or "REDUCE_RISK"
+       const newSl = (payload as any).new_sl;
+
+       if (!oppId) return new Response("Missing opportunity_id", { status: 400 });
+
+       const { data: opp } = await supabase.from("trade_opportunities").select("*").eq("id", oppId).single();
+       if (!opp) return new Response("Opportunity not found", { status: 404 });
+
+       if (modType === "TIGHTEN_STOP" && newSl) {
+           const updatedJson = { ...opp.stop_plan_json, stop: newSl };
+           await supabase.from("trade_opportunities").update({ 
+               stop_plan_json: updatedJson,
+               ai_risks: opp.ai_risks + `\n[agent-risk] Stop Loss dynamically tightened to ${newSl}`
+           }).eq("id", oppId);
+           console.log(`[Order Modify] Tightened stop loss for ${opp.symbol} to ${newSl}`);
+       } else if (modType === "REDUCE_RISK") {
+           // For VPS EA, we signal a partial close by setting a flag or we can execute via MetaAPI if active
+           // For now, we update the DB to instruct the VPS to halve the position
+           await supabase.from("trade_opportunities").update({
+               ai_risks: opp.ai_risks + `\n[agent-risk] REDUCE_RISK command issued. Flagged for 50% partial close.`
+           }).eq("id", oppId);
+           console.log(`[Order Modify] REDUCE_RISK issued for ${opp.symbol}`);
+       }
+
+       return new Response("Order modification processed", { status: 200 });
+    }
+
     // --- POSITION MANAGER LOGIC ---
     if ((payload as any).action === "MANAGE_POSITIONS") {
       console.log("[Position Manager] Starting sweep...");
@@ -143,6 +173,11 @@ serve(async (req) => {
       const errors: string[] = [];
       const atrCache = new Map<string, number>();
       const uniqueSymbols = [...new Set([...orderMap.values()].map(t => t.symbol))];
+
+      // --- AUTONOMOUS DE-LEVERAGING CHECK ---
+      const { data: treasurySetting } = await supabase.from("system_settings").select("value").eq("key", "treasury_status").single();
+      const isSolvent = treasurySetting?.value?.is_solvent !== false;
+      if (!isSolvent) console.log("🚨 [Position Manager] TREASURY INSOLVENT. Autonomous De-Leveraging is ACTIVE.");
 
       // --- EOD SCALP CHECK ---
       const nyHour = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" })).getHours();
@@ -240,7 +275,34 @@ serve(async (req) => {
           const opp = trade.trade_opportunities;
           if (!opp) continue;
 
-          // --- 2. END OF DAY (EOD) SCALP LIQUIDATION ---
+          // --- 2. AUTONOMOUS DE-LEVERAGING (Emergency Trimming) ---
+          if (!isSolvent && trade.status === "OPEN") {
+             const profit = Number(position.profit) || 0;
+             const currentVol = Number(position.volume) || 0.01;
+             const entryPrice = opp.entry_plan_json?.price || opp.entry_plan_json?.entry_price;
+             
+             if (profit > 0 && entryPrice) {
+                 // Profitable: Move SL to Breakeven
+                 console.log(`[Position Manager] DE-LEVERAGING: Moving SL to Breakeven for ${orderId}`);
+                 await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                     method: "POST",
+                     headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                     body: JSON.stringify({ actionType: "POSITION_MODIFY", positionId: orderId, stopLoss: entryPrice })
+                 });
+             } else if (currentVol > 0.01) {
+                 // Losing: Partial Close by 50%
+                 console.log(`[Position Manager] DE-LEVERAGING: Partially closing 50% of ${orderId} (${trade.symbol}).`);
+                 const newVol = Math.max(0.01, Math.floor((currentVol / 2) * 100) / 100);
+                 await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                     method: "POST",
+                     headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                     body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: orderId, volume: currentVol - newVol })
+                 });
+             }
+             continue; // Skip all other logic to avoid conflicting modifications
+          }
+
+          // --- 3. END OF DAY (EOD) SCALP LIQUIDATION ---
           // If it is 4 PM NY time or later, and the trade is a Scalp ('30m' timeframe), liquidate it immediately.
           if (isEodScalp && opp.timeframe === "30m") {
              console.log(`[Position Manager] EOD LIQUIDATION: Closing Scalp ${orderId} for ${trade.symbol} at ${nyHour}:00 NY Time.`);
@@ -617,6 +679,18 @@ serve(async (req) => {
       signal.ai_summary = updatedSummary; 
     // --- END PORTFOLIO MANAGER ---
 
+    // --- PRE-TRADE INSOLVENCY CHECK ---
+    const { data: treasuryData } = await supabase.from("system_settings").select("value").eq("key", "treasury_status").single();
+    if (treasuryData && treasuryData.value) {
+       const status = treasuryData.value as any;
+       if (status.is_solvent === false || status.solvency_ratio < 1.0) {
+          const rejectReason = `[Execution Desk] REJECTED: Treasury Insolvency Lockout. Broker margin is insufficient to cover aggregate user wallets (Ratio: ${status.solvency_ratio}).`;
+          await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_summary: signal.ai_summary + "\n\n" + rejectReason, ai_risks: rejectReason }).eq("id", signal.id);
+          console.log(`[Execution Desk] Rejected ${signal.symbol} due to Treasury Insolvency Lockout.`);
+          return new Response(JSON.stringify({ success: true, message: "Rejected due to insolvency" }), { status: 200 });
+       }
+    }
+
     // Build user allocations
     const userAllocations = [];
     let totalMasterVolume = 0;
@@ -675,10 +749,22 @@ serve(async (req) => {
         
         const riskPerTrade = Number(user.portfolio_capital) * effectiveRiskPct * entryWeight * tierRiskModifier * confluenceMultiplier * drawdownModifier;
         let volume = pointsAtRisk > 0 ? riskPerTrade / (pointsAtRisk * pointValueUsd) : 0.01;
+        
+        // --- HARD LOT CAP CIRCUIT BREAKER ---
+        const MAX_LOT_CAP = 0.50;
+        volume = Math.min(MAX_LOT_CAP, volume);
         volume = Math.max(0.01, Math.round(volume * 100) / 100);
         
         const riskAmount = pointsAtRisk * volume * pointValueUsd;
         
+        // --- ACCOUNT BLOWOUT PROTECTION ---
+        // If the 0.01 lot minimum creates a risk that exceeds 10% of their capital, reject it to prevent a margin call.
+        const maxPermissibleRisk = Number(user.portfolio_capital) * 0.10;
+        if (riskAmount > maxPermissibleRisk) {
+            console.log(`[Risk Manager] Blocking User ${user.user_id}: 0.01 min lot creates $${riskAmount.toFixed(2)} risk, violating 10% hard cap.`);
+            continue;
+        }
+
         // Only send to Master Broker if auto-execution is on for the user and they aren't paper trading
         if (user.auto_trade_enabled && user.is_live_execution_enabled) {
           totalMasterVolume += volume;
@@ -692,24 +778,9 @@ serve(async (req) => {
       }
     }
 
-    if (totalMasterVolume <= 0 || !META_API_TOKEN || !META_API_ACCOUNT_ID) {
-      console.log(`[PAMM Router] Skipping Master Broker execution. Total Volume: ${totalMasterVolume}. Missing credentials? ${!META_API_TOKEN}`);
-      // Fallback: Just insert virtual records if no broker connected (Paper PAMM)
-      let status = isMarketOrder ? "PAPER_OPEN" : "PENDING";
-      for (const alloc of userAllocations) {
-        await supabase.from("user_trades").insert({
-          id: crypto.randomUUID(),
-          user_id: alloc.user_id,
-          opportunity_id: signal.id,
-          symbol: signal.symbol,
-          side: signal.side,
-          volume: alloc.volume,
-          risk_amount: alloc.risk_amount,
-          status: status,
-          trade_type: "STANDARD",
-        });
-      }
-      return new Response("Paper execution complete", { status: 200 });
+    if (totalMasterVolume <= 0) {
+      console.log(`[PAMM Router] Skipping execution. Total Volume: ${totalMasterVolume}.`);
+      return new Response("No volume allocated", { status: 200 });
     }
 
     // --- VPS EXECUTION ROUTING ---
