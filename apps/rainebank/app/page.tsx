@@ -109,7 +109,7 @@ export default async function LandingPage() {
     side: 'MONITORING',
     status: 'STANDBY',
     entry_plan_json: { price: 'Awaiting Breakout' },
-    ai_summary: '[A-Tier] [Macro Alignment -> Searching]\nThe AI Risk Officer is continuously analyzing cross-asset volatility and institutional order flow. We are currently holding cash and waiting for a strictly defined, high-probability structural break before deploying capital. No active trades meet our minimum Risk:Reward thresholds at this precise moment.'
+    ai_summary: '[A-Tier] [Macro Alignment -> Searching]\nThe Risk AI Agent is continuously analyzing cross-asset volatility and institutional order flow. We are currently holding cash and waiting for a strictly defined, high-probability structural break before deploying capital. No active trades meet our minimum Risk:Reward thresholds at this precise moment.'
   };
 
   const statusColor = signal.status === 'APPROVED' ? '#4ade80' :
@@ -256,8 +256,8 @@ export default async function LandingPage() {
               display: 'flex', flexDirection: 'column'
             }}>
               <div style={{ fontSize: '20px', fontWeight: 700, color: '#fff', marginBottom: '16px' }}>Performance Plan</div>
-              <div style={{ fontSize: '48px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-2px' }}>30%<span style={{ fontSize: '18px', color: '#9ca3af', fontWeight: 500, letterSpacing: '0' }}> fee</span></div>
-              <p style={{ color: '#9ca3af', fontSize: '15px', marginBottom: '32px' }}>We only win when you win. A 30% performance fee is deducted solely on net profits.</p>
+              <div style={{ fontSize: '48px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-2px' }}>20%<span style={{ fontSize: '18px', color: '#9ca3af', fontWeight: 500, letterSpacing: '0' }}> fee</span></div>
+              <p style={{ color: '#9ca3af', fontSize: '15px', marginBottom: '32px' }}>We only win when you win. A 20% performance fee is deducted solely on net profits.</p>
 
               <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 40px 0', display: 'flex', flexDirection: 'column', gap: '16px', color: '#e5e7eb', flex: 1 }}>
                 <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>

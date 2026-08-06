@@ -273,7 +273,7 @@ export default function SignalsTab({ liveTrades = [] }: { liveTrades?: any[] }) 
               {/* AI Rationale */}
               <div style={{ background: isWarning ? 'rgba(248,113,113,0.05)' : 'rgba(37,99,235,0.05)', padding: '18px', borderRadius: '14px', border: `1px solid ${isWarning ? 'rgba(248,113,113,0.2)' : 'rgba(37,99,235,0.1)'}`, marginBottom: '20px' }}>
                 <div style={{ fontSize: '11px', color: isWarning ? '#f87171' : '#38bdf8', marginBottom: '10px', fontWeight: 700 }}>
-                  {isWarning ? 'AI RISK OFFICER WARNING' : 'LLM INSTITUTIONAL RATIONALE'}
+                  {isWarning ? 'AGENT-RISK WARNING' : 'LLM INSTITUTIONAL RATIONALE'}
                 </div>
                 {signal.ai_summary ? (
                   <>
