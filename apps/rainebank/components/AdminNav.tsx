@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { FileSearch, Zap, ArrowDownToLine, ArrowUpFromLine, Activity } from 'lucide-react';
+import { FileSearch, Zap, ArrowDownToLine, ArrowUpFromLine, Activity, Settings } from 'lucide-react';
 import AutoTradingToggle from './AutoTradingToggle';
 
 
@@ -10,6 +10,7 @@ const TABS = [
   { href: '/admin/dashboard',   label: 'Dashboard',   Icon: Activity,        activeColor: '#10b981', activeBg: 'rgba(16,185,129,0.1)' },
   { href: '/admin/deposits',    label: 'Deposits',    Icon: ArrowDownToLine, activeColor: '#3b82f6', activeBg: 'rgba(59,130,246,0.1)' },
   { href: '/admin/withdrawals', label: 'Withdrawals', Icon: ArrowUpFromLine, activeColor: '#f87171', activeBg: 'rgba(248,113,113,0.1)' },
+  { href: '/admin/settings',    label: 'Settings',    Icon: Settings,        activeColor: '#a855f7', activeBg: 'rgba(168,85,247,0.1)' },
 ];
 
 
