@@ -13,84 +13,91 @@ export default function LandingNavbar({ isLoggedIn = false }: { isLoggedIn?: boo
   const isComparePage = pathname === '/compare';
 
   return (
-    <>
-      <style>{`
-        .desktop-nav { display: none !important; }
-        .mobile-nav { display: flex !important; }
-        
-        @media (min-width: 768px) {
-          .desktop-nav { display: flex !important; }
-          .mobile-nav { display: none !important; }
-        }
-      `}</style>
+    <div className="w-full px-6 py-6 flex justify-center relative z-50">
+      <nav 
+        className={`w-full max-w-6xl flex flex-col bg-[#111111]/90 backdrop-blur-xl border border-white/10 px-8 py-4 shadow-2xl transition-all duration-200 ease-in-out ${isOpen ? 'rounded-3xl' : 'rounded-full'}`}
+      >
+        {/* Top Bar */}
+        <div className="flex justify-between items-center w-full">
+          <div className="flex items-center gap-12">
+            <Link href="/" className="hover:opacity-80 transition-opacity">
+              <Logo />
+            </Link>
 
-      <div style={{ padding: '24px', display: 'flex', justifyContent: 'center', position: 'relative', zIndex: 50 }}>
-        <nav style={{
-          display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '1200px',
-          background: 'var(--panel-bg)', backdropFilter: 'blur(16px)',
-          border: '1px solid var(--border-color)', borderRadius: isOpen ? '24px' : '100px',
-          padding: '12px 32px', boxShadow: '0 8px 32px rgba(0,0,0,0.15)',
-          transition: 'border-radius 0.2s ease, background 0.2s ease'
-        }}>
-          {/* Top Bar */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '48px' }}>
-              <Link href="/" style={{ textDecoration: 'none' }}><Logo /></Link>
-
-              {/* Desktop Links */}
-              <div className="desktop-nav" style={{ gap: '24px', alignItems: 'center', color: 'var(--text-secondary)', fontSize: '14px', fontWeight: 500 }}>
-                {isComparePage ? (
-                  <Link href="/" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>Home</Link>
-                ) : (
-                  <>
-                    <Link href="#features" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>Features</Link>
-                    <Link href="#pricing" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>Pricing</Link>
-                    <Link href="/academy" style={{ color: 'inherit', textDecoration: 'none', transition: 'opacity 0.2s', ':hover': { opacity: 0.8 } } as any}>Academy</Link>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* Desktop Actions */}
-            <div className="desktop-nav" style={{ gap: '16px', alignItems: 'center' }}>
-              {!isLoggedIn && <Link href="/login" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: 14, fontWeight: 600 }}>Log in</Link>}
-              <Link href={isLoggedIn ? "/dashboard" : "/login"} style={{
-                background: 'var(--text-primary)', color: 'var(--bg-color)', padding: '10px 24px', borderRadius: '100px',
-                textDecoration: 'none', fontSize: 14, fontWeight: 600, transition: 'opacity 0.2s'
-              }}>{isLoggedIn ? "Open Vault" : "Get Started"}</Link>
-            </div>
-
-            {/* Mobile Toggle Button */}
-            <div className="mobile-nav" style={{ alignItems: 'center' }}>
-              <button onClick={() => setIsOpen(!isOpen)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                {isOpen ? <X size={24} /> : <Menu size={24} />}
-              </button>
+            {/* Desktop Links */}
+            <div className="hidden md:flex items-center gap-8 text-sm font-medium text-gray-400">
+              {isComparePage ? (
+                <Link href="/" className="hover:text-white transition-colors">Home</Link>
+              ) : (
+                <>
+                  <Link href="#features" className="hover:text-white transition-colors">Features</Link>
+                  <Link href="#pricing" className="hover:text-white transition-colors">Pricing</Link>
+                  <Link href="/academy" className="hover:text-white transition-colors">Academy</Link>
+                </>
+              )}
             </div>
           </div>
 
-          {/* Mobile Dropdown Menu */}
-          {isOpen && (
-            <div className="mobile-nav" style={{ flexDirection: 'column', gap: '20px', marginTop: '24px', paddingBottom: '16px', borderTop: '1px solid var(--border-color)', paddingTop: '24px' }}>
-              {isComparePage ? (
-                <Link onClick={() => setIsOpen(false)} href="/" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 600 }}>Home</Link>
-              ) : (
-                <>
-                  <Link onClick={() => setIsOpen(false)} href="#features" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 600 }}>Features</Link>
-                  <Link onClick={() => setIsOpen(false)} href="#pricing" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 600 }}>Pricing</Link>
-                  <Link onClick={() => setIsOpen(false)} href="/academy" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: '16px', fontWeight: 600 }}>Academy</Link>
-                </>
-              )}
+          {/* Desktop Actions */}
+          <div className="hidden md:flex items-center gap-6">
+            {!isLoggedIn && (
+              <Link href="/login" className="text-sm font-semibold text-white hover:text-gray-300 transition-colors">
+                Log in
+              </Link>
+            )}
+            <Link 
+              href={isLoggedIn ? "/dashboard" : "/login"} 
+              className="bg-white text-black px-6 py-2.5 rounded-full text-sm font-semibold hover:bg-gray-200 transition-colors"
+            >
+              {isLoggedIn ? "Open Vault" : "Get Started"}
+            </Link>
+          </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-color)' }}>
-                {!isLoggedIn && <Link onClick={() => setIsOpen(false)} href="/login" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: 16, fontWeight: 600, textAlign: 'center', padding: '12px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>Log in</Link>}
-                <Link onClick={() => setIsOpen(false)} href={isLoggedIn ? "/dashboard" : "/login"} style={{ background: 'var(--text-primary)', color: 'var(--bg-color)', padding: '12px', borderRadius: '100px', textDecoration: 'none', fontSize: 16, fontWeight: 600, textAlign: 'center' }}>
-                  {isLoggedIn ? "Open Vault" : "Get Started"}
+          {/* Mobile Toggle Button */}
+          <div className="flex md:hidden items-center">
+            <button 
+              onClick={() => setIsOpen(!isOpen)} 
+              className="p-2 text-white hover:bg-white/10 rounded-full transition-colors"
+            >
+              {isOpen ? <X size={24} /> : <Menu size={24} />}
+            </button>
+          </div>
+        </div>
+
+        {/* Mobile Dropdown Menu */}
+        {isOpen && (
+          <div className="flex md:hidden flex-col gap-5 mt-6 pt-6 border-t border-white/10 pb-4 animate-in slide-in-from-top-2">
+            {isComparePage ? (
+              <Link onClick={() => setIsOpen(false)} href="/" className="text-lg font-semibold text-white">Home</Link>
+            ) : (
+              <>
+                <Link onClick={() => setIsOpen(false)} href="#features" className="text-lg font-semibold text-white">Features</Link>
+                <Link onClick={() => setIsOpen(false)} href="#pricing" className="text-lg font-semibold text-white">Pricing</Link>
+                <Link onClick={() => setIsOpen(false)} href="/academy" className="text-lg font-semibold text-white">Academy</Link>
+              </>
+            )}
+
+            <div className="flex flex-col gap-4 mt-4 pt-6 border-t border-white/10">
+              {!isLoggedIn && (
+                <Link 
+                  onClick={() => setIsOpen(false)} 
+                  href="/login" 
+                  className="text-white text-center py-3 rounded-xl border border-white/20 font-semibold text-base hover:bg-white/5 transition-colors"
+                >
+                  Log in
                 </Link>
-              </div>
+              )}
+              <Link 
+                onClick={() => setIsOpen(false)} 
+                href={isLoggedIn ? "/dashboard" : "/login"} 
+                className="bg-white text-black py-3 rounded-full text-center font-semibold text-base hover:bg-gray-200 transition-colors"
+              >
+                {isLoggedIn ? "Open Vault" : "Get Started"}
+              </Link>
             </div>
-          )}
-        </nav>
-      </div>
-    </>
+          </div>
+        )}
+      </nav>
+    </div>
   );
 }

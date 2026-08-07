@@ -87,7 +87,11 @@ serve(async (req) => {
       const symbol = escapeMd(record.symbol);
       const side = escapeMd(record.side);
       const status = escapeMd(record.status);
-      const aiSummary = escapeMd(record.ai_summary || "Automated mathematical setup evaluated by Alpha Engine.");
+      
+      const rawSummary = record.ai_summary || "Automated mathematical setup evaluated by Alpha Engine.";
+      let cleanSummary = rawSummary.split(" | ").map((part: string) => part.trim()).filter((p: string) => p.length > 0).join("\n• ");
+      if (cleanSummary.includes("•")) cleanSummary = "• " + cleanSummary;
+      const aiSummary = escapeMd(cleanSummary);
 
       // Parse trade levels from JSON plans
       const entryPrice = record.entry_plan_json?.price ?? record.entry_plan_json?.limit_price ?? record.entry_plan_json?.entry_price ?? "—";
@@ -96,7 +100,7 @@ serve(async (req) => {
       const orderType  = record.entry_plan_json?.order_type ?? "Limit";
 
       // R:R formatting
-      const rrMatch   = (record.ai_summary || "").match(/1:([0-9.]+)\s*Risk:Reward/);
+      const rrMatch   = rawSummary.match(/1:([0-9.]+)/);
       const tier      = rawTier ? escapeMd(rawTier) : "—";
       const rr        = rrMatch   ? escapeMd(`1:${rrMatch[1]}`) : "—";
 

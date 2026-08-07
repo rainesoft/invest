@@ -83,26 +83,14 @@ export default async function LandingPage() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // Fetch the latest A-Tier trade opportunity for the live showcase
+  // Fetch the latest high-conviction (S, A, or B Tier) trade opportunity for the live showcase
   let { data: latestSignals } = await supabaseAdmin
     .from('trade_opportunities')
     .select('*')
     .in('status', ['PENDING_APPROVAL', 'APPROVED', 'WON', 'LOST'])
-    .ilike('ai_summary', '%[A-Tier]%')
+    .or('ai_summary.ilike.%[S-Tier]%,ai_summary.ilike.%[A-Tier]%,ai_summary.ilike.%[B-Tier]%')
     .order('created_at', { ascending: false })
     .limit(1);
-
-  // Fallback to B-Tier if no A-Tier signals exist
-  if (!latestSignals || latestSignals.length === 0) {
-    const { data: bTierSignals } = await supabaseAdmin
-      .from('trade_opportunities')
-      .select('*')
-      .in('status', ['PENDING_APPROVAL', 'APPROVED', 'WON', 'LOST'])
-      .ilike('ai_summary', '%[B-Tier]%')
-      .order('created_at', { ascending: false })
-      .limit(1);
-    latestSignals = bTierSignals;
-  }
 
   const signal = latestSignals?.[0] || {
     symbol: 'MARKETS IDLE',
@@ -116,54 +104,38 @@ export default async function LandingPage() {
     signal.status === 'REJECTED' ? '#ef4444' : '#38bdf8';
 
   return (
-    <div style={{
-      minHeight: '100vh',
-      display: 'flex',
-      flexDirection: 'column',
-      background: '#050505',
-      color: '#e5e7eb',
-      fontFamily: 'system-ui, -apple-system, sans-serif'
-    }}>
+    <div className="min-h-screen flex flex-col bg-[#050505] text-gray-200 font-sans relative overflow-hidden">
       {/* Background Gradients */}
-      <div style={{
-        position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
-        background: 'radial-gradient(circle at 15% 15%, rgba(37, 99, 235, 0.1) 0%, transparent 40%), radial-gradient(circle at 85% 85%, rgba(74, 222, 128, 0.05) 0%, transparent 40%)',
-        zIndex: -1, pointerEvents: 'none'
-      }} />
+      <div 
+        className="fixed inset-0 w-full h-full -z-10 pointer-events-none"
+        style={{
+          background: 'radial-gradient(circle at 15% 15%, rgba(37, 99, 235, 0.1) 0%, transparent 40%), radial-gradient(circle at 85% 85%, rgba(74, 222, 128, 0.05) 0%, transparent 40%)'
+        }} 
+      />
 
       {/* Floating Inset Navigation */}
       <LandingNavbar isLoggedIn={isLoggedIn} />
 
-      <main style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 24px' }}>
+      <main className="flex-1 flex flex-col items-center px-6 py-10 w-full">
 
         {/* Hero Section */}
-        <section style={{ maxWidth: '1200px', width: '100%', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '64px', marginBottom: '120px' }}>
+        <section className="w-full max-w-6xl flex flex-col md:flex-row items-center gap-12 md:gap-16 mb-24 md:mb-32 mt-8 md:mt-12">
 
           {/* Left Column: Copy & CTA */}
-          <div style={{ flex: '1 1 500px' }}>
-            <div style={{
-              display: 'inline-block', background: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8',
-              padding: '6px 16px', borderRadius: '100px', fontSize: '13px', fontWeight: 600, marginBottom: '24px',
-              border: '1px solid rgba(56, 189, 248, 0.2)'
-            }}>
+          <div className="flex-1 w-full flex flex-col items-center md:items-start text-center md:text-left">
+            <div className="inline-block bg-sky-500/10 text-sky-400 px-4 py-1.5 rounded-full text-sm font-semibold mb-6 border border-sky-500/20">
               An AI Fund Manager
             </div>
-            <h1 style={{
-              fontSize: 'clamp(48px, 6vw, 72px)', lineHeight: 1.05, fontWeight: 800, marginBottom: '24px',
-              color: '#fff', letterSpacing: '-1.5px'
-            }}>
+            <h1 className="text-5xl md:text-6xl lg:text-7xl font-extrabold leading-[1.1] mb-6 text-white tracking-tight">
               A super-smart AI that
-              <span style={{ color: '#9ca3af' }}> grows your money.</span>
+              <span className="text-gray-400 block md:inline"> grows your money.</span>
             </h1>
-            <p style={{ fontSize: '18px', color: '#9ca3af', lineHeight: 1.6, marginBottom: '40px', maxWidth: '550px' }}>
+            <p className="text-lg text-gray-400 leading-relaxed mb-10 max-w-lg">
               Deposit funds and let our AI trade the global markets for you.
               It automatically finds safe trades, manages the risk, and grows your account while you sleep. We only make money when you make money, so our goals are exactly the same as yours.
             </p>
-            <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
-              <Link href={isLoggedIn ? "/dashboard" : "/login"} style={{
-                background: '#fff', color: '#000', padding: '16px 32px', borderRadius: '100px',
-                textDecoration: 'none', fontSize: '16px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px'
-              }}>
+            <div className="flex gap-4 flex-wrap justify-center md:justify-start">
+              <Link href={isLoggedIn ? "/dashboard" : "/login"} className="bg-white text-black px-8 py-4 rounded-full text-base font-semibold flex items-center gap-2 hover:bg-gray-200 transition-colors">
                 {isLoggedIn ? "Open your Dashboard" : "Get Started"}
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7" /></svg>
               </Link>
@@ -171,30 +143,32 @@ export default async function LandingPage() {
           </div>
 
           {/* Right Column: Dynamic Mockup pulling from DB */}
-          <div style={{ flex: '1 1 500px', display: 'flex', justifyContent: 'center' }}>
-            <div style={{
-              background: 'linear-gradient(145deg, rgba(30,30,30,0.8) 0%, rgba(15,15,15,0.8) 100%)',
-              border: '1px solid rgba(255,255,255,0.1)', borderRadius: '24px', padding: '32px',
-              boxShadow: '0 24px 64px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.1)',
-              width: '100%', maxWidth: '450px', transform: 'rotateX(5deg) rotateY(-10deg)', perspective: '1000px'
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '24px' }}>
-                <div style={{ fontSize: '14px', color: '#9ca3af', fontWeight: 600 }}>LIVE AI SIGNAL</div>
-                <div style={{ background: `${statusColor}15`, color: statusColor, padding: '4px 10px', borderRadius: '100px', fontSize: '12px', fontWeight: 700 }}>
+          <div className="flex-1 w-full flex justify-center mt-8 md:mt-0 perspective-1000">
+            <div 
+              className="w-full max-w-[450px] p-8 rounded-3xl border border-white/10 shadow-2xl"
+              style={{
+                background: 'linear-gradient(145deg, rgba(30,30,30,0.8) 0%, rgba(15,15,15,0.8) 100%)',
+                boxShadow: '0 24px 64px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.1)',
+                transform: 'rotateX(5deg) rotateY(-5deg)' // Reduced rotation slightly for better mobile viewing
+              }}
+            >
+              <div className="flex justify-between items-center mb-6">
+                <div className="text-sm text-gray-400 font-semibold">LIVE AI SIGNAL</div>
+                <div className="px-3 py-1 rounded-full text-xs font-bold" style={{ background: `${statusColor}15`, color: statusColor }}>
                   {signal.status || 'ACTIVE'}
                 </div>
               </div>
-              <div style={{ fontSize: '48px', fontWeight: 800, color: '#fff', marginBottom: '8px', letterSpacing: '-1px' }}>
+              <div className="text-5xl font-extrabold text-white mb-2 tracking-tight">
                 {signal.symbol}
               </div>
-              <div style={{ fontSize: '24px', color: '#38bdf8', fontWeight: 600, marginBottom: '32px' }}>
+              <div className="text-2xl text-sky-400 font-semibold mb-8">
                 {signal.side?.toUpperCase()} @ {signal.entry_plan_json?.price}
               </div>
 
-              <div style={{ background: '#0a0a0a', padding: '16px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                <div style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '12px', fontWeight: 600 }}>WHAT THE AI SAID:</div>
+              <div className="bg-[#0a0a0a] p-4 rounded-xl border border-white/5">
+                <div className="text-xs text-gray-400 mb-3 font-semibold">WHAT THE AI SAID:</div>
                 <TrendBadge {...parseAnalysisText(signal.ai_summary)} />
-                <p style={{ fontSize: '14px', color: '#e5e7eb', lineHeight: 1.5, margin: 0 }}>
+                <p className="text-sm text-gray-200 leading-relaxed m-0">
                   {parseAnalysisText(signal.ai_summary).content.slice(0, 150)}{parseAnalysisText(signal.ai_summary).content.length > 150 ? '...' : ''}
                 </p>
               </div>
@@ -204,80 +178,73 @@ export default async function LandingPage() {
         </section>
 
         {/* Features / How it Works Box */}
-        <section id="features" style={{ maxWidth: '1200px', width: '100%', marginBottom: '120px' }}>
-          <div style={{ textAlign: 'center', marginBottom: '64px' }}>
-            <h2 style={{ fontSize: '40px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-1px' }}>Institutional Features</h2>
-            <p style={{ color: '#9ca3af', fontSize: '18px', maxWidth: '600px', margin: '0 auto' }}>
+        <section id="features" className="w-full max-w-6xl mb-24 md:mb-32">
+          <div className="text-center mb-16 px-4">
+            <h2 className="text-4xl font-extrabold text-white mb-4 tracking-tight">Institutional Features</h2>
+            <p className="text-gray-400 text-lg max-w-2xl mx-auto">
               Trading doesn't have to be confusing. Here is exactly what our AI does for you behind the scenes.
             </p>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px' }}>
-
-            <div style={{ background: '#111', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '24px', padding: '40px' }}>
-              <div style={{ fontSize: '32px', marginBottom: '16px' }}>👀</div>
-              <h3 style={{ fontSize: '24px', fontWeight: 700, color: '#fff', marginBottom: '16px' }}>Step 1: It Watches</h3>
-              <p style={{ color: '#9ca3af', fontSize: '16px', lineHeight: 1.6 }}>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 px-4 md:px-0">
+            <div className="bg-[#111] border border-white/5 rounded-3xl p-8 hover:bg-[#151515] transition-colors">
+              <div className="text-3xl mb-4">👀</div>
+              <h3 className="text-xl font-bold text-white mb-4">Step 1: It Watches</h3>
+              <p className="text-gray-400 text-base leading-relaxed">
                 You don't need to stare at charts all day. The AI scans the global markets (like gold, oil, and stocks) every few hours to find perfect, safe moments to enter a trade.
               </p>
             </div>
 
-            <div style={{ background: '#111', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '24px', padding: '40px' }}>
-              <div style={{ fontSize: '32px', marginBottom: '16px' }}>🧮</div>
-              <h3 style={{ fontSize: '24px', fontWeight: 700, color: '#fff', marginBottom: '16px' }}>Step 2: It Calculates Risk</h3>
-              <p style={{ color: '#9ca3af', fontSize: '16px', lineHeight: 1.6 }}>
+            <div className="bg-[#111] border border-white/5 rounded-3xl p-8 hover:bg-[#151515] transition-colors">
+              <div className="text-3xl mb-4">🧮</div>
+              <h3 className="text-xl font-bold text-white mb-4">Step 2: It Calculates Risk</h3>
+              <p className="text-gray-400 text-base leading-relaxed">
                 Before ever suggesting a trade, it does the math. It ensures that if a trade goes wrong, you only lose a tiny fraction of a percent of your money, but if it goes right, you make double that. It is designed to aggressively protect your money.
               </p>
             </div>
 
-            <div style={{ background: '#111', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '24px', padding: '40px' }}>
-              <div style={{ fontSize: '32px', marginBottom: '16px' }}>🚀</div>
-              <h3 style={{ fontSize: '24px', fontWeight: 700, color: '#fff', marginBottom: '16px' }}>Step 3: It Executes</h3>
-              <p style={{ color: '#9ca3af', fontSize: '16px', lineHeight: 1.6 }}>
+            <div className="bg-[#111] border border-white/5 rounded-3xl p-8 hover:bg-[#151515] transition-colors">
+              <div className="text-3xl mb-4">🚀</div>
+              <h3 className="text-xl font-bold text-white mb-4">Step 3: It Executes</h3>
+              <p className="text-gray-400 text-base leading-relaxed">
                 When you see a trade you like, you just click "Approve". The AI sends the math directly to your broker. You don't have to calculate lot sizes, stop losses, or take profits. It handles everything for you automatically.
               </p>
             </div>
-
           </div>
         </section>
 
         {/* Pricing Grid */}
-        <section id="pricing" style={{ maxWidth: '1000px', width: '100%', marginBottom: '120px' }}>
-          <div style={{ textAlign: 'center', marginBottom: '64px' }}>
-            <h2 style={{ fontSize: '40px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-1px' }}>Pick your plan</h2>
-            <p style={{ color: '#9ca3af', fontSize: '18px' }}>Start simple, upgrade when you're ready.</p>
+        <section id="pricing" className="w-full max-w-5xl mb-24 md:mb-32">
+          <div className="text-center mb-16 px-4">
+            <h2 className="text-4xl font-extrabold text-white mb-4 tracking-tight">Pick your plan</h2>
+            <p className="text-gray-400 text-lg">Start simple, upgrade when you're ready.</p>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '32px' }}>
-
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 px-4 md:px-0">
             {/* Free Tier */}
-            <div style={{
-              background: '#0a0a0a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '24px', padding: '40px',
-              display: 'flex', flexDirection: 'column'
-            }}>
-              <div style={{ fontSize: '20px', fontWeight: 700, color: '#fff', marginBottom: '16px' }}>Performance Plan</div>
-              <div style={{ fontSize: '48px', fontWeight: 800, color: '#fff', marginBottom: '16px', letterSpacing: '-2px' }}>20%<span style={{ fontSize: '18px', color: '#9ca3af', fontWeight: 500, letterSpacing: '0' }}> fee</span></div>
-              <p style={{ color: '#9ca3af', fontSize: '15px', marginBottom: '32px' }}>We only win when you win. A 20% performance fee is deducted solely on net profits.</p>
+            <div className="bg-[#0a0a0a] border border-white/10 rounded-3xl p-8 md:p-10 flex flex-col">
+              <div className="text-xl font-bold text-white mb-4">Performance Plan</div>
+              <div className="text-5xl font-extrabold text-white mb-4 tracking-tight">20%<span className="text-lg text-gray-400 font-medium tracking-normal ml-1">fee</span></div>
+              <p className="text-gray-400 text-base mb-8">We only win when you win. A 20% performance fee is deducted solely on net profits.</p>
 
-              <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 40px 0', display: 'flex', flexDirection: 'column', gap: '16px', color: '#e5e7eb', flex: 1 }}>
-                <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <ul className="flex-1 flex flex-col gap-4 text-gray-200 mb-10">
+                <li className="flex items-center gap-3">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2"><path d="M20 6L9 17l-5-5" /></svg>
                   Fully Automated Execution
                 </li>
-                <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <li className="flex items-center gap-3">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2"><path d="M20 6L9 17l-5-5" /></svg>
                   High-Water Mark Protection
                 </li>
-                <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <li className="flex items-center gap-3">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2"><path d="M20 6L9 17l-5-5" /></svg>
                   Zero Management Fees
                 </li>
               </ul>
 
-              <Link href="/login" style={{
-                background: 'rgba(255,255,255,0.05)', color: '#fff', padding: '16px', borderRadius: '100px',
-                textDecoration: 'none', fontSize: '15px', fontWeight: 600, textAlign: 'center', border: '1px solid rgba(255,255,255,0.1)'
-              }}>Get Started for Free</Link>
+              <Link href="/login" className="bg-white/5 hover:bg-white/10 border border-white/10 text-white py-4 px-6 rounded-full text-center text-base font-semibold transition-colors">
+                Get Started for Free
+              </Link>
             </div>
 
             {/* Alpha Tier (Dynamic Slider) */}
@@ -288,17 +255,14 @@ export default async function LandingPage() {
       </main>
 
       {/* Footer */}
-      <footer style={{
-        borderTop: '1px solid rgba(255,255,255,0.05)', padding: '48px 24px',
-        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '24px'
-      }}>
+      <footer className="border-t border-white/5 py-12 px-6 flex flex-col items-center gap-6 text-center">
         <Logo />
-        <div style={{ display: 'flex', gap: '24px', color: '#9ca3af', fontSize: '14px', fontWeight: 500 }}>
-          <Link href="/docs" style={{ color: 'inherit', textDecoration: 'none' }}>API Documentation</Link>
-          <Link href="/login" style={{ color: 'inherit', textDecoration: 'none' }}>Client Login</Link>
-          <a href="#" style={{ color: 'inherit', textDecoration: 'none' }}>Terms of Service</a>
+        <div className="flex flex-wrap justify-center gap-6 text-sm text-gray-400 font-medium">
+          <Link href="/docs" className="hover:text-white transition-colors">API Documentation</Link>
+          <Link href="/login" className="hover:text-white transition-colors">Client Login</Link>
+          <a href="#" className="hover:text-white transition-colors">Terms of Service</a>
         </div>
-        <div style={{ color: '#4b5563', fontSize: '13px', marginTop: '24px' }}>
+        <div className="text-gray-600 text-sm mt-4">
           © {new Date().getFullYear()} RaineBank. Developed by Rainesoft Solutions.
         </div>
       </footer>

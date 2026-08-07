@@ -1082,6 +1082,12 @@ serve(async (req) => {
 
           const tier = getTier(adjustedConfidence);
 
+          // FALLBACK LOGIC FOR RATIONALE (Fixes the "0.0%" bug)
+          let safeRationale = evaluation.fibonacci_rationale;
+          if (!safeRationale || safeRationale.length < 10 || /^[0-9.\s%]+$/.test(safeRationale.trim())) {
+              safeRationale = evaluation.thought_process || "No rationale provided.";
+          }
+
           // --- OVERRIDE: ADX FILTER FOR MEAN REVERSION ---
           if (evaluation.recommended_direction !== "NONE" && evaluation.strategy_applied === "MEAN_REVERSION" && (snapshot as any).adx_14 && (snapshot as any).adx_14 > 25) {
              evaluation.recommended_direction = "NONE";
@@ -1139,7 +1145,7 @@ serve(async (req) => {
                 invalidation_price: aiSl,
                 macro_bias: evaluation.recommended_direction === "LONG" ? "BULLISH"
                           : evaluation.recommended_direction === "SHORT" ? "BEARISH" : "NEUTRAL",
-                narrative: evaluation.fibonacci_rationale,
+                narrative: safeRationale,
               })
               .eq("symbol", symbol)
               .eq("agent_persona", "SWING_TRADER")
@@ -1192,7 +1198,7 @@ serve(async (req) => {
               side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
               timeframe: timeframe.toLowerCase(),
               status: "REJECTED",
-              ai_summary: `[SWING][${tier}] ${evaluation.fibonacci_rationale}`,
+              ai_summary: `[SWING][${tier}] ${safeRationale}`,
               ai_risks: msg,
               confidence: adjustedConfidence,
               trace_id: traceId,
@@ -1219,7 +1225,7 @@ serve(async (req) => {
               side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
               timeframe: timeframe.toLowerCase(),
               status: "REJECTED",
-              ai_summary: `[SWING][${tier}] ${evaluation.fibonacci_rationale}`,
+              ai_summary: `[SWING][${tier}] ${safeRationale}`,
               ai_risks: `Rejected by Swing Desk: ${msg}`,
               confidence: adjustedConfidence,
               trace_id: traceId,
@@ -1232,7 +1238,7 @@ serve(async (req) => {
           const r = evaluation.swing_rationale;
           const aiSummary = [
             `[SWING][${tier}] [${evaluation.market_structure} → ${evaluation.strategy_applied}]`,
-            evaluation.fibonacci_rationale,
+            safeRationale,
             r.structural_confirmation,
             r.macro_alignment,
             r.invalidation_level,
@@ -1354,26 +1360,11 @@ serve(async (req) => {
               fomc_mode_active: fomcModeActive,
               fib_swing_high: fib.swing_high,
               fib_swing_low: fib.swing_low,
-              fibonacci_rationale: evaluation.fibonacci_rationale,
+              fibonacci_rationale: safeRationale,
             },
           });
 
-          // Telegram notification for S-Tier swing signals
-          if (confidence >= 90) {
-            const botToken = Deno.env.get("TELEGRAM_BOT_TOKEN");
-            const chatId = Deno.env.get("TELEGRAM_CHAT_ID");
-            if (botToken && chatId) {
-              const direction = evaluation.recommended_direction === "LONG" ? "📈 LONG" : "📉 SHORT";
-              const msg = `🏆 *S-TIER SWING SIGNAL — ${symbol}*\n\n${direction} | ${order_type}\n\n📌 *Entry:* $${entry.toLocaleString()}\n🛑 *Stop Loss:* $${sl.toLocaleString()}\n🎯 *TP1:* $${tp1?.toLocaleString() ?? "N/A"}\n🎯 *TP2:* $${tp2.toLocaleString()}\n🚀 *TP3:* $${tp3?.toLocaleString() ?? "N/A"}\n\n📐 *R:R to TP2:* 1:${rrToTp2.toFixed(1)}\n\n*Fibonacci Basis:* ${evaluation.fibonacci_rationale}\n*Macro:* ${r.macro_alignment}\n*Invalidation:* ${r.invalidation_level}`;
-              await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: "Markdown" }),
-              }).catch((e) => console.error("Telegram error:", e));
-            }
-          }
-
-          results.push({ symbol, id: dbData.id, tier, entry, sl, tp1, tp2, tp3, rr_to_tp2: rrToTp2 });
+          // Note: Telegram broadcasting is handled universally via DB trigger by the telegram-broadcast Edge Function.          results.push({ symbol, id: dbData.id, tier, entry, sl, tp1, tp2, tp3, rr_to_tp2: rrToTp2 });
         } catch (symbolErr: any) {
           console.error(`[Global Error] [Trace: ${traceId}] ${symbol}: ${symbolErr.message}`);
           rejections.push({ symbol, reason: symbolErr.message, layer: "System" });

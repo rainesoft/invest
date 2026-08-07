@@ -38,16 +38,27 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Missing request ID' }, { status: 400 });
     }
 
-    const { error: rpcError } = await authClient.rpc('admin_approve_deposit', {
-      p_request_id: requestId
+    const adminSecret = process.env.ADMIN_SECRET_KEY || "SUPER_SECRET_ADMIN_KEY";
+    
+    const edgeFunctionUrl = `${NEXT_PUBLIC_SUPABASE_URL}/functions/v1/clear-deposit`;
+    
+    const res = await fetch(edgeFunctionUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-secret': adminSecret
+      },
+      body: JSON.stringify({ deposit_id: requestId })
     });
 
-    if (rpcError) {
-      console.error('Failed to approve deposit:', rpcError);
-      return NextResponse.json({ error: rpcError.message }, { status: 500 });
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      console.error('Failed to clear deposit via Edge Function:', data);
+      return NextResponse.json({ error: data.error || 'Failed to clear deposit' }, { status: res.status });
     }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, broker_sync: data.broker_sync });
     
   } catch (error: any) {
     console.error('Admin Deposit Approve Error:', error);

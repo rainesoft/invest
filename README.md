@@ -78,6 +78,11 @@ RaineBank operates two distinct revenue models for its PAMM fund:
      events to the `user_subscriptions` ledger, instantly applying the 0% fee
      tier to their PAMM account.
 
+3. **[TODO] Developer API SaaS ($1,000+/mo B2B)**
+   - A public-facing API layer (`/api/v1/signals`) secured by Unkey.
+   - Designed for algorithmic developers and prop funds to pipe Rainesoft's live quantitative signals and risk-management data directly into their own local Node.js or Python environments.
+   - Currently shelved to prioritize internal PAMM execution and avoid commoditizing the alpha.
+
 ---
 
 ## ⚙️ The Automation Flywheel
