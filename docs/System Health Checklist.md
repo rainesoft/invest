@@ -117,7 +117,7 @@ The `created_at` timestamps should fall within the last 4 hours for `agent-swing
 ## ⚠️ 1C. pg_cron Diagnostic — Authentication Failure Check (401 Unauthorized)
 
 > [!CAUTION]
-> **Incident (2026-08-04):** `agent-swing-poll` silently failed to execute because `current_setting('app.settings.service_role_key', true)` resolves to `null` inside the background `pg_cron` worker. This resulted in silent `401 Unauthorized` errors inside the edge function logs. Edge functions strictly enforce the **Security First Principle** and reject invalid tokens.
+> **Incident (2026-08-04 & 2026-08-10):** `agent-swing-poll` silently failed to execute because `current_setting('app.settings.service_role_key', true)` resolves to `null` inside the background `pg_cron` worker. Additionally, if the `CRON_SECRET` environment variable is missing from the Edge Function deployment, the function will reject the cron job's `x-cron-secret` header with a silent `401 Unauthorized`. Edge functions strictly enforce the **Security First Principle** and reject invalid tokens.
 
 ### Step 1 — Check for 401 Errors in Edge Function Logs
 
@@ -126,6 +126,17 @@ If cron jobs are showing `status = 'succeeded'` in `cron.job_run_details` but th
 1. Open the Supabase Dashboard -> Edge Functions -> Logs.
 2. Filter for the failing function (e.g., `agent-swing`).
 3. Look for HTTP 401 statuses.
+
+### Step 1b — Verify Edge Function Secrets
+
+Run the following command via the Supabase CLI to ensure that the Edge Functions have the `CRON_SECRET` loaded in their environment:
+```bash
+npx supabase secrets list
+```
+If `CRON_SECRET` is missing, set it immediately (using the `new_cron_secret` value from the database vault):
+```bash
+npx supabase secrets set CRON_SECRET=YourSecureCronSecretHere
+```
 
 ### Step 2 — Verify the Cron Job Authorization Header
 
@@ -337,7 +348,7 @@ If this query returns rows, investigate a routing failure or a hardcoded status 
 ## ⚠️ 3B. Trade Execution — MT5 Invalid Volume (Code 10014)
 
 > [!WARNING]
-> **Incident (2026-08-04):** The strategy logic split the minimum lot size (0.01) into two legs (0.005 lots each). MetaTrader 5 strictly enforces a minimum of 0.01 lots and instantly rejected the trades with `TRADE_RETCODE_INVALID_VOLUME` (Code 10014).
+> **Incident (2026-08-04 & 2026-08-10):** The strategy logic split the minimum lot size (0.01) into two legs (0.005 lots each) and also incorrectly sent `0.01` lots for indices like `US30` which actually require a minimum of `0.1` lots on some brokers. MetaTrader 5 strictly enforces minimum lot sizes and increments, and instantly rejected the trades with `TRADE_RETCODE_INVALID_VOLUME` (Code 10014).
 
 Monitor for execution blocks on the broker side:
 
@@ -349,7 +360,7 @@ WHERE status = 'FAILED'
 ORDER BY created_at DESC;
 ```
 
-If this query returns rows, ensure that volume splitting algorithms enforce a strict mathematical floor of `0.01` lots for each independently inserted leg.
+If this query returns rows, ensure that the volume algorithms in `agent-trade` and `agent-news` enforce a strict mathematical floor against a dynamic `volumeStep` mapping (e.g. `US30 = 0.1`, `BTCUSD = 0.01`), rather than hardcoding `0.01` universally.
 
 ---
 
