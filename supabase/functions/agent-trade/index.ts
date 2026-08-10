@@ -169,6 +169,38 @@ serve(async (req) => {
         }
       }
 
+      // --- REVERSE SYNC: ORPHAN RECOVERY ---
+      try {
+        const allPosRes = await fetch(
+          `${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/positions`,
+          { headers: { "auth-token": META_API_TOKEN } }
+        );
+        if (allPosRes.ok) {
+          const allPositions = await allPosRes.json();
+          for (const pos of allPositions) {
+             const posId = pos.id;
+             if (!orderMap.has(posId)) {
+                console.log(`[Position Manager] Reverse-Sync: Found orphaned broker trade ${posId} (${pos.symbol}). Recovering...`);
+                // Recover the trade in the database
+                await supabase.from("user_trades").update({ status: "OPEN" }).eq("meta_api_order_id", posId);
+                
+                // Fetch the recovered trade to manage it in this cycle
+                const { data: recoveredTrade } = await supabase
+                  .from("user_trades")
+                  .select(`id, meta_api_order_id, symbol, side, status, trade_type, user_id, trade_opportunities(timeframe, entry_plan_json, stop_plan_json, take_profit_json)`)
+                  .eq("meta_api_order_id", posId)
+                  .single();
+                  
+                if (recoveredTrade) {
+                   orderMap.set(posId, recoveredTrade);
+                }
+             }
+          }
+        }
+      } catch (e) {
+        console.error("[Position Manager] Reverse-Sync failed:", e);
+      }
+
       const moves: { symbol: string; action: string; from: number; to: number }[] = [];
       const errors: string[] = [];
       const atrCache = new Map<string, number>();
@@ -202,12 +234,14 @@ serve(async (req) => {
 
       // --- AI-DRIVEN INVALIDATION QUERY ---
       const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
-      const { data: latestOpps } = await supabase
+      const { data: latestOpps, error: latestOppsError } = await supabase
         .from("trade_opportunities")
-        .select("symbol, side, ai_summary, status, source")
+        .select("symbol, side, ai_summary, status")
         .in("symbol", uniqueSymbols)
         .gte("created_at", fourHoursAgo)
         .order("created_at", { ascending: false });
+        
+      if (latestOppsError) console.error("[Position Manager] Error fetching latest opps:", latestOppsError);
 
       const latestOppMap = new Map<string, any>();
       if (latestOpps) {
@@ -228,6 +262,7 @@ serve(async (req) => {
           );
 
           let position = null;
+          let isPendingOrder = false;
 
           if (!posRes.ok) {
             // Check if it's a pending order before assuming it's closed
@@ -237,33 +272,36 @@ serve(async (req) => {
             );
             
             if (ordRes.ok) {
+               isPendingOrder = true;
+               let isGCd = false;
                // --- PENDING ORDER GARBAGE COLLECTION ---
-               // If the pending order is older than 24 hours, cancel it autonomously.
                try {
                  const orderData = await ordRes.json();
                  if (orderData.time) {
                    const orderTime = new Date(orderData.time).getTime();
-                   const now = Date.now();
-                   const ageHours = (now - orderTime) / (1000 * 60 * 60);
+                   const ageHours = (Date.now() - orderTime) / (1000 * 60 * 60);
                    
                    if (ageHours >= 24) {
-                     console.log(`[Position Manager] Garbage Collection: Cancelling stale pending order ${orderId} for ${trade.symbol} (${Math.round(ageHours)}h old).`);
+                     console.log(`[Position Manager] Garbage Collection: Cancelling stale pending order ${orderId} for ${trade.symbol}.`);
                      await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
-                       method: "POST",
-                       headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                       method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
                        body: JSON.stringify({ actionType: "ORDER_CANCEL", orderId })
                      });
                      await supabase.from("user_trades").update({ status: "CLOSED", ai_risks: "Order cancelled (stale limit order > 24h)" }).eq("meta_api_order_id", orderId);
+                     isGCd = true;
                    }
                  }
                } catch (e) {
                  console.error(`[Position Manager] Failed to process pending order for GC:`, e);
                }
-               // It's a pending order, skip trailing stop logic but do NOT mark as closed
+               if (isGCd) continue;
+            } else if (posRes.status === 404 && ordRes.status === 404) {
+               // Not a position, not an order AND broker confirmed 404 Not Found -> It is TRULY CLOSED
+               await supabase.from("user_trades").update({ status: "CLOSED" }).eq("meta_api_order_id", orderId).eq("status", "OPEN");
                continue;
             } else {
-               // Not a position, not an order -> It is TRULY CLOSED
-               await supabase.from("user_trades").update({ status: "CLOSED" }).eq("meta_api_order_id", orderId).eq("status", "OPEN");
+               // Broker returned a 500 error or timeout, DO NOT close the trade!
+               console.warn(`[Position Manager] Broker sync failed for ${orderId}. posRes: ${posRes.status}, ordRes: ${ordRes.status}. Retrying later.`);
                continue;
             }
           } else {
@@ -274,6 +312,52 @@ serve(async (req) => {
 
           const opp = trade.trade_opportunities;
           if (!opp) continue;
+
+          // --- AI-DRIVEN INVALIDATION CHECK ---
+          const latestSignal = latestOppMap.get(trade.symbol);
+          if (latestSignal) {
+             const isOpposite = latestSignal.side !== trade.side && latestSignal.status !== "C-Tier"; 
+             const isCTier = latestSignal.ai_summary?.includes("C-Tier") || latestSignal.ai_summary?.includes("No setup");
+             
+             // Swing Protection: Ignore C-Tier if this is a Swing Runner. Only close on Opposite.
+             let shouldInvalidate = false;
+             let reason = "";
+             if (isOpposite) {
+                 shouldInvalidate = true;
+                 reason = "AI Trend Reversal Invalidation (Opposing Setup Detected)";
+             } else if (isCTier && trade.trade_type !== "RUNNER") {
+                 shouldInvalidate = true;
+                 reason = "AI Momentum Invalidation (C-Tier / No Setup Detected)";
+             }
+             
+             if (shouldInvalidate) {
+                 console.log(`[Position Manager] AI-Driven Invalidation triggered for ${trade.symbol}! ${reason}. Cancelling ${isPendingOrder ? "pending order" : "position"} ${orderId}.`);
+                 
+                 const actionType = isPendingOrder ? "ORDER_CANCEL" : "POSITION_CLOSE_ID";
+                 const payload: any = { actionType };
+                 if (isPendingOrder) {
+                     payload.orderId = orderId;
+                 } else {
+                     payload.positionId = orderId;
+                 }
+
+                 const closeRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                     method: "POST",
+                     headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                     body: JSON.stringify(payload)
+                 });
+                 if (closeRes.ok) {
+                     await supabase.from("user_trades").update({ status: "CLOSED", ai_risks: `Closed by Position Manager: ${reason}` }).eq("meta_api_order_id", orderId);
+                     moves.push({ symbol: trade.symbol, action: `AI Trend Reversal Close (${isPendingOrder ? 'Order' : 'Position'})`, from: 0, to: 0 });
+                     continue; // Skip trailing stop logic and move to next trade
+                 }
+             }
+          }
+          // --- END INVALIDATION CHECK ---
+
+          if (isPendingOrder) {
+             continue; // Skip all remaining trailing stop/leveraging logic for pending orders
+          }
 
           // --- 2. AUTONOMOUS DE-LEVERAGING (Emergency Trimming) ---
           if (!isSolvent && trade.status === "OPEN") {
@@ -336,38 +420,7 @@ serve(async (req) => {
 
           const isLong = trade.side === "LONG";
           
-          // --- AI-DRIVEN INVALIDATION CHECK ---
-          const latestSignal = latestOppMap.get(trade.symbol);
-          if (latestSignal) {
-             const isOpposite = latestSignal.side !== trade.side && latestSignal.status !== "C-Tier"; 
-             const isCTier = latestSignal.ai_summary?.includes("C-Tier") || latestSignal.ai_summary?.includes("No setup");
-             
-             // Swing Protection: Ignore C-Tier if this is a Swing Runner. Only close on Opposite.
-             let shouldInvalidate = false;
-             let reason = "";
-             if (isOpposite) {
-                 shouldInvalidate = true;
-                 reason = "AI Trend Reversal Invalidation (Opposing Setup Detected)";
-             } else if (isCTier && trade.trade_type !== "RUNNER") {
-                 shouldInvalidate = true;
-                 reason = "AI Momentum Invalidation (C-Tier / No Setup Detected)";
-             }
-             
-             if (shouldInvalidate) {
-                 console.log(`[Position Manager] AI-Driven Invalidation triggered for ${trade.symbol}! ${reason}. Closing position.`);
-                 const closeRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
-                     method: "POST",
-                     headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
-                     body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: orderId })
-                 });
-                 if (closeRes.ok) {
-                     await supabase.from("user_trades").update({ status: "CLOSED", ai_risks: `Closed by Position Manager: ${reason}` }).eq("meta_api_order_id", orderId);
-                     moves.push({ symbol: trade.symbol, action: "AI Trend Reversal Close", from: currentPrice, to: currentPrice });
-                     continue; // Skip trailing stop logic and move to next trade
-                 }
-             }
-          }
-          // --- END INVALIDATION CHECK ---
+
 
           const priceMoveInR = isLong
             ? (currentPrice - entryPrice) / riskDist
@@ -695,6 +748,13 @@ serve(async (req) => {
     const userAllocations = [];
     let totalMasterVolume = 0;
 
+    // --- DYNAMIC VOLUME STEP ---
+    const minVolumes: Record<string, number> = {
+      US30: 0.1, NAS100: 0.1, SPX500: 0.1, GER30: 0.1,
+      BTCUSD: 0.01, UKOIL: 0.01, XAUUSD: 0.01, XAGUSD: 0.01
+    };
+    const volumeStep = minVolumes[signal.symbol] || 0.01;
+
     for (const scaledEntry of scaledEntries) {
       const entryPrice = scaledEntry.price;
       const entryWeight = scaledEntry.weight || 1.0;
@@ -753,7 +813,7 @@ serve(async (req) => {
         // --- HARD LOT CAP CIRCUIT BREAKER ---
         const MAX_LOT_CAP = 0.50;
         volume = Math.min(MAX_LOT_CAP, volume);
-        volume = Math.max(0.01, Math.round(volume * 100) / 100);
+        volume = Math.max(volumeStep, Math.round(volume / volumeStep) * volumeStep);
         
         const riskAmount = pointsAtRisk * volume * pointValueUsd;
         
@@ -800,10 +860,10 @@ serve(async (req) => {
 
     // --- DISTRIBUTE VIRTUAL LEDGER ENTRIES TO USERS (QUEUED FOR VPS) ---
     for (const alloc of userAllocations) {
-        let legAVolume = Math.floor((alloc.volume / 2) * 100) / 100;
-        if (legAVolume < 0.01) legAVolume = alloc.volume; // Default to full volume on single leg if too small
+        let legAVolume = Math.floor((alloc.volume / 2) / volumeStep) * volumeStep;
+        if (legAVolume < volumeStep) legAVolume = alloc.volume; // Default to full volume on single leg if too small
         
-        let legBVolume = Math.round((alloc.volume - legAVolume) * 100) / 100;
+        let legBVolume = Math.round((alloc.volume - legAVolume) / volumeStep) * volumeStep;
 
         // Leg A (Quick Exit)
         await supabase.from("user_trades").insert({
@@ -820,7 +880,7 @@ serve(async (req) => {
         
         // Leg B (Runner)
         // Note: Trailing stop logic for RUNNER will be managed by position manager once OPEN.
-        if (legBVolume >= 0.01) {
+        if (legBVolume >= volumeStep) {
           await supabase.from("user_trades").insert({
             id: crypto.randomUUID(),
             user_id: alloc.user_id,
