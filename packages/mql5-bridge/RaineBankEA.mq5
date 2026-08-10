@@ -238,7 +238,7 @@ void OnTimer()
    // WebRequest to poll for trades
    ResetLastError();
    string req_headers = "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n" + 
-                        "x-vps-secret: " + InpVPSSecret + "\r\n";
+                        "x-vps-secret: " + InpVPSSecret;
    string res_headers;
    char post[], result[];
    int res;
@@ -543,7 +543,7 @@ void PushMarketData()
          
          string req_headers = "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n" + 
                               "Content-Type: application/json\r\n" + 
-                              "x-vps-secret: " + InpVPSSecret + "\r\n";
+                              "x-vps-secret: " + InpVPSSecret;
          string res_headers;
          int res = WebRequest("POST", url, req_headers, 5000, post, result, res_headers);
          if(res == 200) Print("Data successfully pushed to Supabase.");
