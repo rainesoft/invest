@@ -120,9 +120,17 @@ serve(async (req) => {
           // Trailing Stops for RUNNER
           if (trade.trade_type === "RUNNER" && trade.user_risk_settings?.sync_trailing_stops) {
              const atrRaw = opp.stop_plan_json?.atr;
-             if (atrRaw) {
+             if (atrRaw && stopLoss) {
+               const riskDistance = Math.abs(entryPrice - stopLoss);
+               let trailingDist = Number((atrRaw * 2.0).toFixed(5));
+               
+               // Dynamic Trailing Stop Fix: Clamp trailing distance to 1.5x initial risk if ATR is too wide
+               if (trailingDist > riskDistance * 2.0) {
+                 trailingDist = Number((riskDistance * 1.5).toFixed(5));
+               }
+
                payload.trailingStopLoss = {
-                 distance: { distance: Number((atrRaw * 2.0).toFixed(5)), units: "RELATIVE_PRICE" },
+                 distance: { distance: trailingDist, units: "RELATIVE_PRICE" },
                };
              }
           }
