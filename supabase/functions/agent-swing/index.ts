@@ -256,6 +256,7 @@ ${macroContext || "No major macro events in the window."}
    - You MUST scan the LTF timeframe (1H or 30m) provided in the snapshot. Find the nearest SMC Order Block (ltf_bullish_ob_nearest / ltf_bearish_ob_nearest) or FVG.
    - Anchor your Stop Loss directly behind the LTF Order Block. This compresses the risk by 80%, instantly transforming a 1:1 trade into a massive 1:5.0 S-Tier setup.
    - CRITICAL REQUIREMENT: Calculate your R:R mathematically before returning your parameters. If your R:R to TP2 is less than 2.5, you MUST tighten your Stop Loss behind a lower timeframe structural level until the mathematical ratio is >= 2.5, otherwise your trade will be mechanically rejected.
+   - EXACT PRICE FORMAT REQUIRED: Your 'suggested_stop_loss' MUST be a raw market price coordinate (e.g., 1.09500), NEVER a pip distance. It MUST be mathematically within a tight 2-3% range of the 'suggested_entry_price'. If you output a pip count like '20', you will break the Execution Desk and blow out the portfolio.
 
 3. MACRO-BACKED MOMENTUM BREAKOUT STRATEGIES (IGNORING FIBS):
    - If the MACRO CONTEXT indicates an overwhelming fundamental trend (e.g., extremely bearish due to weak demand and supply increases), you are authorized to IGNORE Fibonacci retracements.
