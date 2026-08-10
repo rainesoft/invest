@@ -176,7 +176,14 @@ async function mtGet(path: string) {
 
 function calcLots(symbol: string, entryPx: number, slPx: number): number {
   const slDistance = Math.abs(entryPx - slPx);
-  if (slDistance === 0) return 0.01;
+
+  const minVolumes: Record<string, number> = {
+    US30: 0.1, NAS100: 0.1, SPX500: 0.1, GER30: 0.1,
+    BTCUSD: 0.01, UKOIL: 0.01, XAUUSD: 0.01, XAGUSD: 0.01
+  };
+  const volumeStep = minVolumes[symbol] || 0.01;
+
+  if (slDistance === 0) return volumeStep;
   
   let pointValue = 1; // Default
   if (symbol.includes("JPY")) {
@@ -186,9 +193,9 @@ function calcLots(symbol: string, entryPx: number, slPx: number): number {
   }
 
   const riskPerLot = slDistance * pointValue;
-  if (riskPerLot <= 0) return 0.01;
+  if (riskPerLot <= 0) return volumeStep;
   const rawLots = RISK_USD / riskPerLot;
-  return Math.max(0.01, Math.min(100.0, Math.floor(rawLots * 100) / 100));
+  return Math.max(volumeStep, Math.min(100.0, Math.floor(rawLots / volumeStep) * volumeStep));
 }
 
 async function verifyWithTavily(query: string): Promise<string | null> {
