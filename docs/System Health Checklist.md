@@ -275,7 +275,7 @@ Verify that the AI agents are actively evaluating the market and producing expec
 Scan through the system and ensure everything is working as expected below:
 - [ ] Agent News wakes up every hour, scans the news and attempts to generate S- and A- Tier trades based on news and fundamental analysis.
 - [ ] Agent Swing wakes up every 4 hours, scans the market and attempts to generate S- and A- Tier swing trades.
-- [ ] VPS Bridge (`vps-poll`) is actively receiving heartbeat pings from the MT5 EA every 1 second without throwing 401 Unauthorized or 1003 timeouts.
+- [ ] VPS Bridge (`vps-poll`) is actively receiving heartbeat pings from the MT5 EA every 15 seconds without throwing 401 Unauthorized or 1003 timeouts.
 
 **Last-Run Timestamp Check:**
 Run this query to confirm agents have fired recently. If `agent-swing` has no `RESEARCH_RUN` entry in the last 4.5 hours during market hours, treat it as an outage:
@@ -364,6 +364,47 @@ If this query returns rows, ensure that the volume algorithms in `agent-trade` a
 
 ---
 
+## ⚠️ 3C. Trade Execution — MT5 EA & VPS Health Diagnostics
+
+> [!WARNING]
+> The MT5 Expert Advisor (EA) running on the local Windows VPS is strictly responsible for opening new positions with zero-latency. If the EA dies, trades will queue up indefinitely.
+
+Check these three metrics to ensure the VPS is actively connected and executing:
+
+### Step 1 — Check VPS Heartbeat
+The EA pings `vps-poll` every 15 seconds. Ensure the heartbeat is fresh:
+```sql
+SELECT user_id, vps_last_heartbeat, 
+       ROUND(EXTRACT(EPOCH FROM (NOW() - vps_last_heartbeat)) / 60, 1) as minutes_since_last_ping
+FROM user_risk_settings
+WHERE vps_last_heartbeat IS NOT NULL;
+```
+- ❌ **FAILED:** If `minutes_since_last_ping` > 1.0, the EA has crashed or the VPS lost internet.
+
+### Step 2 — Check VPS Data Streaming
+The EA streams closed 30m candles to `vps-market-feed` to update the AI context:
+```sql
+SELECT symbol, timeframe, MAX(ts) as last_candle_pushed
+FROM market_data_pti
+GROUP BY symbol, timeframe
+ORDER BY last_candle_pushed DESC
+LIMIT 10;
+```
+- ❌ **FAILED:** If `last_candle_pushed` is older than ~35 minutes, the EA chart is frozen or data stream is broken.
+
+### Step 3 — Check Execution Queue Bottleneck
+When `agent-trade` generates a signal, it creates a `VPS_PENDING` trade. The EA should instantly pick this up.
+```sql
+SELECT id, symbol, status, created_at,
+       ROUND(EXTRACT(EPOCH FROM (NOW() - created_at)) / 60, 1) as minutes_stuck
+FROM user_trades
+WHERE status = 'VPS_PENDING'
+ORDER BY created_at ASC;
+```
+- ❌ **FAILED:** If any trade has `minutes_stuck` > 1.0, the EA is failing to execute trades (e.g. MetaTrader disconnected from broker or Auto-Trading is turned off).
+
+---
+
 ## 3. Trade Execution & PAMM Routing
 Verify that approved signals are actually materializing into user trades and correctly interfacing with brokers.
 
@@ -418,7 +459,7 @@ Sudden failures across agents or broker executions are often tied to hard limits
 - [ ] **OpenAI Credits (`agent-swing`, `agent-news`):** If the agents are suddenly failing to generate `trade_opportunities` and the Edge Function logs show `429 Too Many Requests` or `insufficient_quota`, log into the OpenAI billing dashboard to ensure auto-recharge hasn't failed and credits remain active.
 - [ ] **MetaAPI Limits (`agent-trade`, `position-manager`):** MetaAPI operates on strict request concurrency and monthly execution quotas. If `agent-trade` logs show `QuotaExceededError` or 429 errors when attempting to sync or place trades, log into the MetaAPI portal to upgrade the tier or purchase extra volume.
 - [ ] **Tavily Credits (`agent-news`):** If `agent-news` is failing to return macro insights and Edge Function logs show API rejection for Tavily, verify the Tavily developer dashboard to confirm the search query quota for the month hasn't been exhausted.
-- [ ] **VPS & MT5 Health (`vps-poll`):** The `vps-poll` Edge Function should log a 200 OK ping every second. If `vps-poll` logs suddenly stop or show `5xx` errors, the Windows VPS hosting the MetaTrader 5 EA has either lost internet connectivity, restarted, or the EA was detached from the chart. Log into the VPS remotely via RDP to ensure MT5 is running with Auto Trading enabled.
+- [ ] **VPS & MT5 Health (`vps-poll`):** The `vps-poll` Edge Function should log a 200 OK ping every 15 seconds. If `vps-poll` logs suddenly stop or show `5xx` errors, the Windows VPS hosting the MetaTrader 5 EA has either lost internet connectivity, restarted, or the EA was detached from the chart. Log into the VPS remotely via RDP to ensure MT5 is running with Auto Trading enabled.
 
 ## 6. Trade Resolution & AI Post-Mortems (`resolve-outcomes`)
 The system features an autonomous trade simulator that monitors active trades against live price action. When a trade hits its Stop Loss, it triggers an AI Post-Mortem.

@@ -39,8 +39,8 @@ int OnInit()
      }
      
    RecoverActiveTickets();
-   EventSetTimer(1);
-   Print("RaineBank VPS Bridge initialized. Polling every 1 second.");
+   EventSetTimer(15);
+   Print("RaineBank VPS Bridge initialized. Polling every 15 seconds.");
    return(INIT_SUCCEEDED);
   }
 
@@ -315,6 +315,10 @@ void ProcessTrades(string data)
            {
             ModifyTrade(ticket, sl, tp);
            }
+         else if (action == "CLOSE" && ticket > 0)
+           {
+            CloseTrade(ticket);
+           }
         }
      }
   }
@@ -356,7 +360,52 @@ void ModifyTrade(long ticket, double newSl, double newTp)
   }
 
 //+------------------------------------------------------------------+
-//| Execute Trade and Callback                                       |
+//| Close Trade (Positions and Pending Orders)                       |
+//+------------------------------------------------------------------+
+void CloseTrade(long ticket)
+  {
+   MqlTradeRequest request;
+   MqlTradeResult  result;
+   ZeroMemory(request);
+   ZeroMemory(result);
+   
+   if(PositionSelectByTicket(ticket))
+     {
+      request.action = TRADE_ACTION_DEAL;
+      request.position = ticket;
+      request.symbol = PositionGetString(POSITION_SYMBOL);
+      request.volume = PositionGetDouble(POSITION_VOLUME);
+      request.type = (ENUM_ORDER_TYPE)(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? ORDER_TYPE_SELL : ORDER_TYPE_BUY);
+      request.price = SymbolInfoDouble(request.symbol, request.type == ORDER_TYPE_SELL ? SYMBOL_BID : SYMBOL_ASK);
+      request.deviation = 50;
+      request.magic = 410673;
+      
+      if(OrderSend(request, result))
+        {
+         Print("Closed Position ", ticket);
+        }
+      else
+        {
+         Print("Failed to close position ", ticket, " Error: ", GetLastError());
+        }
+     }
+   else if (OrderSelect(ticket))
+     {
+      request.action = TRADE_ACTION_REMOVE;
+      request.order = ticket;
+      if(OrderSend(request, result))
+        {
+         Print("Canceled Pending Order ", ticket);
+        }
+      else
+        {
+         Print("Failed to cancel pending order ", ticket, " Error: ", GetLastError());
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Execute Trade (Sends to Broker via MT5)                          |
 //+------------------------------------------------------------------+
 void ExecuteTrade(string id, string symbol, string side, double volume, double sl, double tp, double entryPrice, string orderTypeStr)
   {
