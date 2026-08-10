@@ -40,7 +40,7 @@ serve(async (req) => {
           take_profit_json
         )
       `)
-      .in("status", ["VPS_PENDING", "OPEN"]);
+      .in("status", ["VPS_PENDING", "OPEN", "VPS_CLOSE"]);
 
     if (fetchError) throw fetchError;
 
@@ -65,15 +65,19 @@ serve(async (req) => {
       }
       
       const orderType = opp?.entry_plan_json?.order_type || (trade.side === "LONG" ? "BUY MARKET" : "SELL MARKET");
-      const action = trade.status === "VPS_PENDING" ? "EXECUTE" : "MODIFY";
+      let action = "MODIFY";
+      if (trade.status === "VPS_PENDING") action = "EXECUTE";
+      else if (trade.status === "VPS_CLOSE") action = "CLOSE";
       const ticket = trade.meta_api_order_id || "0";
 
       // Format: ID,SYMBOL,SIDE,VOLUME,STOPLOSS,TAKEPROFIT,TRADE_TYPE,ENTRY_PRICE,ORDER_TYPE,ACTION,TICKET
       csvResponse += `${trade.id},${trade.symbol},${trade.side},${trade.volume},${stopLossRaw},${targetTP},${trade.trade_type},${entryPrice},${orderType},${action},${ticket}\n`;
       
-      // Lock the trade so it isn't picked up twice by multiple polls (only for new executions)
+      // Lock the trade so it isn't picked up twice by multiple polls
       if (trade.status === "VPS_PENDING") {
         await supabase.from("user_trades").update({ status: "VPS_PROCESSING" }).eq("id", trade.id);
+      } else if (trade.status === "VPS_CLOSE") {
+        await supabase.from("user_trades").update({ status: "CLOSED" }).eq("id", trade.id);
       }
     }
 

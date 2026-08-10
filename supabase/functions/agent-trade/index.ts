@@ -159,6 +159,17 @@ serve(async (req) => {
         return new Response(JSON.stringify({ message: "No open trades to manage" }), { status: 200 });
       }
 
+      // --- VPS HEARTBEAT CHECK ---
+      const { data: vpsSettings } = await supabase.from("user_risk_settings").select("vps_last_heartbeat").eq("user_id", "912d249b-9be8-4691-a11b-5b00f386a804").single();
+      let isVpsAlive = false;
+      if (vpsSettings?.vps_last_heartbeat) {
+         const heartbeatTime = new Date(vpsSettings.vps_last_heartbeat).getTime();
+         isVpsAlive = (Date.now() - heartbeatTime) < 60000;
+      }
+      if (!isVpsAlive) {
+         console.warn("[Position Manager] WARNING: VPS Heartbeat is DEAD. Failing over to MetaAPI for all modifications.");
+      }
+
       const orderMap = new Map<string, any>();
       for (const trade of openTrades) {
         const id = trade.meta_api_order_id;
@@ -341,15 +352,23 @@ serve(async (req) => {
                      payload.positionId = orderId;
                  }
 
-                 const closeRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
-                     method: "POST",
-                     headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
-                     body: JSON.stringify(payload)
-                 });
-                 if (closeRes.ok) {
-                     await supabase.from("user_trades").update({ status: "CLOSED", ai_risks: `Closed by Position Manager: ${reason}` }).eq("meta_api_order_id", orderId);
-                     moves.push({ symbol: trade.symbol, action: `AI Trend Reversal Close (${isPendingOrder ? 'Order' : 'Position'})`, from: 0, to: 0 });
+                 if (isVpsAlive && !isPendingOrder) {
+                     // Route to VPS
+                     await supabase.from("user_trades").update({ status: "VPS_CLOSE", ai_risks: `Closed by Position Manager: ${reason}` }).eq("meta_api_order_id", orderId);
+                     moves.push({ symbol: trade.symbol, action: `AI Trend Reversal Close (VPS Routed)`, from: 0, to: 0 });
                      continue; // Skip trailing stop logic and move to next trade
+                 } else {
+                     // Fallback to MetaAPI
+                     const closeRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                         method: "POST",
+                         headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                         body: JSON.stringify(payload)
+                     });
+                     if (closeRes.ok) {
+                         await supabase.from("user_trades").update({ status: "CLOSED", ai_risks: `Closed by Position Manager: ${reason}` }).eq("meta_api_order_id", orderId);
+                         moves.push({ symbol: trade.symbol, action: `AI Trend Reversal Close (${isPendingOrder ? 'Order' : 'Position'})`, from: 0, to: 0 });
+                         continue; // Skip trailing stop logic and move to next trade
+                     }
                  }
              }
           }
@@ -389,14 +408,18 @@ serve(async (req) => {
           // --- 3. END OF DAY (EOD) SCALP LIQUIDATION ---
           // If it is 4 PM NY time or later, and the trade is a Scalp ('30m' timeframe), liquidate it immediately.
           if (isEodScalp && opp.timeframe === "30m") {
-             console.log(`[Position Manager] EOD LIQUIDATION: Closing Scalp ${orderId} for ${trade.symbol} at ${nyHour}:00 NY Time.`);
+              console.log(`[Position Manager] EOD LIQUIDATION: Closing Scalp ${orderId} for ${trade.symbol} at ${nyHour}:00 NY Time.`);
              try {
-                await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
-                   method: "POST",
-                   headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
-                   body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: orderId })
-                });
-                await supabase.from("user_trades").update({ status: "CLOSED", ai_risks: "EOD Liquidation (4 PM NY Time)", exit_price: position.currentPrice, profit_loss: position.profit }).eq("meta_api_order_id", orderId);
+                if (isVpsAlive) {
+                   await supabase.from("user_trades").update({ status: "VPS_CLOSE", ai_risks: "EOD Liquidation (4 PM NY Time)" }).eq("meta_api_order_id", orderId);
+                } else {
+                   await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                      method: "POST",
+                      headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                      body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: orderId })
+                   });
+                   await supabase.from("user_trades").update({ status: "CLOSED", ai_risks: "EOD Liquidation (4 PM NY Time)", exit_price: position.currentPrice, profit_loss: position.profit }).eq("meta_api_order_id", orderId);
+                }
              } catch (e) {
                 console.error(`[Position Manager] Failed EOD liquidation for ${orderId}:`, e);
              }
@@ -464,18 +487,36 @@ serve(async (req) => {
           if (newSl !== null) {
             console.log(`[Position Manager] ${trade.symbol} ${orderId}: ${actionName} — SL ${currentSl} → ${newSl}`);
             
-            // --- VPS EA ROUTING: Save modification to DB instead of MetaAPI ---
-            // The vps-poll endpoint will detect the new SL and the EA will execute the modification.
-            const { data: currentOpp } = await supabase.from("trade_opportunities").select("stop_plan_json").eq("id", opp.id).single();
-            if (currentOpp) {
-               const updatedJson = { ...currentOpp.stop_plan_json, stop: newSl };
-               const modRes = await supabase.from("trade_opportunities").update({ stop_plan_json: updatedJson }).eq("id", opp.id);
-               
-               if (!modRes.error) {
-                 moves.push({ symbol: trade.symbol, action: actionName, from: currentSl, to: newSl });
-               } else {
-                 errors.push(`${trade.symbol} ${orderId}: modify failed (DB Error)`);
-               }
+            if (isVpsAlive) {
+                // --- VPS EA ROUTING: Save modification to DB instead of MetaAPI ---
+                const { data: currentOpp } = await supabase.from("trade_opportunities").select("stop_plan_json").eq("id", opp.id).single();
+                if (currentOpp) {
+                   const updatedJson = { ...currentOpp.stop_plan_json, stop: newSl };
+                   const modRes = await supabase.from("trade_opportunities").update({ stop_plan_json: updatedJson }).eq("id", opp.id);
+                   
+                   if (!modRes.error) {
+                     moves.push({ symbol: trade.symbol, action: actionName + " (VPS)", from: currentSl, to: newSl });
+                   } else {
+                     errors.push(`${trade.symbol} ${orderId}: modify failed (DB Error)`);
+                   }
+                }
+            } else {
+                // --- METAAPI FAILOVER ---
+                const modRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                   method: "POST",
+                   headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                   body: JSON.stringify({ actionType: "POSITION_MODIFY", positionId: orderId, stopLoss: newSl })
+                });
+                if (modRes.ok) {
+                    const { data: currentOpp } = await supabase.from("trade_opportunities").select("stop_plan_json").eq("id", opp.id).single();
+                    if (currentOpp) {
+                       const updatedJson = { ...currentOpp.stop_plan_json, stop: newSl };
+                       await supabase.from("trade_opportunities").update({ stop_plan_json: updatedJson }).eq("id", opp.id);
+                    }
+                    moves.push({ symbol: trade.symbol, action: actionName + " (MetaAPI Failover)", from: currentSl, to: newSl });
+                } else {
+                    errors.push(`${trade.symbol} ${orderId}: modify failed (MetaAPI Error)`);
+                }
             }
           }
 
