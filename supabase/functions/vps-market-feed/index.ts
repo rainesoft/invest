@@ -58,9 +58,10 @@ serve(async (req) => {
       const latestExisting = new Map<string, { hash: string, revision: number }>();
       if (existingRows) {
         for (const row of existingRows) {
-          const current = latestExisting.get(row.ts);
+          const normalizedTs = new Date(row.ts).toISOString();
+          const current = latestExisting.get(normalizedTs);
           if (!current || row.revision > current.revision) {
-            latestExisting.set(row.ts, { hash: row.hash, revision: row.revision });
+            latestExisting.set(normalizedTs, { hash: row.hash, revision: row.revision });
           }
         }
       }
