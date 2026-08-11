@@ -152,11 +152,20 @@ serve(async (req) => {
             timeframe, entry_plan_json, stop_plan_json, take_profit_json
           )
         `)
-        .eq("status", "OPEN")
+        .in("status", ["OPEN", "VPS_CLOSE", "VPS_PENDING"])
         .not("meta_api_order_id", "is", null);
 
       if (error || !openTrades || openTrades.length === 0) {
         return new Response(JSON.stringify({ message: "No open trades to manage" }), { status: 200 });
+      }
+
+      const orderMap = new Map<string, any>();
+      const knownMap = new Map<string, any>();
+      for (const t of openTrades) {
+         knownMap.set(t.meta_api_order_id, t);
+         if (t.status === "OPEN") {
+             orderMap.set(t.meta_api_order_id, t);
+         }
       }
 
       // --- VPS HEARTBEAT CHECK ---
@@ -190,7 +199,7 @@ serve(async (req) => {
           const allPositions = await allPosRes.json();
           for (const pos of allPositions) {
              const posId = pos.id;
-             if (!orderMap.has(posId)) {
+             if (!knownMap.has(posId)) {
                 console.log(`[Position Manager] Reverse-Sync: Found orphaned broker trade ${posId} (${pos.symbol}). Recovering...`);
                 // Recover the trade in the database
                 await supabase.from("user_trades").update({ status: "OPEN" }).eq("meta_api_order_id", posId);
