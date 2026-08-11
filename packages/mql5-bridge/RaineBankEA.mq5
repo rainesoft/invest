@@ -547,7 +547,7 @@ void PushMarketData()
          string res_headers;
          int res = WebRequest("POST", url, req_headers, 5000, post, result, res_headers);
          if(res == 200) Print("Data successfully pushed to Supabase.");
-         else Print("Failed to push data: HTTP ", res);
+         else Print("Failed to push data: HTTP ", res, " Body: ", CharArrayToString(result));
         }
       lastBarTime = currentBarTime;
      }
