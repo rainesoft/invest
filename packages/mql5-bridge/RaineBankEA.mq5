@@ -548,6 +548,33 @@ void PushMarketData()
          int res = WebRequest("POST", url, req_headers, 5000, post, result, res_headers);
          if(res == 200) Print("Data successfully pushed to Supabase.");
          else Print("Failed to push data: HTTP ", res, " Body: ", CharArrayToString(result));
+         
+         // Push D1 Data
+         MqlRates ratesD1[];
+         ArraySetAsSeries(ratesD1, true);
+         if(CopyRates(Symbol(), PERIOD_D1, 0, 100, ratesD1) > 0)
+           {
+            string jsonD1 = "{\"user_id\":\"" + InpUserID + "\",\"symbol\":\"" + Symbol() + "\",\"timeframe\":\"1d\",\"bars\":[";
+            for(int i=0; i<ArraySize(ratesD1); i++)
+              {
+               jsonD1 += "{\"t\":" + IntegerToString(ratesD1[i].time) + 
+                       ",\"o\":" + DoubleToString(ratesD1[i].open, 5) + 
+                       ",\"h\":" + DoubleToString(ratesD1[i].high, 5) + 
+                       ",\"l\":" + DoubleToString(ratesD1[i].low, 5) + 
+                       ",\"c\":" + DoubleToString(ratesD1[i].close, 5) + 
+                       ",\"v\":" + IntegerToString(ratesD1[i].tick_volume) + "}";
+               if(i < ArraySize(ratesD1)-1) jsonD1 += ",";
+              }
+            jsonD1 += "]}";
+            
+            char postD1[], resultD1[];
+            StringToCharArray(jsonD1, postD1);
+            ArrayResize(postD1, ArraySize(postD1)-1);
+            
+            int resD1 = WebRequest("POST", url, req_headers, 5000, postD1, resultD1, res_headers);
+            if(resD1 == 200) Print("D1 Data successfully pushed to Supabase.");
+            else Print("Failed to push D1 data: HTTP ", resD1, " Body: ", CharArrayToString(resultD1));
+           }
         }
       lastBarTime = currentBarTime;
      }
