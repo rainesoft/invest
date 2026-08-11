@@ -147,7 +147,7 @@ const SwingTradeSchema = z.object({
   execution_parameters: z.object({
     entry_type: z.enum(["Buy Limit", "Sell Limit", "Buy Stop", "Sell Stop", "Market", "NONE"]),
     suggested_entry_price: z.number().nullable(),
-    suggested_stop_loss: z.number().nullable(),
+    atr_multiplier_sl: z.number().nullable().describe("Multiplier for ATR to calculate Stop Loss distance (e.g. 1.5). Required to be 1.0 to 3.0."),
     take_profit_1: z.number().nullable().describe("Conservative target — first Fib confluence zone"),
     take_profit_2: z.number().nullable().describe("Primary target — strong Fib level or structure"),
     take_profit_3: z.number().nullable().describe(
@@ -234,6 +234,7 @@ ${JSON.stringify(snapshot, null, 2)}
 
 [MACRO & FUNDAMENTAL CONTEXT]
 ${macroContext || "No major macro events in the window."}
+CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the macro sentiment is NEUTRAL (score 0). This is a highly stable environment for technical trading. You MUST originate S-Tier and A-Tier trades based purely on technicals in this environment. Do NOT reject a setup simply because there is 'no macro catalyst'.
 
 [SWING TRADE RULES — READ CAREFULLY]
 
@@ -255,8 +256,8 @@ ${macroContext || "No major macro events in the window."}
    - DO NOT use the Daily ATR or a wide Daily swing low for your Stop Loss.
    - You MUST scan the LTF timeframe (1H or 30m) provided in the snapshot. Find the nearest SMC Order Block (ltf_bullish_ob_nearest / ltf_bearish_ob_nearest) or FVG.
    - Anchor your Stop Loss directly behind the LTF Order Block. This compresses the risk by 80%, instantly transforming a 1:1 trade into a massive 1:5.0 S-Tier setup.
-   - CRITICAL REQUIREMENT: Calculate your R:R mathematically before returning your parameters. If your R:R to TP2 is less than 2.5, you MUST tighten your Stop Loss behind a lower timeframe structural level until the mathematical ratio is >= 2.5, otherwise your trade will be mechanically rejected.
-   - EXACT PRICE FORMAT REQUIRED: Your 'suggested_stop_loss' MUST be a raw market price coordinate (e.g., 1.09500), NEVER a pip distance. It MUST be mathematically within a tight 2-3% range of the 'suggested_entry_price'. If you output a pip count like '20', you will break the Execution Desk and blow out the portfolio.
+   - CRITICAL REQUIREMENT: Calculate your R:R mathematically before returning your parameters. Your Take Profit 2 (TP2) MUST be mathematically placed to provide a minimum 1:2.0 Risk-to-Reward ratio relative to your Stop Loss distance. If market structure prevents this, DO NOT generate a trade.
+   - EXACT PRICE FORMAT REQUIRED: You will output an 'atr_multiplier_sl' between 1.0 and 3.0 instead of a raw price. The Execution Desk will calculate the exact Stop Loss price dynamically using live volatility.
 
 3. MACRO-BACKED MOMENTUM BREAKOUT STRATEGIES (IGNORING FIBS):
    - If the MACRO CONTEXT indicates an overwhelming fundamental trend (e.g., extremely bearish due to weak demand and supply increases), you are authorized to IGNORE Fibonacci retracements.
@@ -1138,7 +1139,13 @@ serve(async (req) => {
           // === BACKFILL INVALIDATION PRICE IN MARKET CONTEXT ===
           // Now that the AI has computed the stop loss, update the context row
           // so the Scalper knows exactly where the swing thesis is invalidated.
-          const aiSl = evaluation.execution_parameters.suggested_stop_loss;
+          const entry = evaluation.execution_parameters.suggested_entry_price || snapshot.current_price || 0;
+          const atrSlMultiplier = (evaluation.execution_parameters as any).atr_multiplier_sl || 1.5;
+          const atr = (snapshot as any).atr_14 || 10;
+          const slDistance = atr * atrSlMultiplier;
+          let aiSl = evaluation.recommended_direction === "LONG" ? entry - slDistance : entry + slDistance;
+          aiSl = Number(aiSl.toFixed(5));
+          
           if (aiSl) {
             supabase
               .from("market_context")
@@ -1158,23 +1165,20 @@ serve(async (req) => {
           }
 
           // === LAYER C: STRUCTURAL RISK VALIDATION ===
-          const entry = evaluation.execution_parameters.suggested_entry_price!;
-          let sl = evaluation.execution_parameters.suggested_stop_loss!;
+          let sl = aiSl;
 
           // --- OVERRIDE: DYNAMIC ATR MINIMUM (Respects wider AI structural stops) ---
-          const atr = (snapshot as any).atr_14 || 10;
           if (atr > 0) {
             const preciousMetalsAndCrypto = ['XAUUSD', 'XAGUSD', 'BTCUSD'];
-            const atrMultiplier = preciousMetalsAndCrypto.includes(symbol) ? 3.0 : 2.0;
-            const minAtrDistance = atr * atrMultiplier;
-            const currentDistance = Math.abs(entry - sl);
+            const minMultiplier = preciousMetalsAndCrypto.includes(symbol) ? 3.0 : 2.0;
             
-            if (currentDistance < minAtrDistance) {
-               console.log(`[Execution Desk] Widening tight AI swing stop loss to minimum ${atrMultiplier}x ATR for ${symbol}`);
+            if (atrSlMultiplier < minMultiplier) {
+               console.log(`[Execution Desk] Widening tight AI swing stop loss to minimum ${minMultiplier}x ATR for ${symbol}`);
+               const minAtrDistance = atr * minMultiplier;
                if (evaluation.recommended_direction === "LONG") {
-                   sl = Number((entry - minAtrDistance).toFixed(3));
+                   sl = Number((entry - minAtrDistance).toFixed(5));
                } else {
-                   sl = Number((entry + minAtrDistance).toFixed(3));
+                   sl = Number((entry + minAtrDistance).toFixed(5));
                }
             }
           }

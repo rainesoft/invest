@@ -325,7 +325,7 @@ export async function fetchPaperBars(
         if (now - latestTs < maxAgeMs) {
           // Reverse because we want oldest first for the indicator logic
           return cachedBars.reverse().map((b: any) => ({
-            t: b.ts, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v
+            t: b.ts, o: Number(b.o), h: Number(b.h), l: Number(b.l), c: Number(b.c), v: Number(b.v)
           }));
         } else {
           console.log(`[Cache Stale] ${symbol} ${timeframe} data is ${Math.round((now - latestTs) / 3600000)}h old. Falling back to MetaApi.`);
