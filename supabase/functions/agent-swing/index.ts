@@ -712,6 +712,13 @@ serve(async (req) => {
 
 
       await Promise.all(symbols.map(async (symbol) => {
+        // --- LOG RESEARCH RUN ---
+        await insertAuditLog(supabase, {
+          actor_type: "SYSTEM",
+          action: "RESEARCH_RUN",
+          payload_json: { symbol, timeframe, agent: "agent-swing" }
+        }).catch(e => console.warn(`[Audit] Failed to log RESEARCH_RUN for ${symbol}: ${e.message}`));
+
         // --- LAYER -1: MARKET HOURS CHECK ---
         if (!isMarketOpen(symbol)) {
           console.log(`[Market Hours] Skipping ${symbol} as market is currently closed.`);
