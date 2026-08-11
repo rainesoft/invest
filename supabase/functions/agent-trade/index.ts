@@ -162,9 +162,19 @@ serve(async (req) => {
       const orderMap = new Map<string, any>();
       const knownMap = new Map<string, any>();
       for (const t of openTrades) {
-         knownMap.set(t.meta_api_order_id, t);
+         const id = t.meta_api_order_id;
+         if (!id) continue;
+         
+         const existingKnown = knownMap.get(id);
+         if (!existingKnown || t.trade_type === "RUNNER") {
+             knownMap.set(id, t);
+         }
+         
          if (t.status === "OPEN") {
-             orderMap.set(t.meta_api_order_id, t);
+             const existingOrder = orderMap.get(id);
+             if (!existingOrder || t.trade_type === "RUNNER") {
+                 orderMap.set(id, t);
+             }
          }
       }
 
@@ -179,15 +189,7 @@ serve(async (req) => {
          console.warn("[Position Manager] WARNING: VPS Heartbeat is DEAD. Failing over to MetaAPI for all modifications.");
       }
 
-      const orderMap = new Map<string, any>();
-      for (const trade of openTrades) {
-        const id = trade.meta_api_order_id;
-        if (!id) continue;
-        const existing = orderMap.get(id);
-        if (!existing || trade.trade_type === "RUNNER") {
-          orderMap.set(id, trade);
-        }
-      }
+
 
       // --- REVERSE SYNC: ORPHAN RECOVERY ---
       try {
