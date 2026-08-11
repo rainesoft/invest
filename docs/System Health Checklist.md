@@ -453,13 +453,22 @@ The `telegram-broadcast` edge function is triggered automatically via a Postgres
 - [ ] **Test Delivery:** To safely verify delivery without broadcasting a fake signal to all users, you can manually invoke the edge function via the Supabase CLI or HTTP POST using a mock payload that mimics a `REJECTED` user trade for a specific test user's `user_id`.
 
 
-## 5. API Quotas & Infrastructure Billing
-Sudden failures across agents or broker executions are often tied to hard limits on third-party API accounts running out of prepaid credits.
+## 5. API Quotas & External Dependency Balances
+Sudden failures across agents or broker executions are almost always tied to hard limits on third-party API accounts running out of prepaid credits. Do not wait for `429 Too Many Requests` errors; proactively check these balances daily.
 
-- [ ] **OpenAI Credits (`agent-swing`, `agent-news`):** If the agents are suddenly failing to generate `trade_opportunities` and the Edge Function logs show `429 Too Many Requests` or `insufficient_quota`, log into the OpenAI billing dashboard to ensure auto-recharge hasn't failed and credits remain active.
-- [ ] **MetaAPI Limits (`agent-trade`, `position-manager`):** MetaAPI operates on strict request concurrency and monthly execution quotas. If `agent-trade` logs show `QuotaExceededError` or 429 errors when attempting to sync or place trades, log into the MetaAPI portal to upgrade the tier or purchase extra volume.
-- [ ] **Tavily Credits (`agent-news`):** If `agent-news` is failing to return macro insights and Edge Function logs show API rejection for Tavily, verify the Tavily developer dashboard to confirm the search query quota for the month hasn't been exhausted.
-- [ ] **VPS & MT5 Health (`vps-poll`):** The `vps-poll` Edge Function should log a 200 OK ping every 15 seconds. If `vps-poll` logs suddenly stop or show `5xx` errors, the Windows VPS hosting the MetaTrader 5 EA has either lost internet connectivity, restarted, or the EA was detached from the chart. Log into the VPS remotely via RDP to ensure MT5 is running with Auto Trading enabled.
+- [ ] **OpenAI Balance (`agent-swing`, `agent-news`):** 
+  - Log into the [OpenAI Billing Dashboard](https://platform.openai.com/account/billing).
+  - Verify that the prepaid credit balance is > $50.
+  - Verify that auto-recharge is active and the attached credit card has not expired.
+- [ ] **MetaAPI Quota & Billing (`agent-trade`, `position-manager`):** 
+  - Log into the [MetaAPI Portal](https://app.metaapi.cloud/billing).
+  - Check the active subscription tier and ensure you have not exceeded your monthly MT5 execution quota or request concurrency limits.
+  - Ensure the billing method is up to date to prevent sudden API suspension.
+- [ ] **Tavily Search Credits (`agent-news`):** 
+  - Log into the [Tavily Developer Dashboard](https://app.tavily.com/home).
+  - Check the remaining API calls for the current billing cycle. Ensure there is enough headroom to survive a high-volatility news day where `agent-news` may poll more frequently.
+- [ ] **VPS & MT5 Health (`vps-poll`):** 
+  - The `vps-poll` Edge Function should log a 200 OK ping every 15 seconds. If `vps-poll` logs suddenly stop or show `5xx` errors, the Windows VPS hosting the MetaTrader 5 EA has either lost internet connectivity, restarted, or the EA was detached from the chart. Log into the VPS remotely via RDP to ensure MT5 is running with Auto Trading enabled.
 
 ## 6. Trade Resolution & AI Post-Mortems (`resolve-outcomes`)
 The system features an autonomous trade simulator that monitors active trades against live price action. When a trade hits its Stop Loss, it triggers an AI Post-Mortem.
