@@ -298,6 +298,7 @@ void ProcessTrades(string data)
         {
          string id = parts[0];
          string symbol = parts[1];
+         
          string side = parts[2];
          double volume = StringToDouble(parts[3]);
          double sl = StringToDouble(parts[4]);
@@ -317,7 +318,7 @@ void ProcessTrades(string data)
            }
          else if (action == "CLOSE" && ticket > 0)
            {
-            CloseTrade(ticket);
+            CloseTrade(id, ticket);
            }
         }
      }
@@ -330,11 +331,17 @@ void ModifyTrade(long ticket, double newSl, double newTp)
   {
    if(PositionSelectByTicket(ticket))
      {
-      double currentSl = PositionGetDouble(POSITION_SL);
-      double currentTp = PositionGetDouble(POSITION_TP);
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      int symDigits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
       
-      // Only modify if there's an actual change (handle floating point inaccuracies)
-      if (MathAbs(currentSl - newSl) > 0.00001 || MathAbs(currentTp - newTp) > 0.00001)
+      double currentSl = NormalizeDouble(PositionGetDouble(POSITION_SL), symDigits);
+      double currentTp = NormalizeDouble(PositionGetDouble(POSITION_TP), symDigits);
+      
+      double normNewSl = NormalizeDouble(newSl, symDigits);
+      double normNewTp = NormalizeDouble(newTp, symDigits);
+      
+      // Only modify if there's an actual change after normalization
+      if (currentSl != normNewSl || currentTp != normNewTp)
         {
          MqlTradeRequest request;
          MqlTradeResult  result;
@@ -342,18 +349,19 @@ void ModifyTrade(long ticket, double newSl, double newTp)
          ZeroMemory(result);
          
          request.action = TRADE_ACTION_SLTP;
+         request.symbol = symbol;
          request.position = ticket;
-         request.sl = newSl;
-         request.tp = newTp;
+         request.sl = normNewSl;
+         request.tp = normNewTp;
          request.magic = 410673;
          
          if(OrderSend(request, result))
            {
-            Print("Modified Position ", ticket, " SL: ", newSl, " TP: ", newTp);
+            Print("Modified Position ", ticket, " SL: ", request.sl, " TP: ", request.tp);
            }
          else
            {
-            Print("Failed to modify position ", ticket, " Error: ", GetLastError());
+            Print("Failed to modify position ", ticket, " Retcode: ", result.retcode, " Error: ", GetLastError());
            }
         }
      }
@@ -362,18 +370,23 @@ void ModifyTrade(long ticket, double newSl, double newTp)
 //+------------------------------------------------------------------+
 //| Close Trade (Positions and Pending Orders)                       |
 //+------------------------------------------------------------------+
-void CloseTrade(long ticket)
+void CloseTrade(string id, long ticket)
   {
    MqlTradeRequest request;
    MqlTradeResult  result;
    ZeroMemory(request);
    ZeroMemory(result);
    
+   string statusStr = "";
+   string errorStr = "";
+   bool executed = false;
+   
    if(PositionSelectByTicket(ticket))
      {
       request.action = TRADE_ACTION_DEAL;
       request.position = ticket;
       request.symbol = PositionGetString(POSITION_SYMBOL);
+      SymbolSelect(request.symbol, true); // Ensure it's in Market Watch
       request.volume = PositionGetDouble(POSITION_VOLUME);
       request.type = (ENUM_ORDER_TYPE)(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? ORDER_TYPE_SELL : ORDER_TYPE_BUY);
       request.price = SymbolInfoDouble(request.symbol, request.type == ORDER_TYPE_SELL ? SYMBOL_BID : SYMBOL_ASK);
@@ -383,10 +396,14 @@ void CloseTrade(long ticket)
       if(OrderSend(request, result))
         {
          Print("Closed Position ", ticket);
+         statusStr = "CLOSED";
+         executed = true;
         }
       else
         {
          Print("Failed to close position ", ticket, " Error: ", GetLastError());
+         statusStr = "VPS_CLOSE"; // Leave it as VPS_CLOSE to retry later
+         errorStr = "Code:" + IntegerToString(GetLastError());
         }
      }
    else if (OrderSelect(ticket))
@@ -396,10 +413,29 @@ void CloseTrade(long ticket)
       if(OrderSend(request, result))
         {
          Print("Canceled Pending Order ", ticket);
+         statusStr = "CLOSED";
+         executed = true;
         }
       else
         {
          Print("Failed to cancel pending order ", ticket, " Error: ", GetLastError());
+         statusStr = "VPS_CLOSE"; 
+         errorStr = "Code:" + IntegerToString(GetLastError());
+        }
+     }
+     
+   if (executed || statusStr != "")
+     {
+      StringReplace(errorStr, " ", "%20");
+      string cbUrl = InpSupabaseURL + "/functions/v1/vps-callback?trade_id=" + id + "&status=" + statusStr + "&ticket=" + IntegerToString(ticket) + "&error=" + errorStr;
+      
+      char post[], resData[];
+      string req_headers = "x-vps-secret: " + InpVPSSecret + "\r\n";
+      string res_headers;
+      int res = WebRequest("GET", cbUrl, req_headers, 3000, post, resData, res_headers);
+      if(res != 200)
+        {
+         Print("Failed to send close callback. HTTP: ", res);
         }
      }
   }

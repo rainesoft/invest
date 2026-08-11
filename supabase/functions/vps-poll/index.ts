@@ -76,8 +76,6 @@ serve(async (req) => {
       // Lock the trade so it isn't picked up twice by multiple polls
       if (trade.status === "VPS_PENDING") {
         await supabase.from("user_trades").update({ status: "VPS_PROCESSING" }).eq("id", trade.id);
-      } else if (trade.status === "VPS_CLOSE") {
-        await supabase.from("user_trades").update({ status: "CLOSED" }).eq("id", trade.id);
       }
     }
 
