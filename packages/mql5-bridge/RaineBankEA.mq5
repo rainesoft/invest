@@ -553,7 +553,7 @@ void PushMarketData()
      }
    else if(lastBarTime == 0)
      {
-      lastBarTime = currentBarTime; // Initialize
+      lastBarTime = 1; // Set to 1 to force an immediate mismatch and push on the very next timer tick, ensuring instant backfill on startup.
      }
   }
 
