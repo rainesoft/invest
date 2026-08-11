@@ -387,6 +387,15 @@ void CloseTrade(string id, long ticket)
       request.position = ticket;
       request.symbol = PositionGetString(POSITION_SYMBOL);
       SymbolSelect(request.symbol, true); // Ensure it's in Market Watch
+      
+      // Wait for prices to become available in Market Watch
+      int attempts = 0;
+      while(SymbolInfoDouble(request.symbol, SYMBOL_ASK) == 0 && attempts < 10)
+        {
+         Sleep(100);
+         attempts++;
+        }
+        
       request.volume = PositionGetDouble(POSITION_VOLUME);
       request.type = (ENUM_ORDER_TYPE)(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? ORDER_TYPE_SELL : ORDER_TYPE_BUY);
       request.price = SymbolInfoDouble(request.symbol, request.type == ORDER_TYPE_SELL ? SYMBOL_BID : SYMBOL_ASK);
