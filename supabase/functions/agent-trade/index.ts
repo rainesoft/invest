@@ -263,21 +263,41 @@ serve(async (req) => {
          }
       }
       // --- END QUERY ---
-
+      // --- FETCH MARKET DATA (FOR VPS EXCLUSION) ---
+      const { data: ptiData } = await supabase.from("market_data_pti").select("symbol, data_json");
+      const ptiMap = new Map<string, any>();
+      if (ptiData) {
+         for (const p of ptiData) {
+            ptiMap.set(p.symbol, p.data_json);
+         }
+      }
+      
       for (const [orderId, trade] of orderMap) {
         try {
           // --- 1. BROKER SYNC CHECK ---
-          const posRes = await fetch(
-            `${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/positions/${orderId}`,
-            { headers: { "auth-token": META_API_TOKEN } }
-          );
-
           let position = null;
           let isPendingOrder = false;
 
-          if (!posRes.ok) {
-            // Check if it's a pending order before assuming it's closed
-            const ordRes = await fetch(
+          if (isVpsAlive) {
+             // For VPS EXCLUSION, we bypass MetaAPI polling as the VPS EA locally manages position existence.
+             // We mock the position object with live PTI data so that AI invalidation and trailing stop math can execute.
+             const snap = ptiMap.get(trade.symbol);
+             position = { 
+                unrealizedProfit: 0, 
+                profit: 0, 
+                currentPrice: snap?.c || (trade.trade_opportunities?.entry_plan_json?.price || 0),
+                stopLoss: trade.stop_loss || (trade.trade_opportunities?.stop_plan_json?.initial || 0),
+                volume: 0.01 
+             };
+          } else {
+            const posRes = await fetch(
+              `${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/positions/${orderId}`,
+              { headers: { "auth-token": META_API_TOKEN } }
+            );
+
+            if (!posRes.ok) {
+              // Check if it's a pending order before assuming it's closed
+              const ordRes = await fetch(
               `${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/orders/${orderId}`,
               { headers: { "auth-token": META_API_TOKEN } }
             );
@@ -315,8 +335,9 @@ serve(async (req) => {
                console.warn(`[Position Manager] Broker sync failed for ${orderId}. posRes: ${posRes.status}, ordRes: ${ordRes.status}. Retrying later.`);
                continue;
             }
-          } else {
-            position = await posRes.json();
+            } else {
+              position = await posRes.json();
+            }
           }
 
           if (position?.error) continue;
@@ -540,8 +561,13 @@ serve(async (req) => {
         }
       }
 
-      const result = { evaluated: orderMap.size, moves: moves.length, errors: errors.length, details: moves };
-      return new Response(JSON.stringify(result), { status: 200, headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({
+        evaluated: orderMap.size,
+        moves: moves.length,
+        errors: errors.length,
+        errorList: errors,
+        details: moves
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
 
 
