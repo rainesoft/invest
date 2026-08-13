@@ -458,25 +458,8 @@ export async function fetchPaperBars(
     }
 
     // ── ALPACA FALLBACK (stock symbols only) ─────────────────────────────────
-    {
-      const tfMap: Record<string, string> = { '1h': '1Hour', '1d': '1Day', '15m': '15Min', '1m': '1Min' };
-      const alpacaTf = tfMap[timeframe.toLowerCase()] || '1Day';
-      const key = settings.alpaca_key || getEnv('BROKER_KEY') || '';
-      const secret = settings.alpaca_secret || getEnv('BROKER_SECRET') || '';
-      
-      const res = await alpacaFetch(`/stocks/${symbol}/bars?timeframe=${alpacaTf}&limit=${limit}`, {
-        method: 'GET'
-      }, key, secret);
-      
-      return (res.bars || []).map((b: any) => ({
-        t: b.t,
-        o: b.o,
-        h: b.h,
-        l: b.l,
-        c: b.c,
-        v: b.v
-      }));
-    }
+    // Removed based on user request to stick to MetaAPI exclusively.
+    return [];
   } catch (err) {
     console.warn(`Failed to fetch bars for ${symbol}:`, err);
     return [];

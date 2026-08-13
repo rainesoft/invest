@@ -256,7 +256,8 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
    - DO NOT use the Daily ATR or a wide Daily swing low for your Stop Loss.
    - You MUST scan the LTF timeframe (1H or 30m) provided in the snapshot. Find the nearest SMC Order Block (ltf_bullish_ob_nearest / ltf_bearish_ob_nearest) or FVG.
    - Anchor your Stop Loss directly behind the LTF Order Block. This compresses the risk by 80%, instantly transforming a 1:1 trade into a massive 1:5.0 S-Tier setup.
-   - CRITICAL REQUIREMENT: Calculate your R:R mathematically before returning your parameters. Your Take Profit 2 (TP2) MUST be mathematically placed to provide a minimum 1:2.0 Risk-to-Reward ratio relative to your Stop Loss distance. If market structure prevents this, DO NOT generate a trade.
+   - CRITICAL REQUIREMENT: Calculate your R:R mathematically before returning your parameters. Your TP2 MUST be at least 1.2x your Stop Loss distance. If the nearest structural resistance is closer than 1.2R, you must invalidate the setup.
+   - LIMIT ORDERS FOR BETTER ENTRY: If the R:R at current market price fails the 1.2x requirement, you MUST calculate a deeper LIMIT order entry inside the FVG/OB and set 'suggested_entry_price' to that level to fix the math.
    - EXACT PRICE FORMAT REQUIRED: You will output an 'atr_multiplier_sl' between 1.0 and 3.0 instead of a raw price. The Execution Desk will calculate the exact Stop Loss price dynamically using live volatility.
 
 3. MACRO-BACKED MOMENTUM BREAKOUT STRATEGIES (IGNORING FIBS):
@@ -711,7 +712,7 @@ serve(async (req) => {
         }
 
 
-      await Promise.all(symbols.map(async (symbol) => {
+      for (const symbol of symbols) {
         // --- LOG RESEARCH RUN ---
         await insertAuditLog(supabase, {
           actor_type: "SYSTEM",
@@ -1199,6 +1200,15 @@ serve(async (req) => {
             return;
           }
 
+          let order_type = evaluation.recommended_direction === "LONG" ? "BUY MARKET" : "SELL MARKET";
+          if (Math.abs(entry - currentPrice) / currentPrice > 0.0001) {
+            if (evaluation.recommended_direction === "LONG") {
+              order_type = entry < currentPrice ? "BUY LIMIT" : "BUY STOP";
+            } else {
+              order_type = entry > currentPrice ? "SELL LIMIT" : "SELL STOP";
+            }
+          }
+
           const riskPct = Math.abs(entry - sl) / entry;
           const maxRiskPct = ["XAUUSD", "XAGUSD", "BTCUSD", "UKOIL"].includes(symbol) ? 0.15 : 0.10;
 
@@ -1210,6 +1220,9 @@ serve(async (req) => {
               side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
               timeframe: timeframe.toLowerCase(),
               status: "REJECTED",
+              entry_plan_json: { price: entry, order_type, scaled_entries: null },
+              stop_plan_json: { stop: sl, initial: sl, atr: snapshot.atr_14 },
+              take_profit_json: { tp: tp2, tp1, tp2, tp3 },
               ai_summary: `[SWING][${tier}] ${safeRationale}`,
               ai_risks: msg,
               confidence: adjustedConfidence,
@@ -1222,9 +1235,8 @@ serve(async (req) => {
           const rrToTp2 = Math.abs(tp2 - entry) / Math.abs(entry - sl);
           let requiredRR = 1.5;
           if (["XAGUSD", "UKOIL"].includes(symbol)) {
-            requiredRR = 1.0; // Lower threshold due to high volatility and wider stops
-          }
-          if (tier === "S-Tier" || tier === "A-Tier") {
+            requiredRR = confidence >= 95 ? 0.75 : 1.0; // Lower threshold due to high volatility and wider stops
+          } else if (tier === "S-Tier" || tier === "A-Tier") {
             if (confidence >= 90) requiredRR = 1.0; // Relaxed for extremely high conviction macro trades
             else if (confidence >= 80) requiredRR = 1.2;
           }
@@ -1237,6 +1249,9 @@ serve(async (req) => {
               side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
               timeframe: timeframe.toLowerCase(),
               status: "REJECTED",
+              entry_plan_json: { price: entry, order_type, scaled_entries: null },
+              stop_plan_json: { stop: sl, initial: sl, atr: snapshot.atr_14 },
+              take_profit_json: { tp: tp2, tp1, tp2, tp3 },
               ai_summary: `[SWING][${tier}] ${safeRationale}`,
               ai_risks: `Rejected by Swing Desk: ${msg}`,
               confidence: adjustedConfidence,
@@ -1259,15 +1274,6 @@ serve(async (req) => {
             tp3 ? `TP3 @ $${tp3.toLocaleString()}: ${r.tp3_rationale}` : null,
             `R:R to TP2: 1:${rrToTp2.toFixed(1)} | Fib Swing: $${fib.swing_low.toLocaleString()} → $${fib.swing_high.toLocaleString()}`,
           ].filter(Boolean).join(" | ");
-
-          let order_type = evaluation.recommended_direction === "LONG" ? "BUY MARKET" : "SELL MARKET";
-          if (Math.abs(entry - currentPrice) / currentPrice > 0.0001) {
-            if (evaluation.recommended_direction === "LONG") {
-              order_type = entry < currentPrice ? "BUY LIMIT" : "BUY STOP";
-            } else {
-              order_type = entry > currentPrice ? "SELL LIMIT" : "SELL STOP";
-            }
-          }
 
           const { data: dbData, error: dbError } = await supabase
             .from("trade_opportunities")
@@ -1381,7 +1387,7 @@ serve(async (req) => {
           console.error(`[Global Error] [Trace: ${traceId}] ${symbol}: ${symbolErr.message}`);
           rejections.push({ symbol, reason: symbolErr.message, layer: "System" });
         }
-      }));
+      }
 
       sendEvent({ type: "complete", opportunities: results, rejections });
       return { opportunities: results, rejections };

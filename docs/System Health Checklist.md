@@ -108,6 +108,7 @@ The `created_at` timestamps should fall within the last 4 hours for `agent-swing
 | `agent-swing-poll` | `0 */4 * * *` | Fires every 4 hours, 7 days a week |
 | `agent-trade-poll` | `3-59/5 * * * *` | Fires every 5 min (offset 3m), 7 days a week |
 | `agent-trade-manage-positions` | `*/30 * * * *` | Fires every 30 min, 7 days a week |
+| `exness-history-sync-poll` | `*/15 * * * *` | Fires every 15 min to reconcile closed trades and update portfolio capital |
 | `system-health-check-poll` | `15 * * * *` | Fires hourly to scan `cron.job_run_details` for silent failures |
 | `invoke_reset_daily_drawdown` | `0 22 * * *` | Fires at 22:00 UTC daily |
 | `weekend-defense-cron` | `30 20 * * 5` | Fires Friday 20:30 UTC |
@@ -390,7 +391,8 @@ GROUP BY symbol, timeframe
 ORDER BY last_candle_pushed DESC
 LIMIT 10;
 ```
-- ❌ **FAILED:** If `last_candle_pushed` is older than ~35 minutes, the EA chart is frozen or data stream is broken.
+- ❌ **FAILED:** If `last_candle_pushed` is older than ~35 minutes for **actively traded symbols** (like `XAUUSD`, `BTCUSD`, `US30`, `UKOIL`), the EA chart is frozen or the data stream is broken.
+- *Note: You may see older timestamps for symbols like `EURUSD` or `SPY`. This is completely normal if the agent responsible for trading them (e.g., `agent-scalper`) has been archived or deprecated.*
 
 ### Step 3 — Check Execution Queue Bottleneck
 When `agent-trade` generates a signal, it creates a `VPS_PENDING` trade. The EA should instantly pick this up.
@@ -410,9 +412,12 @@ Verify that approved signals are actually materializing into user trades and cor
 
 - [ ] **PAMM Execution Router (`agent-trade`):** Match the latest `APPROVED` signals in `trade_opportunities` with records in `user_trades`. Ensure `volume` and `risk_amount` are non-zero.
 
+> [!NOTE]
+> **Execution Guardrails Standard:** Any logic within `agent-trade` that returns early to block a trade (such as the Asian Session Kill Zone, Tier Filters, or Drawdown Breakers) **must** actively execute a `supabase.from('trade_opportunities').update({ status: 'REJECTED' })`. Signals should never be left hanging in the `APPROVED` state.
+
 ```sql
 -- Approved signals that have no corresponding user_trade (potential execution gap)
-SELECT t.id, t.symbol, t.side, t.created_at
+SELECT t.id, t.symbol, t.side, t.status, t.created_at
 FROM trade_opportunities t
 LEFT JOIN user_trades u ON u.opportunity_id = t.id
 WHERE t.status = 'APPROVED'
@@ -436,8 +441,9 @@ Any signal with `hours_open > 10` should be reviewed manually. If the limit orde
 - [ ] **Drawdown Breaker & House Money (PHM):** 
   - Check `user_risk_settings`. Ensure no critical master/PAMM accounts have their `high_water_mark_equity` threshold breached by more than their `max_drawdown_pct`.
   - Check `system_settings` for `phm_settings`. Confirm if the master account is currently playing with **House Money**. If active, verify that the escalated risk (e.g. 15%) is correctly overriding standard risk, and that the Drawdown Breaker correctly locks to the PHM Floor to ensure a safe soft-landing if a loss streak occurs.
+- [ ] **10% Account Blowout Protection:** Verify if trades are being rejected due to the 10% hard risk cap. If a user's capital is too small to handle the 0.01 minimum lot size for an asset, `agent-trade` will log `10% Account Blowout Protection hard cap reached`. Ensure users have sufficient capital to safely absorb minimum lot risk.
 - [ ] **Pending Order Garbage Collection:** Verify `agent-trade-manage-positions` is successfully executing every 30 minutes. Check the edge function logs for `agent-trade` to confirm it is scanning MetaAPI and autonomously cancelling stale pending limit orders (older than 24 hours) to prevent ghost executions.
-- [ ] **Database & Broker Reconciliation (Ghost Trades):** Ensure that `agent-trade` is successfully syncing closed broker positions back to the database. Query `user_trades` for `status = 'OPEN'` and cross-reference with MetaAPI. If a trade is closed on the broker but stuck as `OPEN` in the database, the Execution Desk may incorrectly block new signals due to synthetic hedge correlation limits.
+- [ ] **Database & Broker Reconciliation (Ghost Trades & Syncing):** Ensure that `exness-history-sync-poll` is successfully running every 15 minutes. Query `user_trades` for `status = 'OPEN'` and cross-reference with MetaAPI. If a trade is closed on the broker but stuck as `OPEN` in the database, the sync engine is failing, preventing `portfolio_capital` from updating with the realized profit/loss.
 
 ## 4. External Integrations
 Verify that external data pipelines and notification systems are alive.
@@ -463,6 +469,7 @@ Sudden failures across agents or broker executions are almost always tied to har
 - [ ] **MetaAPI Quota & Billing (`agent-trade`, `position-manager`):** 
   - Log into the [MetaAPI Portal](https://app.metaapi.cloud/billing).
   - Check the active subscription tier and ensure you have not exceeded your monthly MT5 execution quota or request concurrency limits.
+  - **Rate Limit Check:** Ensure historical data concurrency does not exceed 5 requests. If you see `429 TooManyRequestsError` in `agent-swing`, verify that the symbol loop is executing sequentially.
   - Ensure the billing method is up to date to prevent sudden API suspension.
 - [ ] **Tavily Search Credits (`agent-news`):** 
   - Log into the [Tavily Developer Dashboard](https://app.tavily.com/home).

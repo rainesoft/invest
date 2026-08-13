@@ -329,7 +329,7 @@ serve(async (req) => {
                        method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
                        body: JSON.stringify({ actionType: "ORDER_CANCEL", orderId })
                      });
-                     await supabase.from("user_trades").update({ status: "CLOSED", ai_risks: "Order cancelled (stale limit order > 24h)" }).eq("meta_api_order_id", orderId);
+                     await supabase.from("user_trades").update({ status: "CLOSED", error_message: "Order cancelled (stale limit order > 24h)" }).eq("meta_api_order_id", orderId);
                      isGCd = true;
                    }
                  }
@@ -386,21 +386,25 @@ serve(async (req) => {
 
                  if (isVpsAlive && !isPendingOrder) {
                      // Route to VPS
-                     await supabase.from("user_trades").update({ status: "VPS_CLOSE", ai_risks: `Closed by Position Manager: ${reason}` }).eq("meta_api_order_id", orderId);
-                     moves.push({ symbol: trade.symbol, action: `AI Trend Reversal Close (VPS Routed)`, from: 0, to: 0 });
+                     if (trade.status !== "VPS_CLOSE") {
+                         await supabase.from("user_trades").update({ status: "VPS_CLOSE", error_message: `Closed by Position Manager: ${reason}` }).eq("meta_api_order_id", orderId);
+                         moves.push({ symbol: trade.symbol, action: `AI Trend Reversal Close (VPS Routed)`, from: 0, to: 0 });
+                     }
                      continue; // Skip trailing stop logic and move to next trade
                  } else {
                      // Fallback to MetaAPI
-                     const closeRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
-                         method: "POST",
-                         headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
-                         body: JSON.stringify(payload)
-                     });
-                     if (closeRes.ok) {
-                         await supabase.from("user_trades").update({ status: "CLOSED", ai_risks: `Closed by Position Manager: ${reason}` }).eq("meta_api_order_id", orderId);
-                         moves.push({ symbol: trade.symbol, action: `AI Trend Reversal Close (${isPendingOrder ? 'Order' : 'Position'})`, from: 0, to: 0 });
-                         continue; // Skip trailing stop logic and move to next trade
+                     if (trade.status !== "CLOSED") {
+                         const closeRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                             method: "POST",
+                             headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                             body: JSON.stringify(payload)
+                         });
+                         if (closeRes.ok) {
+                             await supabase.from("user_trades").update({ status: "CLOSED", error_message: `Closed by Position Manager: ${reason}` }).eq("meta_api_order_id", orderId);
+                             moves.push({ symbol: trade.symbol, action: `AI Trend Reversal Close (${isPendingOrder ? 'Order' : 'Position'})`, from: 0, to: 0 });
+                         }
                      }
+                     continue; // Skip trailing stop logic and move to next trade
                  }
              }
           }
@@ -443,14 +447,14 @@ serve(async (req) => {
               console.log(`[Position Manager] EOD LIQUIDATION: Closing Scalp ${orderId} for ${trade.symbol} at ${nyHour}:00 NY Time.`);
              try {
                 if (isVpsAlive) {
-                   await supabase.from("user_trades").update({ status: "VPS_CLOSE", ai_risks: "EOD Liquidation (4 PM NY Time)" }).eq("meta_api_order_id", orderId);
+                   await supabase.from("user_trades").update({ status: "VPS_CLOSE", error_message: "EOD Liquidation (4 PM NY Time)" }).eq("meta_api_order_id", orderId);
                 } else {
                    await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
                       method: "POST",
                       headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
                       body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: orderId })
                    });
-                   await supabase.from("user_trades").update({ status: "CLOSED", ai_risks: "EOD Liquidation (4 PM NY Time)", exit_price: position.currentPrice, profit_loss: position.profit }).eq("meta_api_order_id", orderId);
+                   await supabase.from("user_trades").update({ status: "CLOSED", error_message: "EOD Liquidation (4 PM NY Time)", close_price: position.currentPrice, profit_usd: position.profit }).eq("meta_api_order_id", orderId);
                 }
              } catch (e) {
                 console.error(`[Position Manager] Failed EOD liquidation for ${orderId}:`, e);
@@ -612,6 +616,8 @@ serve(async (req) => {
 
     if (!isManual && (signalTier === "C-Tier" || signalTier === "B-Tier")) {
       console.log(`[PAMM Router] Skipping PAMM execution for ${signalTier} signal (Minimum A-Tier required).`);
+      const rejectReason = `Rejected: Minimum A-Tier required for Auto-Execution (Found ${signalTier}).`;
+      await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + rejectReason, ai_risks: rejectReason }).eq("id", signal.id);
       return new Response(`Skipped execution for ${signalTier}`, { status: 200 });
     }
 
@@ -621,6 +627,8 @@ serve(async (req) => {
       const currentHourUTC = new Date().getUTCHours();
       if (currentHourUTC >= 22 || currentHourUTC < 6) {
         console.log(`[PAMM Router] Execution blocked: Inside Asian Session Kill Zone (${currentHourUTC}:00 UTC).`);
+        const rejectReason = `Rejected: Inside Asian Session Kill Zone (${currentHourUTC}:00 UTC).`;
+        await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + rejectReason, ai_risks: rejectReason }).eq("id", signal.id);
         return new Response(`Blocked by Kill Zone filter at ${currentHourUTC}:00 UTC`, { status: 200 });
       }
     }
@@ -636,6 +644,8 @@ serve(async (req) => {
     const phmSettings = sysSettings?.value || { active: false, floor_capital: 0, risk_pct: 0.01 };
 
     if (usersError || !users || users.length === 0) {
+      const rejectReason = `Rejected: No funded PAMM users found.`;
+      await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + rejectReason, ai_risks: rejectReason }).eq("id", signal.id);
       return new Response("No funded PAMM users found.", { status: 200 });
     }
 
@@ -846,6 +856,8 @@ serve(async (req) => {
       if (signal.symbol.endsWith("JPY")) pointValueUsd = contractSize / entryPrice;
       else if (signal.symbol === "GER30") pointValueUsd = contractSize * 1.1;
 
+      let blockedByRiskManager = false;
+
       for (const user of users) {
         if (isManual && payload.user_id !== user.user_id) continue;
 
@@ -891,7 +903,7 @@ serve(async (req) => {
         // --- HARD LOT CAP CIRCUIT BREAKER ---
         const MAX_LOT_CAP = 0.50;
         volume = Math.min(MAX_LOT_CAP, volume);
-        volume = Math.max(volumeStep, Math.round(volume / volumeStep) * volumeStep);
+        volume = Math.max(volumeStep, Math.floor(volume / volumeStep) * volumeStep);
         
         const riskAmount = pointsAtRisk * volume * pointValueUsd;
         
@@ -900,6 +912,7 @@ serve(async (req) => {
         const maxPermissibleRisk = Number(user.portfolio_capital) * 0.10;
         if (riskAmount > maxPermissibleRisk) {
             console.log(`[Risk Manager] Blocking User ${user.user_id}: 0.01 min lot creates $${riskAmount.toFixed(2)} risk, violating 10% hard cap.`);
+            blockedByRiskManager = true;
             continue;
         }
 
@@ -918,6 +931,11 @@ serve(async (req) => {
 
     if (totalMasterVolume <= 0) {
       console.log(`[PAMM Router] Skipping execution. Total Volume: ${totalMasterVolume}.`);
+      let rejectReason = `Rejected: No volume allocated (Circuit Breaker / Max Drawdown reached for all users).`;
+      if (blockedByRiskManager) {
+        rejectReason = `Rejected: No volume allocated (10% Account Blowout Protection hard cap reached for users).`;
+      }
+      await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + rejectReason, ai_risks: rejectReason }).eq("id", signal.id);
       return new Response("No volume allocated", { status: 200 });
     }
 
@@ -941,7 +959,7 @@ serve(async (req) => {
         let legAVolume = Math.floor((alloc.volume / 2) / volumeStep) * volumeStep;
         if (legAVolume < volumeStep) legAVolume = alloc.volume; // Default to full volume on single leg if too small
         
-        let legBVolume = Math.round((alloc.volume - legAVolume) / volumeStep) * volumeStep;
+        let legBVolume = Math.floor((alloc.volume - legAVolume) / volumeStep) * volumeStep;
 
         // Leg A (Quick Exit)
         await supabase.from("user_trades").insert({
