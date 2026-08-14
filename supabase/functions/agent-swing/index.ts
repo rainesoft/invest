@@ -438,30 +438,54 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
         data.execution_parameters.suggested_stop_loss &&
         data.execution_parameters.take_profit_2
       ) {
-        const entry = data.execution_parameters.suggested_entry_price;
+        let entry = data.execution_parameters.suggested_entry_price;
         const sl = data.execution_parameters.suggested_stop_loss;
         const tp2 = data.execution_parameters.take_profit_2;
-        const risk = Math.abs(entry - sl);
-        const reward = Math.abs(entry - tp2);
-        const rr = risk > 0 ? reward / risk : 0;
+        let risk = Math.abs(entry - sl);
+        let reward = Math.abs(entry - tp2);
+        let rr = risk > 0 ? reward / risk : 0;
         
         const prob = (args.probability_estimate || 50) / 100;
+
+        // 1. Limit Order Fallback for Sweeps
+        if (data.execution_parameters.entry_type === "Market" && rr < 1.2 && data.confidence_score < 100) {
+          // Calculate 50% mitigation between original entry and stop loss
+          const newEntry = entry + (sl - entry) * 0.5;
+          data.execution_parameters.suggested_entry_price = newEntry;
+          data.execution_parameters.entry_type = data.recommended_direction === "LONG" ? "Buy Limit" : "Sell Limit";
+          data.swing_rationale.fib_entry_level += " [System Fallback: 50% Mitigation Limit applied to improve R:R]";
+          
+          entry = newEntry;
+          risk = Math.abs(entry - sl);
+          reward = Math.abs(entry - tp2);
+          rr = risk > 0 ? reward / risk : 0;
+        }
+
         // Kelly / Expected Value check: EV = (Probability * Reward) - (LossProb * Risk)
         const expectedValueR = (prob * rr) - ((1 - prob) * 1);
 
         let requiredRR = 1.5;
-        if (data.confidence_score >= 90) requiredRR = 1.0;
+        // 3. Expand Expected Value (Kelly Criterion) Tolerance
+        if (data.confidence_score === 100) requiredRR = 0.8;
+        else if (data.confidence_score >= 90) requiredRR = 1.0;
         else if (data.confidence_score >= 80) requiredRR = 1.2;
         else if (data.confidence_score >= 70) requiredRR = 1.5;
 
         if (rr < requiredRR - 0.1 && expectedValueR < 0.5) {
-          // It didn't meet the rules, force reject
-          console.warn(`[Swing Guard] AI approved but R:R of 1:${rr.toFixed(2)} and EV of ${expectedValueR.toFixed(2)} fails requirement. Rejecting.`);
-          return {
-            recommended_direction: "NONE",
-            fibonacci_rationale: `Rejected post-AI: TP2 R:R of 1:${rr.toFixed(2)} and EV ${expectedValueR.toFixed(2)} does not meet requirements`,
-            confidence_score: 0
-          } as any;
+          // 2. Enforce LTF Stop Loss Compression (Drilldown)
+          if (data.confidence_score >= 90) {
+            console.warn(`[Swing Guard] AI approved but R:R of 1:${rr.toFixed(2)} fails requirement. Sending to Sniper for LTF Drilldown.`);
+            data.recommended_direction = "REQUIRE_LTF_DRILLDOWN";
+            data.fibonacci_rationale += ` [System Guard: R:R too low (1:${rr.toFixed(2)}), requesting LTF entry compression]`;
+          } else {
+            // It didn't meet the rules, force reject
+            console.warn(`[Swing Guard] AI approved but R:R of 1:${rr.toFixed(2)} and EV of ${expectedValueR.toFixed(2)} fails requirement. Rejecting.`);
+            return {
+              recommended_direction: "NONE",
+              fibonacci_rationale: `Rejected post-AI: TP2 R:R of 1:${rr.toFixed(2)} and EV ${expectedValueR.toFixed(2)} does not meet requirements`,
+              confidence_score: 0
+            } as any;
+          }
         }
       }
 
