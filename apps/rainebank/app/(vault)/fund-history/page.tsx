@@ -88,15 +88,15 @@ export default function FundHistoryPage() {
         <div style={{ background: '#111', border: '1px solid rgba(255,255,255,0.05)', padding: '32px', borderRadius: '24px' }}>
           <div style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '12px', fontWeight: 600 }}>WIN RATE (CLOSED)</div>
           <div style={{ fontSize: '40px', fontWeight: 800, color: '#4ade80', letterSpacing: '-1px' }}>
-            {trades.filter(t => t.status === 'CLOSED').length > 0 
-              ? Math.round((trades.filter(t => t.status === 'CLOSED' && t.is_win).length / trades.filter(t => t.status === 'CLOSED').length) * 100) 
+            {trades.filter(t => ['CLOSED', 'WON', 'LOST'].includes(t.status)).length > 0 
+              ? Math.round((trades.filter(t => ['CLOSED', 'WON', 'LOST'].includes(t.status) && t.is_win).length / trades.filter(t => ['CLOSED', 'WON', 'LOST'].includes(t.status)).length) * 100) 
               : 0}%
           </div>
         </div>
         <div style={{ background: '#111', border: '1px solid rgba(255,255,255,0.05)', padding: '32px', borderRadius: '24px' }}>
           <div style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '12px', fontWeight: 600 }}>ACTIVE POSITIONS</div>
           <div style={{ fontSize: '40px', fontWeight: 800, color: '#38bdf8', letterSpacing: '-1px' }}>
-            {trades.filter(t => t.status !== 'CLOSED').length}
+            {trades.filter(t => !['CLOSED', 'WON', 'LOST', 'FAILED', 'EXPIRED', 'CANCELLED'].includes(t.status)).length}
           </div>
         </div>
       </div>
@@ -108,6 +108,7 @@ export default function FundHistoryPage() {
             <thead style={{ background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
               <tr>
                 <th style={{ padding: '16px 24px', fontWeight: 600, color: '#9ca3af' }}>Asset</th>
+                <th style={{ padding: '16px 24px', fontWeight: 600, color: '#9ca3af' }}>Ticket</th>
                 <th style={{ padding: '16px 24px', fontWeight: 600, color: '#9ca3af' }}>Direction</th>
                 <th style={{ padding: '16px 24px', fontWeight: 600, color: '#9ca3af' }}>Status</th>
                 <th style={{ padding: '16px 24px', fontWeight: 600, color: '#9ca3af' }}>Entry Price</th>
@@ -127,8 +128,11 @@ export default function FundHistoryPage() {
                 trades.map((trade) => (
                   <tr key={trade.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', transition: 'background 0.2s', cursor: 'default' }} onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'} onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
                     <td style={{ padding: '16px 24px', fontWeight: 600, color: '#fff' }}>{trade.symbol}</td>
+                    <td style={{ padding: '16px 24px', color: '#6b7280', fontFamily: 'monospace', fontSize: '12px' }}>
+                      {trade.meta_api_order_id ? `#${trade.meta_api_order_id}` : '-'}
+                    </td>
                     <td style={{ padding: '16px 24px' }}>
-                      {trade.side === 'BUY' ? (
+                      {['BUY', 'LONG'].includes(trade.side) ? (
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#4ade80', background: 'rgba(74, 222, 128, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 800 }}>
                           <ArrowUpRight size={14} /> BUY
                         </span>
@@ -139,8 +143,14 @@ export default function FundHistoryPage() {
                       )}
                     </td>
                     <td style={{ padding: '16px 24px' }}>
-                      {trade.status === 'CLOSED' ? (
-                        <span style={{ color: '#9ca3af', fontWeight: 600 }}>Closed</span>
+                      {['CLOSED', 'WON', 'LOST'].includes(trade.status) ? (
+                        <span style={{ color: trade.status === 'WON' ? '#4ade80' : trade.status === 'LOST' ? '#f87171' : '#9ca3af', fontWeight: 600 }}>
+                          {trade.status === 'WON' ? 'Won' : trade.status === 'LOST' ? 'Lost' : 'Closed'}
+                        </span>
+                      ) : ['FAILED', 'EXPIRED', 'CANCELLED'].includes(trade.status) ? (
+                        <span style={{ color: '#6b7280', fontWeight: 600 }}>
+                          {trade.status === 'FAILED' ? 'Failed' : trade.status === 'CANCELLED' ? 'Cancelled' : 'Expired'}
+                        </span>
                       ) : (
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#38bdf8', fontWeight: 600 }}>
                           <Activity size={14} /> Active
@@ -148,15 +158,15 @@ export default function FundHistoryPage() {
                       )}
                     </td>
                     <td style={{ padding: '16px 24px', color: '#d1d5db', fontFamily: 'monospace', fontSize: '13px' }}>
-                      {trade.entry_price?.toFixed(5) || 'Pending'}
+                      {trade.entry_price ? trade.entry_price.toFixed(5) : 'Pending'}
                     </td>
                     <td style={{ padding: '16px 24px', color: '#d1d5db', fontFamily: 'monospace', fontSize: '13px' }}>
-                      {trade.close_price?.toFixed(5) || '-'}
+                      {trade.close_price ? trade.close_price.toFixed(5) : (['CLOSED', 'WON', 'LOST'].includes(trade.status) ? 'N/A' : '-')}
                     </td>
                     <td style={{ padding: '16px 24px', textAlign: 'right' }}>
-                      {trade.status === 'CLOSED' ? (
-                        <span style={{ fontWeight: 800, color: trade.is_win ? '#4ade80' : '#f87171' }}>
-                          {trade.points_yield > 0 ? '+' : ''}{trade.points_yield.toFixed(3)}
+                      {['CLOSED', 'WON', 'LOST'].includes(trade.status) ? (
+                        <span style={{ fontWeight: 800, color: trade.is_win ? '#4ade80' : (trade.status === 'CLOSED' && trade.points_yield === 0 ? '#9ca3af' : '#f87171') }}>
+                          {trade.points_yield > 0 ? '+' : ''}{trade.points_yield ? trade.points_yield.toFixed(3) : '0.000'}
                         </span>
                       ) : (
                         <span style={{ color: '#6b7280' }}>-</span>
