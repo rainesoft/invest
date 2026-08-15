@@ -361,14 +361,18 @@ serve(async (req) => {
           if (latestSignal) {
              const isOpposite = latestSignal.side !== trade.side && latestSignal.status !== "C-Tier"; 
              const isCTier = latestSignal.ai_summary?.includes("C-Tier") || latestSignal.ai_summary?.includes("No setup");
+             const isOppositeMacro = isOpposite && (latestSignal.ai_summary?.includes("S-Tier") || latestSignal.ai_summary?.includes("A-Tier"));
              
-             // Swing Protection: Ignore C-Tier if this is a Swing Runner. Only close on Opposite.
+             // Swing Protection: Ignore C-Tier if this is a Swing Runner or Macro Swing.
              let shouldInvalidate = false;
              let reason = "";
-             if (isOpposite) {
+             if (isOpposite && trade.trade_type !== "SWING") {
                  shouldInvalidate = true;
                  reason = "AI Trend Reversal Invalidation (Opposing Setup Detected)";
-             } else if (isCTier && trade.trade_type !== "RUNNER") {
+             } else if (isOppositeMacro && trade.trade_type === "SWING") {
+                 shouldInvalidate = true;
+                 reason = "AI Macro Trend Reversal (Opposing S-Tier/A-Tier Setup Detected)";
+             } else if (isCTier && trade.trade_type !== "RUNNER" && trade.trade_type !== "SWING") {
                  shouldInvalidate = true;
                  reason = "AI Momentum Invalidation (C-Tier / No Setup Detected)";
              }
@@ -623,11 +627,12 @@ serve(async (req) => {
 
     // === EXECUTION GUARD: TIME OF DAY KILL ZONE ===
     // Prevent automated execution during Asian session (22:00 - 06:00 UTC) to avoid low volume chop
-    if (!isManual) {
+    const isSwingTrade = signal.source_agent === "agent-swing" || ["4h", "1d"].includes(signal.timeframe?.toLowerCase());
+    if (!isManual && !isSwingTrade) {
       const currentHourUTC = new Date().getUTCHours();
       if (currentHourUTC >= 22 || currentHourUTC < 6) {
         console.log(`[PAMM Router] Execution blocked: Inside Asian Session Kill Zone (${currentHourUTC}:00 UTC).`);
-        const rejectReason = `Rejected: Inside Asian Session Kill Zone (${currentHourUTC}:00 UTC).`;
+        const rejectReason = `Rejected: Inside Asian Session Kill Zone (${currentHourUTC}:00 UTC). (Only bypassed for Swing Trades)`;
         await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + rejectReason, ai_risks: rejectReason }).eq("id", signal.id);
         return new Response(`Blocked by Kill Zone filter at ${currentHourUTC}:00 UTC`, { status: 200 });
       }
@@ -971,7 +976,7 @@ serve(async (req) => {
           volume: legAVolume,
           risk_amount: alloc.risk_amount / (alloc.volume > 0 ? (alloc.volume / legAVolume) : 2),
           status: "VPS_PENDING",
-          trade_type: "QUICK_EXIT",
+          trade_type: (signal.source_agent === "agent-swing" || ["4h", "1d"].includes(signal.timeframe?.toLowerCase())) ? "SWING" : "QUICK_EXIT",
         });
         
         // Leg B (Runner)
