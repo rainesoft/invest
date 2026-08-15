@@ -126,7 +126,8 @@ export function generateMacroContext(symbol: string, events: FFEvent[] | null, h
     headlines.forEach(h => report += `- ${h}\n`);
     report += `\nCRITICAL DIRECTIVE: 
 1. If these headlines indicate severe geopolitical shocks, unannounced rate hikes, or sudden crashes that OPPOSE the technical trend, you MUST abort the setup. 
-2. SENTIMENT DECAY CURVE: Markets price in news quickly. If a news event or headline appears to be older than 24 hours, its sentiment impact is decaying (50% Relevance). If it is older than 48 hours, it is fully priced in (10% Relevance) and MUST NOT invalidate structural technical setups. Do NOT let stale news overrule a high-probability Fibonacci entry.\n\n`;
+2. SENTIMENT DECAY CURVE: Markets price in news quickly. If a news event or headline appears to be older than 24 hours, its sentiment impact is decaying (50% Relevance). If it is older than 48 hours, it is fully priced in (10% Relevance) and MUST NOT invalidate structural technical setups. Do NOT let stale news overrule a high-probability Fibonacci entry.
+3. LINGERING MACRO NARRATIVES: If there is no breaking news today, but recent macro data (e.g., inflation, rate decisions from the past 3-5 days) set a clear fundamental narrative, you MUST use that lingering narrative to provide fundamental confluence to technical setups, especially during quiet weekends.\n\n`;
   }
 
   if (!events) {
