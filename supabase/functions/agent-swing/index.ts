@@ -962,6 +962,29 @@ serve(async (req) => {
           let macroContext = generateMacroContext(symbol, allEvents, headlines);
           macroContext += `\n\nMACRO SENTIMENT SCORE: ${sentimentScore} / 10`;
 
+          // Check for PUBLISHED from agent-news
+          let pendingNewsSide: string | null = null;
+          let pendingNewsId: string | null = null;
+          try {
+            const { data: pendingSentiment } = await supabase
+              .from("trade_opportunities")
+              .select("id, side, risk_summary")
+              .eq("symbol", symbol)
+              .eq("status", "PUBLISHED")
+              .order("created_at", { ascending: false })
+              .limit(1);
+            
+            if (pendingSentiment && pendingSentiment.length > 0) {
+               const pending = pendingSentiment[0];
+               pendingNewsSide = pending.side;
+               pendingNewsId = pending.id;
+               macroContext += `\n\n[URGENT SENTIMENT OVERRIDE]\nA live Tier-1 macro sentiment event has just fired for this asset, requesting a ${pending.side} position. Details: ${pending.risk_summary}. YOU MUST STRONGLY CONSIDER ALIGNING YOUR TECHNICAL SETUP WITH THIS FUNDAMENTAL DIRECTION.`;
+               sendEvent({ type: "progress", message: `[${symbol}] Detected PUBLISHED signal (${pending.side}) from agent-news. Injecting as urgent confluence.` });
+            }
+          } catch (pendingErr: any) {
+             console.warn(`[${symbol}] Error checking PUBLISHED: ${pendingErr.message}`);
+          }
+
           // === HISTORICAL MEMORY ===
           const { data: pastTrades } = await supabase
             .from("trade_opportunities")
@@ -1085,6 +1108,23 @@ serve(async (req) => {
             adjustedConfidence = Math.min(100, adjustedConfidence + 5);
             confidenceAdjustments.push(`+5 HTF Fib Alignment (Daily ${(snapshot as any).htf_fib_daily_level?.toFixed(2)} ≈ Weekly ${(snapshot as any).htf_fib_weekly_level?.toFixed(2)})`);
             sendEvent({ type: 'progress', message: `[${symbol}] HTF Fib Alignment Bonus: +5 (daily/weekly Fib zones overlap within 0.3%)` });
+          }
+
+          // === PUBLISHED (agent-news) ALIGNMENT BONUS (+20) ===
+          if (pendingNewsSide && evaluation.recommended_direction === pendingNewsSide) {
+             adjustedConfidence = Math.min(100, adjustedConfidence + 20);
+             confidenceAdjustments.push(`+20 agent-news Fundamental Confluence (${pendingNewsSide})`);
+             sendEvent({ type: 'progress', message: `[${symbol}] MASSIVE BOOST: Technicals align perfectly with pending agent-news sentiment (${pendingNewsSide})` });
+             
+             // Mark the pending signal as merged so it doesn't get double-counted
+             if (pendingNewsId) {
+                await supabase.from("trade_opportunities").update({ status: "APPROVED" }).eq("id", pendingNewsId).catch(() => {});
+             }
+          } else if (pendingNewsSide && evaluation.recommended_direction !== "NONE") {
+             // If agent-news fired but technicals point the OTHER way, we should heavily penalize it!
+             adjustedConfidence = Math.max(0, adjustedConfidence - 30);
+             confidenceAdjustments.push(`-30 CONFLICT: Technicals contradict pending agent-news sentiment (${pendingNewsSide})`);
+             sendEvent({ type: 'progress', message: `[${symbol}] PENALTY: Technicals contradict pending agent-news sentiment (${pendingNewsSide})` });
           }
 
           // === FEATURE 5: KELLY CRITERION PROBABILITY CALIBRATION ===

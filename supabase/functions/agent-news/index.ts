@@ -39,6 +39,23 @@ async function pingHFTDirector(symbol: string, bias: string) {
   }
 }
 
+async function pingAgentSwing(symbol: string) {
+  try {
+    const webhookUrl = (SUPABASE_URL || "").replace(/\/$/, "") + "/functions/v1/agent-swing";
+    await fetch(webhookUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+      },
+      body: JSON.stringify({ symbols: [symbol] })
+    });
+    console.log(`[Hive Mind] Woke up agent-swing for real-time analysis of ${symbol}`);
+  } catch (e) {
+    console.error(`[Hive Mind] Failed to wake up agent-swing for ${symbol}:`, e);
+  }
+}
+
 // ── MACRO RULES ──────────────────────────────────────────────────────────────
 // Define exactly which events to trade, and how much deviation from the forecast
 // is required to trigger a trade.
@@ -324,7 +341,6 @@ serve(async (req) => {
               timeframe: "M1",
               ai_summary: `[S-Tier] [MACRO] Fast-Execution: ${event.title}. Actual: ${event.actual}, Forecast: ${event.forecast}. ${summaryText}.`,
               risk_summary: `${eventIdentifier} Automated news trade execution.`,
-              tp1_hit: false,
               created_at: new Date().toISOString(),
               trace_id: traceId
             };
@@ -395,19 +411,55 @@ serve(async (req) => {
 
 
 
+    let debugInfo: any = {};
     // === SENTIMENT SCOUT ===
     if (OPENAI_API_KEY) {
       try {
-        const rssRes = await fetch("https://cointelegraph.com/rss");
-        const xml = await rssRes.text();
-        const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
+        let headlinesToProcess: string[] = [];
+
+        // Fetch proactive crypto sentiment from Tavily instead of just relying on RSS
+        if (TAVILY_API_KEY) {
+           console.log(`[Macro Scout] [Trace: ${traceId}] Proactively querying Tavily for BTCUSD sentiment...`);
+           const tavilyRes = await fetch("https://api.tavily.com/search", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                api_key: TAVILY_API_KEY,
+                query: "BTCUSD crypto market breaking news sentiment",
+                search_depth: "basic",
+                days: 1
+              })
+           });
+           debugInfo.tavily_status = tavilyRes.status;
+           if (tavilyRes.ok) {
+              const tavilyData = await tavilyRes.json();
+              debugInfo.tavily_results = tavilyData.results?.length || 0;
+              if (tavilyData.results && tavilyData.results.length > 0) {
+                 for (let i = 0; i < Math.min(3, tavilyData.results.length); i++) {
+                    headlinesToProcess.push(tavilyData.results[i].title);
+                 }
+              }
+           } else {
+              debugInfo.tavily_error = await tavilyRes.text();
+           }
+        }
+
+        // Fallback to RSS if Tavily fails or is disabled
+        if (headlinesToProcess.length === 0) {
+           const rssRes = await fetch("https://cointelegraph.com/rss");
+           const xml = await rssRes.text();
+           const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
+           debugInfo.rss_items = items.length;
+           for (let i = 0; i < Math.min(3, items.length); i++) {
+             const titleMatch = items[i].match(/<title>(.*?)<\/title>/);
+             if (titleMatch) {
+                headlinesToProcess.push(titleMatch[1].replace("<![CDATA[", "").replace("]]>", "").trim());
+             }
+           }
+        }
         
-        for (let i = 0; i < Math.min(3, items.length); i++) {
-          const item = items[i];
-          const titleMatch = item.match(/<title>(.*?)<\/title>/);
-          if (!titleMatch) continue;
-          
-          let title = titleMatch[1].replace("<![CDATA[", "").replace("]]>", "").trim();
+        debugInfo.headlines = headlinesToProcess;
+        for (const title of headlinesToProcess) {
           const headlineIdentifier = `[SENTIMENT] ${title}`;
           
           // Check if already processed
@@ -440,26 +492,35 @@ Headline: "${title}"`;
           });
 
           const aiData = await aiRes.json();
+          debugInfo.ai_errors = debugInfo.ai_errors || [];
           if (!aiData.choices || !aiData.choices[0]) {
              console.error(`[Macro Scout] [Trace: ${traceId}] Invalid OpenAI response:`, aiData);
+             debugInfo.ai_errors.push(aiData);
              continue;
           }
 
-          const resultText = aiData.choices[0].message.content.trim();
+          let resultText = aiData.choices[0].message.content.trim();
+          if (resultText.startsWith("```json")) {
+             resultText = resultText.replace(/^```json\n?/, "").replace(/\n?```$/, "").trim();
+          }
           const parsed = JSON.parse(resultText);
           
           // Mark as processed regardless of execution so we don't spam API
-          await supabase.from("trade_opportunities").insert({
+          const { error: insertErr } = await supabase.from("trade_opportunities").insert({
             symbol: parsed.symbol !== "NONE" ? parsed.symbol : "BTCUSD",
-            side: "BUY", // Dummy
+            side: "LONG", // Dummy
             status: "REJECTED", // default
             timeframe: "M1",
             ai_summary: headlineIdentifier,
             risk_summary: `Sentiment evaluation: ${parsed.sentiment} (${parsed.confidence}%)`,
-            tp1_hit: false,
             created_at: new Date().toISOString(),
             trace_id: traceId
-          }).select("id").single().then(async ({ data: opp }) => {
+          });
+          if (insertErr) {
+             console.error(`[Macro Scout] Insert Error:`, insertErr);
+             debugInfo.insert_error = insertErr;
+          }
+          await supabase.from("trade_opportunities").select("id").eq("ai_summary", headlineIdentifier).single().then(async ({ data: opp }) => {
             if (!opp) return;
 
             let finalParsed = parsed;
@@ -493,7 +554,11 @@ Format: { "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL", "confidence": 0-100, "
                  });
                  const verifyData = await verifyRes.json();
                  if (verifyData.choices && verifyData.choices[0]) {
-                    finalParsed = JSON.parse(verifyData.choices[0].message.content.trim());
+                    let vt = verifyData.choices[0].message.content.trim();
+                    if (vt.startsWith("```json")) {
+                       vt = vt.replace(/^```json\n?/, "").replace(/\n?```$/, "").trim();
+                    }
+                    finalParsed = JSON.parse(vt);
                     verifiedContext = `Tavily Verified: ${finalParsed.sentiment} (${finalParsed.confidence}%)`;
                     console.log(`[Macro Scout] [Trace: ${traceId}] Tavily Verification Complete:`, finalParsed);
                  }
@@ -503,59 +568,37 @@ Format: { "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL", "confidence": 0-100, "
             // Execute if threshold met
             if (finalParsed.confidence >= 85 && (finalParsed.sentiment === "BULLISH" || finalParsed.sentiment === "BEARISH") && finalParsed.symbol === "BTCUSD") {
               
-              const side = finalParsed.sentiment === "BULLISH" ? "BUY" : "SELL";
-              const priceData = await mtGet(`/symbols/${finalParsed.symbol}/current-price`);
-              const entryPx = side === "BUY" ? priceData.ask : priceData.bid;
-              const slPx = side === "BUY" ? entryPx - 500 : entryPx + 500; // rough 500 point SL for BTC
-              const volume = calcLots(finalParsed.symbol, entryPx, slPx);
-
-              // Update opportunity to ACTIVE
+              const side = finalParsed.sentiment === "BULLISH" ? "LONG" : "SHORT";
+              
+              // Update opportunity to PUBLISHED to allow agent-swing to evaluate it
               await supabase.from("trade_opportunities").update({
                 side,
-                status: "ACTIVE",
-                risk_summary: `Sentiment execution: ${finalParsed.sentiment} (${finalParsed.confidence}%). Context: ${verifiedContext}`
+                status: "PUBLISHED",
+                risk_summary: `Sentiment evaluation: ${finalParsed.sentiment} (${finalParsed.confidence}%). Context: ${verifiedContext}`
               }).eq("id", opp.id);
 
-              if (!DRY_RUN) {
-                const body = {
-                  symbol: finalParsed.symbol,
-                  actionType: side === "BUY" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
-                  volume: volume,
-                  stopLoss: slPx,
-                  stopLossUnits: "ABSOLUTE_PRICE",
-                  clientId: `mac_${opp.id.substring(0, 8)}`,
-                };
-                await mtPost("/trade", body);
-                
-                await supabase.from("user_trades").insert({
-                   user_id: "00000000-0000-0000-0000-000000000000",
-                   opportunity_id: opp.id,
-                   status: "OPEN",
-                   execution_price: entryPx,
-                   size: volume
-                });
+              // Wake up agent-swing immediately for Event-Driven Technical Confluence
+              await pingAgentSwing(finalParsed.symbol);
 
-                await notify(
-                  `📰 <b>SENTIMENT EVENT TRIGGERED</b>\n` +
-                  `<b>${title}</b>\n` +
-                  `Sentiment: ${finalParsed.sentiment} (${finalParsed.confidence}%)\n` +
-                  `Context: ${verifiedContext}\n\n` +
-                  `Executed: <b>${side} ${finalParsed.symbol}</b>\n` +
-                  `Volume: ${volume} lots`
-                );
-              } else {
-                console.log(`[Macro Scout] [Trace: ${traceId}] DRY RUN SENTIMENT: Would execute`, side, finalParsed.symbol);
-              }
+              console.log(`[Macro Scout] [Trace: ${traceId}] Signal queued for technical confluence:`, side, finalParsed.symbol);
+              await notify(
+                `📰 <b>SENTIMENT SIGNAL DETECTED</b>\n` +
+                `<b>${title}</b>\n` +
+                `Sentiment: ${finalParsed.sentiment} (${finalParsed.confidence}%)\n` +
+                `Context: ${verifiedContext}\n\n` +
+                `Signal queued for <b>${side} ${finalParsed.symbol}</b> pending technical confluence.`
+              );
               results.push({ rule: "SENTIMENT", action: side, symbol: finalParsed.symbol });
             }
           });
         }
       } catch (err: any) {
         console.error(`[Macro Scout] [Trace: ${traceId}] Sentiment Error:`, err.message);
+        debugInfo.error = err.message;
       }
     }
 
-    return new Response(JSON.stringify({ ok: true, processed: results }), {
+    return new Response(JSON.stringify({ ok: true, processed: results, debug: debugInfo }), {
       headers: { "Content-Type": "application/json" },
     });
 
