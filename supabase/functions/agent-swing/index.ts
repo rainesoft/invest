@@ -211,8 +211,12 @@ async function evaluateSwingOpportunity(
     .map((l) => `  ${l.label} → $${l.price.toLocaleString()}`)
     .join("\n");
 
-  const userContent = `Analyze ${symbol} on the ${timeframe} timeframe. Identify the highest-probability swing trade setup if one exists. Calculate your R:R for all three TP levels in your thought_process before filling in the execution_parameters. Return the required execution profile using the provided tools.
+  const isWeekend = new Date().getDay() === 0 || new Date().getDay() === 6;
+  const isCrypto = ["BTCUSD"].includes(symbol);
+  const weekendCryptoDirective = (isWeekend && isCrypto) ? `\nCRITICAL WEEKEND CRYPTO DIRECTIVE: It is currently the weekend. Crypto volume is naturally lower. Do NOT reject setups due to 'low volume' or 'choppy ADX' compared to weekday forex baselines. Utilize a lower-volatility baseline for your momentum and breakout criteria.` : "";
 
+  const userContent = `Analyze ${symbol} on the ${timeframe} timeframe. Identify the highest-probability swing trade setup if one exists. Calculate your R:R for all three TP levels in your thought_process before filling in the execution_parameters. Return the required execution profile using the provided tools.
+${weekendCryptoDirective}
 [HISTORICAL PERFORMANCE FOR ${symbol}]
 ${historicalMemory || "No historical data available for this asset yet."}
 
@@ -276,8 +280,8 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
 
 5. KELLY CRITERION OVERRIDE VS RIGID R:R:
    - Provide your honest 'probability_estimate' (1-99) of the trade hitting TP2.
-   - Standard requirement is 1:2.0 R:R for S-Tier.
-   - HOWEVER, if the trade has an exceptionally high Win Probability (e.g., 90%), the system will apply a Kelly Criterion heuristic. An R:R of 1:1.5 with 90% probability will be automatically approved as S-Tier because the Expected Value is massive.
+   - Standard requirement is 1:1.5 R:R for S-Tier.
+   - HOWEVER, if the trade has an exceptionally high Win Probability (e.g., 90%), the system applies a Kelly Criterion heuristic. For highly liquid assets (EURUSD, USDJPY, BTCUSD), an R:R as low as 1:0.5 is permitted for >90% probability setups, as the Expected Value remains massively positive.
 
 6. DIRECTIONAL BIAS FILTERING (CONTRARIAN VALUE OVERRIDE):
    - If the Macro Sentiment actively contradicts your technical setup, generally DOWNGRADE the setup to B-Tier or REJECT.
@@ -293,7 +297,7 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
    - BEFORE invoking this guard, you MUST calculate the percentage distance between the Current Price and the nearest Fibonacci or Structural level. (Formula: abs(Current Price - Nearest Level) / Nearest Level * 100)
    - [CURRENT THRESHOLD = ${inflectionThresholdPct}%] ${fomcModeActive ? '[POST-EVENT VOLATILITY MODE ACTIVE: A central bank event fired recently. Threshold expanded to ' + inflectionThresholdPct + '% to account for wider ATR. Do NOT reject setups that are merely within the standard 0.5% zone — the market needs room to breathe.]' : 'Standard 0.5% threshold applies.'}
    - If the Percentage Distance is > ${inflectionThresholdPct}%, the price is NOT resting on a level. You CANNOT use INFLECTION_POINT_WAIT.
-   - If price is resting squarely on a boundary (<= ${inflectionThresholdPct}%) AND momentum indicators (RSI flat, ADX low) do not provide overwhelming confirmation, you MUST explicitly reject the trade.
+   - If price is resting squarely on a boundary (<= ${inflectionThresholdPct}%) AND momentum indicators (RSI flat, ADX low) do not provide overwhelming confirmation, do NOT instantly reject it as 'chop'. Instead, look for a Momentum Breakout setup using Buy-Stop or Sell-Stop orders just outside the Fib zone to catch the inevitable volatility expansion.
    - Invoke the reject_trade tool with the exact reason: 'INFLECTION_POINT_WAIT' to sideline capital until a definitive bounce or breakdown is confirmed via a candle close.
 
 9. DYNAMIC ADX OSCILLATOR THRESHOLDS (EXHAUSTION VS CONTINUATION):
@@ -1261,8 +1265,11 @@ serve(async (req) => {
           if (["XAGUSD", "UKOIL"].includes(symbol)) {
             requiredRR = confidence >= 95 ? 0.75 : 1.0; // Lower threshold due to high volatility and wider stops
           } else if (tier === "S-Tier" || tier === "A-Tier") {
-            if (confidence >= 90) requiredRR = 1.0; // Relaxed for extremely high conviction macro trades
-            else if (confidence >= 80) requiredRR = 1.2;
+            if (confidence >= 90) {
+              const isHighlyLiquid = ["EURUSD", "USDJPY", "BTCUSD"].includes(symbol);
+              requiredRR = isHighlyLiquid ? 0.5 : 0.8; // Relaxed for extremely high conviction setups on liquid pairs
+            }
+            else if (confidence >= 80) requiredRR = 1.0;
           }
 
           if (rrToTp2 < requiredRR - 0.1) {
