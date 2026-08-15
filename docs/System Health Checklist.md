@@ -302,6 +302,15 @@ ORDER BY created_at DESC
 LIMIT 10;
 ```
 
+- [ ] **Event-Driven Signal Chain (Orphaned PUBLISHED):** Since `agent-news` instantly webhooks `agent-swing`, signals should transition from `PUBLISHED` to `APPROVED` or `REJECTED` within seconds. Check for signals stuck in `PUBLISHED` for more than 5 minutes. If found, the `pingAgentSwing` webhook from `agent-news` may be failing, or `agent-swing` crashed during execution.
+
+```sql
+SELECT id, symbol, side, status, created_at
+FROM trade_opportunities
+WHERE status = 'PUBLISHED'
+  AND created_at < NOW() - INTERVAL '5 minutes';
+```
+
 - [ ] **Pre-AI Guard Approvals:** Review `audit_log` for action `REJECTED_BY_RISK_PRE_AI`. While rejections are normal, an overwhelming 100% rejection rate may indicate a bugged technical indicator or misconfigured spread limit.
 
 ```sql
@@ -414,6 +423,8 @@ Verify that approved signals are actually materializing into user trades and cor
 
 > [!NOTE]
 > **Execution Guardrails Standard:** Any logic within `agent-trade` that returns early to block a trade (such as the Asian Session Kill Zone, Tier Filters, or Drawdown Breakers) **must** actively execute a `supabase.from('trade_opportunities').update({ status: 'REJECTED' })`. Signals should never be left hanging in the `APPROVED` state.
+
+- [ ] **Database Trigger Chain (Orphaned APPROVED):** The `on_signal_execute` PostgreSQL trigger instantly webhooks `agent-trade` the millisecond a signal is marked `APPROVED`. If signals are stuck in `APPROVED` for more than 5 minutes without a corresponding `user_trade`, the database trigger has failed, or the `agent-trade` Edge Function crashed.
 
 ```sql
 -- Approved signals that have no corresponding user_trade (potential execution gap)

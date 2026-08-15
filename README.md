@@ -33,16 +33,9 @@ its performance to scale a retail and institutional subscriber base.
 
 ### 3. Intelligence & Signal Generation (The Agent Council)
 
-- **Agent Swing (`agent-swing`):** The core macro analyst. Wakes up every 4
-  hours to compute Fibonacci retracements on the 1D chart and hunts for
-  high-conviction liquidity sweeps.
-- **Agent News (`agent-news`):** Event-driven fundamental analyst. Wakes up
-  hourly to ingest macroeconomic data and breaking news via Tavily, outputting
-  macro bias variables that influence the Swing agent.
-- **AI Execution Desk (CRO):** Utilizes OpenAI to evaluate market structure
-  against systemic rules, enforcing strict 1:2.5 Risk/Reward ratios and
-  isolating correlated asset risk. Trades exceeding maximum risk parameters are
-  strictly vetoed.
+- **Agent News (`agent-news`):** The Macro Scout. Wakes up hourly to ingest macroeconomic data and breaking news via Tavily. If it detects a major catalyst, it queues a `PUBLISHED` signal and instantly webhooks `agent-swing` for zero-latency evaluation.
+- **Agent Swing (`agent-swing`):** The core technical analyst. Runs on a 4-hour cron *and* instantly via event-driven webhooks from `agent-news`. It computes Fibonacci retracements and liquidity sweeps. If technical structure aligns perfectly with pending news sentiment, it flags the trade as `APPROVED`.
+- **AI Execution Desk (`agent-trade`):** The Chief Risk Officer. Triggered instantly by a PostgreSQL database trigger the exact millisecond a trade is `APPROVED`. It calculates risk, enforces strict 1:2.5 Risk/Reward ratios, checks portfolio sizing, and dispatches the live trade to the broker.
 
 ### 4. Execution Layer (PAMM Routing & Trade Resolution)
 
