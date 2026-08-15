@@ -88,3 +88,14 @@ Once the tools above are installed, you can set up the project:
    *(Alternatively, use `pnpm deploy:prod` to push both DB changes and edge functions).*
 
 You are now ready to develop on the Raine Bank system!
+
+## 7. Running Agents Manually
+
+During development, you may need to manually trigger the background trading agents. You can do this using the provided Node.js script.
+
+Ensure you have your `.env` file correctly configured at the root of the project with your `SUPABASE_SERVICE_ROLE_KEY`.
+
+Run the following command from the root directory to sequentially trigger the agents (e.g., `agent-news`, `agent-swing`):
+```bash
+node scripts/call_agents.mjs
+```
