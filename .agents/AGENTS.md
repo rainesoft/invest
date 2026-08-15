@@ -148,3 +148,10 @@ or silent failure:
   (queueing trades as `VPS_PENDING`) for opening trades in order to reduce
   MetaAPI costs. Do NOT attempt to migrate order entries to the MetaAPI pipeline
   unless explicitly commanded by the user.
+
+## Rule: Strict External ID Matching
+
+When syncing, modifying, or investigating records between an external system (e.g., MetaApi, Stripe) and the internal database, you MUST strictly use unique, absolute identifiers (e.g., `meta_api_order_id`, `ticket_id`, `transaction_id`) to match records. 
+
+- **Never Assume:** Do NOT guess or heuristically map records based on superficial attributes like asset symbols, timestamps, or side (LONG/SHORT), as this conflates manual user actions with automated system executions.
+- **Verify First:** If a unique ID is missing or `null` in the local database, you must assume the local record is unmapped, pending, or failed, rather than blindly associating it with an active external record.
