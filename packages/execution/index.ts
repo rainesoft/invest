@@ -316,11 +316,10 @@ export async function fetchPaperBars(
         const latestTs = new Date(cachedBars[0].ts).getTime();
         const now = new Date().getTime();
         
-        let maxAgeMs = 12 * 60 * 60 * 1000; // default 12h
         const tfLower = timeframe.toLowerCase();
-        if (tfLower.includes('m')) maxAgeMs = 2 * 60 * 60 * 1000;
-        if (tfLower.includes('h')) maxAgeMs = 6 * 60 * 60 * 1000;
-        if (tfLower.includes('d')) maxAgeMs = 72 * 60 * 60 * 1000; // 72h to cover weekends
+        // Globally relax max-age to 168h (7 days) to ensure weekend survival for Crypto 
+        // and holiday survival for Forex.
+        let maxAgeMs = 168 * 60 * 60 * 1000;
 
         if (now - latestTs < maxAgeMs) {
           // Reverse because we want oldest first for the indicator logic
