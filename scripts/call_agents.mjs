@@ -16,7 +16,7 @@ function parseEnv(filePath) {
   return env;
 }
 
-const prodEnv = parseEnv('../.env');
+const prodEnv = parseEnv('.env');
 const serviceKey = prodEnv['SUPABASE_SERVICE_ROLE_KEY'];
 
 if (!serviceKey || serviceKey === '[SENSITIVE]' || serviceKey === '') {
