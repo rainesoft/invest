@@ -10,27 +10,32 @@ export const dynamic = 'force-dynamic';
 function parseAnalysisText(text: string | null) {
   if (!text) return { tier: null, structure: null, strategy: null, content: '' };
 
-  // Try to match the exact pattern: [Tier] [Structure -> Strategy]
-  const match = text.match(/^\[(.*?-Tier)\] \[(.*?) -> (.*?)\]/);
+  let content = text;
+  
+  // Clean up any agent prefix like [SWING] or [SCALP]
+  content = content.replace(/^\[.*?\]\s*/, '');
 
-  if (!match) {
-    // If exact pattern fails, maybe there's just a Tier at the start
-    const fallbackMatch = text.match(/^\[(.*?-Tier)\]/);
-    if (!fallbackMatch) return { tier: null, structure: null, strategy: null, content: text };
-    return {
-      tier: fallbackMatch[1],
-      structure: null,
-      strategy: null,
-      content: text.replace(/^\[(.*?-Tier)\]\s*-?\s*/, '').trim()
-    };
+  let tier = null;
+  const tierMatch = content.match(/^\[(.*?-Tier)\]/);
+  if (tierMatch) {
+    tier = tierMatch[1];
+    content = content.replace(/^\[(.*?-Tier)\]\s*/, '');
   }
 
-  return {
-    tier: match[1],
-    structure: match[2],
-    strategy: match[3],
-    content: text.replace(/^\[(.*?-Tier)\] \[(.*?) -> (.*?)\]\s*-?\s*/, '').trim()
-  };
+  let structure = null;
+  let strategy = null;
+  const structMatch = content.match(/^\[(.*?) (?:->|→) (.*?)\]/);
+  if (structMatch) {
+    structure = structMatch[1];
+    strategy = structMatch[2];
+    content = content.replace(/^\[(.*?) (?:->|→) (.*?)\]\s*/, '');
+  }
+
+  // Remove pipes | and any leading/trailing dashes or colons
+  content = content.replace(/\|/g, '').replace(/^[-:\s]+/, '').trim();
+  content = content.replace(/\s{2,}/g, ' ');
+
+  return { tier, structure, strategy, content };
 }
 
 function TrendBadge({ tier, structure, strategy }: { tier: string | null, structure: string | null, strategy: string | null }) {
@@ -83,14 +88,29 @@ export default async function LandingPage() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // Fetch the latest high-conviction (S, A, or B Tier) trade opportunity for the live showcase
-  let { data: latestSignals } = await supabaseAdmin
+  // 1. Try to fetch a WON S or A tier signal first
+  let { data: wonSignals } = await supabaseAdmin
     .from('trade_opportunities')
     .select('*')
-    .in('status', ['PENDING_APPROVAL', 'APPROVED', 'WON', 'LOST'])
-    .or('ai_summary.ilike.%[S-Tier]%,ai_summary.ilike.%[A-Tier]%,ai_summary.ilike.%[B-Tier]%')
+    .eq('status', 'WON')
+    .or('ai_summary.ilike.%[S-Tier]%,ai_summary.ilike.%[A-Tier]%')
     .order('created_at', { ascending: false })
     .limit(1);
+
+  let latestSignals = wonSignals;
+
+  // 2. If no WON signals exist, fallback to any non-LOST S or A tier signal
+  if (!latestSignals || latestSignals.length === 0) {
+    const { data: fallbackSignals } = await supabaseAdmin
+      .from('trade_opportunities')
+      .select('*')
+      .not('status', 'eq', 'LOST')
+      .or('ai_summary.ilike.%[S-Tier]%,ai_summary.ilike.%[A-Tier]%')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    
+    latestSignals = fallbackSignals;
+  }
 
   const signal = latestSignals?.[0] || {
     symbol: 'MARKETS IDLE',
@@ -100,8 +120,12 @@ export default async function LandingPage() {
     ai_summary: '[A-Tier] [Macro Alignment -> Searching]\nThe Risk AI Agent is continuously analyzing cross-asset volatility and institutional order flow. We are currently holding cash and waiting for a strictly defined, high-probability structural break before deploying capital. No active trades meet our minimum Risk:Reward thresholds at this precise moment.'
   };
 
-  const statusColor = signal.status === 'APPROVED' ? '#4ade80' :
-    signal.status === 'REJECTED' ? '#ef4444' : '#38bdf8';
+  const displayStatus = signal.status === 'REJECTED' ? 'ANALYSIS COMPLETE' :
+                        signal.status === 'PENDING_APPROVAL' ? 'EVALUATING' : 
+                        signal.status;
+
+  const statusColor = displayStatus === 'APPROVED' || displayStatus === 'WON' ? '#4ade80' :
+    displayStatus === 'ANALYSIS COMPLETE' ? '#c084fc' : '#38bdf8';
 
   return (
     <div className="min-h-screen flex flex-col bg-[#050505] text-gray-200 font-sans relative overflow-hidden">
@@ -155,7 +179,7 @@ export default async function LandingPage() {
               <div className="flex justify-between items-center mb-6">
                 <div className="text-sm text-gray-400 font-semibold">LIVE AI SIGNAL</div>
                 <div className="px-3 py-1 rounded-full text-xs font-bold" style={{ background: `${statusColor}15`, color: statusColor }}>
-                  {signal.status || 'ACTIVE'}
+                  {displayStatus || 'ACTIVE'}
                 </div>
               </div>
               <div className="text-5xl font-extrabold text-white mb-2 tracking-tight">

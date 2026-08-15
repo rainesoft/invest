@@ -99,3 +99,33 @@ Run the following command from the root directory to sequentially trigger the ag
 ```bash
 node scripts/call_agents.mjs
 ```
+
+## 8. Running the Web App Locally
+
+The frontend web application is a Next.js app located in `apps/rainebank`.
+
+### 1. Configure Frontend Environment Variables
+Before running the app, you need to create an `.env.local` file inside the `apps/rainebank` directory. The app requires access to Supabase and Paystack keys.
+
+Copy your keys from the root `.env` or your Supabase dashboard into `apps/rainebank/.env.local`:
+```env
+NEXT_PUBLIC_SUPABASE_URL="https://<your-project-id>.supabase.co"
+NEXT_PUBLIC_SUPABASE_ANON_KEY="your-anon-key"
+SUPABASE_SERVICE_ROLE_KEY="your-service-role-key"
+
+PAYSTACK_SECRET_KEY="sk_live_..."
+NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY="pk_live_..."
+NEXT_PUBLIC_PAYSTACK_ALPHA_PLAN_CODE="PLN_..."
+```
+
+*(Note: The `SUPABASE_SERVICE_ROLE_KEY` is specifically required by the `LandingPage` server component to fetch the live showcase signal while bypassing Row Level Security).*
+
+### 2. Start the Development Server
+Since the repository is a `pnpm` workspace, ensure Node.js is active via NVM and run the `dev` script from the root directory:
+
+```bash
+source ~/.nvm/nvm.sh
+pnpm run dev
+```
+
+This will launch the Next.js development server on `http://localhost:3000`.
