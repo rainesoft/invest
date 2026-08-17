@@ -82,7 +82,8 @@ void OnDeinit(const int reason)
    Print("RaineBank VPS Bridge stopped.");
   }
 
-datetime lastBarTime = 0;
+string TrackedSymbols[] = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "EURJPY", "GBPJPY", "XAUUSD", "XAGUSD", "BTCUSD", "UKOIL"};
+datetime lastBarTimes[11];
 datetime lastHFTTime = 0;
 bool hftOpen = false;
 int rsiHandle = INVALID_HANDLE;
@@ -557,75 +558,81 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
 //+------------------------------------------------------------------+
 void PushMarketData()
   {
-   datetime currentBarTime = iTime(Symbol(), PERIOD_M30, 0);
-   if(currentBarTime != lastBarTime && lastBarTime != 0)
+   for (int s = 0; s < ArraySize(TrackedSymbols); s++)
      {
-      Print("New M30 candle opened. Pushing data to VPS-Feed...");
-      MqlRates rates[];
-      ArraySetAsSeries(rates, true);
-      // Fetch the last 300 closed candles to ensure we have enough data to calculate the 200 EMA
-      // Actually, we want the closed candles. CopyRates(..., 0, 300, rates) includes the current open candle at index 0.
-      if(CopyRates(Symbol(), PERIOD_M30, 0, 300, rates) > 0)
+      string sym = TrackedSymbols[s];
+      SymbolSelect(sym, true); // Ensure symbol is available in Market Watch
+      
+      datetime currentBarTime = iTime(sym, PERIOD_M30, 0);
+      if(currentBarTime != lastBarTimes[s] && lastBarTimes[s] != 0)
         {
-         string json = "{\"user_id\":\"" + InpUserID + "\",\"symbol\":\"" + Symbol() + "\",\"timeframe\":\"30m\",\"bars\":[";
-         for(int i=0; i<ArraySize(rates); i++)
+         Print("New M30 candle opened for ", sym, ". Pushing data to VPS-Feed...");
+         MqlRates rates[];
+         ArraySetAsSeries(rates, true);
+         // Fetch the last 300 closed candles to ensure we have enough data to calculate the 200 EMA
+         // Actually, we want the closed candles. CopyRates(..., 0, 300, rates) includes the current open candle at index 0.
+         if(CopyRates(sym, PERIOD_M30, 0, 300, rates) > 0)
            {
-            json += "{\"t\":" + IntegerToString(rates[i].time) + 
-                    ",\"o\":" + DoubleToString(rates[i].open, 5) + 
-                    ",\"h\":" + DoubleToString(rates[i].high, 5) + 
-                    ",\"l\":" + DoubleToString(rates[i].low, 5) + 
-                    ",\"c\":" + DoubleToString(rates[i].close, 5) + 
-                    ",\"v\":" + IntegerToString(rates[i].tick_volume) + "}";
-            if(i < ArraySize(rates)-1) json += ",";
-           }
-         json += "]}";
-         
-         string url = InpSupabaseURL + "/functions/v1/vps-market-feed";
-         char post[], result[];
-         StringToCharArray(json, post);
-         
-         ArrayResize(post, ArraySize(post)-1); // Remove null terminator
-         
-         string req_headers = "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n" + 
-                              "Content-Type: application/json\r\n" + 
-                              "x-vps-secret: " + InpVPSSecret;
-         string res_headers;
-         int res = WebRequest("POST", url, req_headers, 5000, post, result, res_headers);
-         if(res == 200) Print("Data successfully pushed to Supabase.");
-         else Print("Failed to push data: HTTP ", res, " Body: ", CharArrayToString(result));
-         
-         // Push D1 Data
-         MqlRates ratesD1[];
-         ArraySetAsSeries(ratesD1, true);
-         if(CopyRates(Symbol(), PERIOD_D1, 0, 100, ratesD1) > 0)
-           {
-            string jsonD1 = "{\"user_id\":\"" + InpUserID + "\",\"symbol\":\"" + Symbol() + "\",\"timeframe\":\"1d\",\"bars\":[";
-            for(int i=0; i<ArraySize(ratesD1); i++)
+            string json = "{\"user_id\":\"" + InpUserID + "\",\"symbol\":\"" + sym + "\",\"timeframe\":\"30m\",\"bars\":[";
+            for(int i=0; i<ArraySize(rates); i++)
               {
-               jsonD1 += "{\"t\":" + IntegerToString(ratesD1[i].time) + 
-                       ",\"o\":" + DoubleToString(ratesD1[i].open, 5) + 
-                       ",\"h\":" + DoubleToString(ratesD1[i].high, 5) + 
-                       ",\"l\":" + DoubleToString(ratesD1[i].low, 5) + 
-                       ",\"c\":" + DoubleToString(ratesD1[i].close, 5) + 
-                       ",\"v\":" + IntegerToString(ratesD1[i].tick_volume) + "}";
-               if(i < ArraySize(ratesD1)-1) jsonD1 += ",";
+               json += "{\"t\":" + IntegerToString(rates[i].time) + 
+                       ",\"o\":" + DoubleToString(rates[i].open, 5) + 
+                       ",\"h\":" + DoubleToString(rates[i].high, 5) + 
+                       ",\"l\":" + DoubleToString(rates[i].low, 5) + 
+                       ",\"c\":" + DoubleToString(rates[i].close, 5) + 
+                       ",\"v\":" + IntegerToString(rates[i].tick_volume) + "}";
+               if(i < ArraySize(rates)-1) json += ",";
               }
-            jsonD1 += "]}";
+            json += "]}";
             
-            char postD1[], resultD1[];
-            StringToCharArray(jsonD1, postD1);
-            ArrayResize(postD1, ArraySize(postD1)-1);
+            string url = InpSupabaseURL + "/functions/v1/vps-market-feed";
+            char post[], result[];
+            StringToCharArray(json, post);
             
-            int resD1 = WebRequest("POST", url, req_headers, 5000, postD1, resultD1, res_headers);
-            if(resD1 == 200) Print("D1 Data successfully pushed to Supabase.");
-            else Print("Failed to push D1 data: HTTP ", resD1, " Body: ", CharArrayToString(resultD1));
+            ArrayResize(post, ArraySize(post)-1); // Remove null terminator
+            
+            string req_headers = "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n" + 
+                                 "Content-Type: application/json\r\n" + 
+                                 "x-vps-secret: " + InpVPSSecret;
+            string res_headers;
+            int res = WebRequest("POST", url, req_headers, 5000, post, result, res_headers);
+            if(res == 200) Print("Data successfully pushed to Supabase for ", sym);
+            else Print("Failed to push data for ", sym, ": HTTP ", res, " Body: ", CharArrayToString(result));
+            
+            // Push D1 Data
+            MqlRates ratesD1[];
+            ArraySetAsSeries(ratesD1, true);
+            if(CopyRates(sym, PERIOD_D1, 0, 100, ratesD1) > 0)
+              {
+               string jsonD1 = "{\"user_id\":\"" + InpUserID + "\",\"symbol\":\"" + sym + "\",\"timeframe\":\"1d\",\"bars\":[";
+               for(int i=0; i<ArraySize(ratesD1); i++)
+                 {
+                  jsonD1 += "{\"t\":" + IntegerToString(ratesD1[i].time) + 
+                          ",\"o\":" + DoubleToString(ratesD1[i].open, 5) + 
+                          ",\"h\":" + DoubleToString(ratesD1[i].high, 5) + 
+                          ",\"l\":" + DoubleToString(ratesD1[i].low, 5) + 
+                          ",\"c\":" + DoubleToString(ratesD1[i].close, 5) + 
+                          ",\"v\":" + IntegerToString(ratesD1[i].tick_volume) + "}";
+                  if(i < ArraySize(ratesD1)-1) jsonD1 += ",";
+                 }
+               jsonD1 += "]}";
+               
+               char postD1[], resultD1[];
+               StringToCharArray(jsonD1, postD1);
+               ArrayResize(postD1, ArraySize(postD1)-1);
+               
+               int resD1 = WebRequest("POST", url, req_headers, 5000, postD1, resultD1, res_headers);
+               if(resD1 == 200) Print("D1 Data successfully pushed to Supabase for ", sym);
+               else Print("Failed to push D1 data for ", sym, ": HTTP ", resD1, " Body: ", CharArrayToString(resultD1));
+              }
            }
+         lastBarTimes[s] = currentBarTime;
         }
-      lastBarTime = currentBarTime;
-     }
-   else if(lastBarTime == 0)
-     {
-      lastBarTime = 1; // Set to 1 to force an immediate mismatch and push on the very next timer tick, ensuring instant backfill on startup.
+      else if(lastBarTimes[s] == 0)
+        {
+         lastBarTimes[s] = 1; // Set to 1 to force an immediate mismatch and push on the very next timer tick, ensuring instant backfill on startup.
+        }
      }
   }
 
