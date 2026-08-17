@@ -307,7 +307,12 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
 
 10. LOWER TIMEFRAME (LTF) DRILLING:
     - If the macro environment is ripe, but the 30m chart price is hovering near a HTF boundary without a clear FVG or entry trigger, DO NOT reject the setup.
-    - Instead, set status to APPROVED and recommended_direction to "REQUIRE_LTF_DRILLDOWN" to instruct the Sniper agent to hunt for a precision entry on the 5m chart.`;
+    - Instead, set status to APPROVED and recommended_direction to "REQUIRE_LTF_DRILLDOWN" to instruct the Sniper agent to hunt for a precision entry on the 5m chart.
+
+11. CONFIDENCE CALIBRATION (CRITICAL):
+    - A confidence score of 100 is STATISTICALLY IMPOSSIBLE in trading. Do not ever output a confidence of 100.
+    - A "perfect" structural setup should realistically max out around 85-90.
+    - You MUST actively deduct points for mixed signals, such as low ADX, choppy price action, or imperfect Fib alignment.`;
 
   console.log(`[Responses API] Submitting ${symbol} analysis...`);
   
@@ -365,7 +370,9 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
       }
     ],
     tool_choice: "required",
-    parallel_tool_calls: false
+    parallel_tool_calls: false,
+    max_completion_tokens: 1500,
+    max_tokens: 1500
   };
 
   const responseRes = await fetch("https://api.openai.com/v1/responses", {
@@ -753,7 +760,7 @@ serve(async (req) => {
           console.log(`[Market Hours] Skipping ${symbol} as market is currently closed.`);
           sendEvent({ type: 'progress', message: `[Market Hours] Skipping ${symbol}: Market Closed.` });
           rejections.push({ symbol, reason: "Market is currently closed", layer: "Market Hours" });
-          return;
+          continue;
         }
 
         // --- LAYER 0: MACRO BLACKOUT WINDOW ---
@@ -776,7 +783,7 @@ serve(async (req) => {
                reason: `Macro Blackout Window: Halting origination due to High-Impact USD event within ±30m (${evNames})`,
                layer: "Layer 0"
              });
-             return; // Skip this symbol completely
+             continue; // Skip this symbol completely
           }
         }
 
@@ -789,13 +796,13 @@ serve(async (req) => {
           } catch (err: any) {
             console.error(`[Data Error] [Trace: ${traceId}] ${symbol}: ${err.message}`);
             rejections.push({ symbol, reason: `Data fetch failed: ${err.message}`, layer: "Data" });
-            return;
+            continue;
           }
 
           if (bars.length < 100) {
             rejections.push({ symbol, reason: `Insufficient data (${bars.length} bars, need 100+)`, layer: "Data" });
             sendEvent({ type: "progress", message: `[${symbol}] Skipped: insufficient data` });
-            return;
+            continue;
           }
 
           sendEvent({ type: "progress", message: `[${symbol}] ${bars.length} bars loaded. Computing Fibonacci levels...` });
@@ -832,7 +839,7 @@ serve(async (req) => {
               payload_json: { symbol, reason: riskValidation.reason },
             });
             rejections.push({ symbol, reason: riskValidation.reason, layer: "Pre-AI Guard" });
-            return;
+            continue;
           }
 
           // Enrich with MTFA (weekly) if available
@@ -1082,7 +1089,7 @@ serve(async (req) => {
             console.error(`[AI Error] [Trace: ${traceId}] ${symbol}: ${err.message}`);
             rejections.push({ symbol, reason: `AI evaluation failed: ${err.message}`, layer: "AI" });
             sendEvent({ type: "progress", message: `[${symbol}] AI evaluation failed: ${err.message}` });
-            return;
+            continue;
           }
 
           const confidence = evaluation.confidence_score;
@@ -1116,15 +1123,24 @@ serve(async (req) => {
              confidenceAdjustments.push(`+20 agent-news Fundamental Confluence (${pendingNewsSide})`);
              sendEvent({ type: 'progress', message: `[${symbol}] MASSIVE BOOST: Technicals align perfectly with pending agent-news sentiment (${pendingNewsSide})` });
              
-             // Mark the pending signal as merged so it doesn't get double-counted
+             // Mark the pending signal as merged/approved
              if (pendingNewsId) {
-                await supabase.from("trade_opportunities").update({ status: "APPROVED" }).eq("id", pendingNewsId).catch(() => {});
+                await supabase.from("trade_opportunities").update({ status: "APPROVED", risk_summary: "Merged with technical confluence." }).eq("id", pendingNewsId).catch(() => {});
              }
           } else if (pendingNewsSide && evaluation.recommended_direction !== "NONE") {
-             // If agent-news fired but technicals point the OTHER way, we should heavily penalize it!
+             // Technicals conflict with news
              adjustedConfidence = Math.max(0, adjustedConfidence - 30);
              confidenceAdjustments.push(`-30 CONFLICT: Technicals contradict pending agent-news sentiment (${pendingNewsSide})`);
              sendEvent({ type: 'progress', message: `[${symbol}] PENALTY: Technicals contradict pending agent-news sentiment (${pendingNewsSide})` });
+             
+             // Reject the pending news signal due to conflict
+             if (pendingNewsId) {
+                await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: "Rejected: Technicals contradicted fundamental sentiment." }).eq("id", pendingNewsId).catch(() => {});
+             }
+          } else if (pendingNewsId && evaluation.recommended_direction === "NONE") {
+             // Technical setup was too weak to trade
+             // Reject the pending news signal due to lack of technical confluence
+             await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: "Rejected: Failed to find technical confluence." }).eq("id", pendingNewsId).catch(() => {});
           }
 
           // === FEATURE 5: KELLY CRITERION PROBABILITY CALIBRATION ===
@@ -1209,7 +1225,7 @@ serve(async (req) => {
               trace_id: traceId,
             });
             rejections.push({ symbol, reason, layer: "Swing AI" });
-            return;
+            continue;
           }
 
           // === BACKFILL INVALIDATION PRICE IN MARKET CONTEXT ===
@@ -1265,16 +1281,26 @@ serve(async (req) => {
 
           if (!entry || !sl || !tp2) {
             rejections.push({ symbol, reason: "Missing entry, SL, or TP2", layer: "Execution Desk" });
-            return;
+            continue;
           }
 
+          // Determine if we should use Market or Pending orders
+          // FIX (Error 10016): Broker rejects pending orders too close to the current price. 
+          // We require the entry to be at least 20% of ATR away to use a Limit/Stop order.
           let order_type = evaluation.recommended_direction === "LONG" ? "BUY MARKET" : "SELL MARKET";
-          if (Math.abs(entry - currentPrice) / currentPrice > 0.0001) {
+          const pendingOrderThreshold = (atr && atr > 0) ? (atr * 0.20) : (currentPrice * 0.001); // 20% of ATR or 0.1% of price
+          
+          if (Math.abs(entry - currentPrice) >= pendingOrderThreshold) {
             if (evaluation.recommended_direction === "LONG") {
               order_type = entry < currentPrice ? "BUY LIMIT" : "BUY STOP";
             } else {
               order_type = entry > currentPrice ? "SELL LIMIT" : "SELL STOP";
             }
+          } else {
+            // Force exact entry to currentPrice for MARKET execution to ensure RR math stays somewhat intact, 
+            // though the Execution Desk will recalculate it at live fill price anyway.
+            entry = currentPrice;
+            console.log(`[${symbol}] Entry too close to live price (Dist: ${Math.abs(entry - currentPrice).toFixed(5)}). Converted to ${order_type} to prevent Error 10016.`);
           }
 
           const riskPct = Math.abs(entry - sl) / entry;
@@ -1297,7 +1323,7 @@ serve(async (req) => {
               trace_id: traceId,
             });
             rejections.push({ symbol, reason: msg, layer: "Execution Desk" });
-            return;
+            continue;
           }
 
           const rrToTp2 = Math.abs(tp2 - entry) / Math.abs(entry - sl);
@@ -1329,7 +1355,7 @@ serve(async (req) => {
               trace_id: traceId,
             });
             rejections.push({ symbol, reason: msg, layer: "Execution Desk" });
-            return;
+            continue;
           }
 
           // === APPROVED — SAVE TO DB ===
@@ -1381,7 +1407,7 @@ serve(async (req) => {
           if (dbError) {
             console.error(`[DB Error] [Trace: ${traceId}] ${symbol}: ${dbError.message}`);
             rejections.push({ symbol, reason: dbError.message, layer: "Database" });
-            return;
+            continue;
           }
 
           console.log(`[Swing] [Trace: ${traceId}] APPROVED ${symbol} — ID: ${dbData.id} | ${tier} | R:R 1:${rrToTp2.toFixed(1)} to TP2`);
@@ -1457,6 +1483,15 @@ serve(async (req) => {
         } catch (symbolErr: any) {
           console.error(`[Global Error] [Trace: ${traceId}] ${symbol}: ${symbolErr.message}`);
           rejections.push({ symbol, reason: symbolErr.message, layer: "System" });
+        }
+      }
+
+      if (pendingNewsId && pendingNews) {
+        const wasApproved = results.some((r: any) => r.symbol === pendingNews.symbol);
+        if (!wasApproved) {
+           const rejection = rejections.find((r: any) => r.symbol === pendingNews.symbol);
+           const reason = rejection ? rejection.reason : "Abandoned due to lack of technical confluence or early filter";
+           await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: `Rejected: ${reason}` }).eq("id", pendingNewsId).catch(() => {});
         }
       }
 
