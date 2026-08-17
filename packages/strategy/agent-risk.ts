@@ -39,6 +39,22 @@ export async function validateGlobalSignal(
     return { valid: false, reason: "Risk Check Failed: Could not query active signals" };
   }
 
+  // --- NEW GUARD: Check for OPEN trades in user_trades ---
+  const { data: openTrades, error: openTradesError } = await supabase
+    .from("user_trades")
+    .select("id, symbol")
+    .eq("symbol", symbol)
+    .in("status", ["OPEN", "VPS_PENDING", "VPS_PROCESSING"]);
+    
+  if (openTradesError) {
+    return { valid: false, reason: "Risk Check Failed: Could not query open trades" };
+  }
+
+  if (openTrades && openTrades.length > 0) {
+    return { valid: false, reason: `REJECTED: Strict 1-trade-per-symbol isolation. A live trade for ${symbol} is already OPEN or PENDING execution.` };
+  }
+  // --------------------------------------------------------
+
   // Guardrail: Asset Isolation (Don't spam multiple signals for the same asset)
   // Smart Pyramiding Upgrade: Only block if we have an active trade that is NOT significantly in profit.
   if (activeSignals) {
