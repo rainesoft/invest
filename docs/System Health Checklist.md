@@ -302,7 +302,7 @@ ORDER BY created_at DESC
 LIMIT 10;
 ```
 
-- [ ] **Event-Driven Signal Chain (Orphaned PUBLISHED):** Since `agent-news` instantly webhooks `agent-swing`, signals should transition from `PUBLISHED` to `APPROVED` or `REJECTED` within seconds. Check for signals stuck in `PUBLISHED` for more than 5 minutes. If found, the `pingAgentSwing` webhook from `agent-news` may be failing, or `agent-swing` crashed during execution.
+- [ ] **Event-Driven Signal Chain (Orphaned PUBLISHED):** Since `agent-news` instantly webhooks `agent-swing`, signals should transition from `PUBLISHED` to `APPROVED` or `REJECTED` within seconds. Check for signals stuck in `PUBLISHED` for more than 5 minutes. If found, it indicates one of three things: (1) the `pingAgentSwing` webhook from `agent-news` failed, (2) `agent-swing` crashed during execution, or (3) `agent-swing` encountered a logic gap where it evaluated the trade as `NONE` but failed to correctly update the original `PUBLISHED` row to `REJECTED`.
 
 ```sql
 SELECT id, symbol, side, status, created_at
