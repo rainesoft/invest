@@ -848,6 +848,8 @@ serve(async (req) => {
     };
     const volumeStep = minVolumes[signal.symbol] || 0.01;
 
+    let blockedByRiskManager = false;
+
     for (const scaledEntry of scaledEntries) {
       const entryPrice = scaledEntry.price;
       const entryWeight = scaledEntry.weight || 1.0;
@@ -860,8 +862,6 @@ serve(async (req) => {
       let pointValueUsd = contractSize;
       if (signal.symbol.endsWith("JPY")) pointValueUsd = contractSize / entryPrice;
       else if (signal.symbol === "GER30") pointValueUsd = contractSize * 1.1;
-
-      let blockedByRiskManager = false;
 
       for (const user of users) {
         if (isManual && payload.user_id !== user.user_id) continue;
