@@ -371,8 +371,7 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
     ],
     tool_choice: "required",
     parallel_tool_calls: false,
-    max_completion_tokens: 1500,
-    max_tokens: 1500
+    max_output_tokens: 1500
   };
 
   const responseRes = await fetch("https://api.openai.com/v1/responses", {
@@ -1188,6 +1187,35 @@ serve(async (req) => {
              evaluation.thought_process = `[Execution Desk Override] Attempted Mean Reversion in high-momentum environment (ADX > 25). Strategy blocked.`;
           }
 
+          // === GUARDRAIL #3: S-TIER OB/FVG STRUCTURAL CONFIRMATION ===
+          // Per ICT/SMC methodology, an S-Tier signal (confidence >= 90) MUST have at least one
+          // institutional footprint visible on the LTF snapshot: an Order Block, Fair Value Gap,
+          // or Liquidity Sweep. The AI prompt encourages this, but we enforce it as a hard rule.
+          // Without a structural anchor, the signal is downgraded to a hard cap of A-Tier (89).
+          if (adjustedConfidence >= 90 && evaluation.recommended_direction !== "NONE") {
+            const isLong = evaluation.recommended_direction === "LONG";
+            const hasOB = isLong
+              ? !!(snapshot as any).ltf_bullish_ob_nearest
+              : !!(snapshot as any).ltf_bearish_ob_nearest;
+            const hasFVG = isLong
+              ? !!(snapshot as any).ltf_bullish_fvg_nearest
+              : !!(snapshot as any).ltf_bearish_fvg_nearest;
+            const hasSweep = isLong
+              ? !!(snapshot as any).ltf_liquidity_sweep_bullish
+              : !!(snapshot as any).ltf_liquidity_sweep_bearish;
+
+            if (!hasOB && !hasFVG && !hasSweep) {
+              const prevTier = getTier(adjustedConfidence);
+              adjustedConfidence = Math.min(adjustedConfidence, 89);
+              confidenceAdjustments.push(`[S-Tier Guard] No LTF OB/FVG/Sweep detected — capped at A-Tier (was ${prevTier})`); 
+              sendEvent({ type: 'progress', message: `[${symbol}] S-Tier OB/FVG Guard: No institutional footprint found on LTF. Signal downgraded from ${prevTier} → A-Tier. Add an LTF OB/FVG entry for full S-Tier.` });
+              console.log(`[S-Tier Guard] [Trace: ${traceId}] ${symbol}: Downgraded from S-Tier — no LTF OB, FVG or Liquidity Sweep present.`);
+            } else {
+              const footprint = [hasOB ? 'OB' : '', hasFVG ? 'FVG' : '', hasSweep ? 'Sweep' : ''].filter(Boolean).join(' + ');
+              sendEvent({ type: 'progress', message: `[${symbol}] S-Tier OB/FVG Guard PASSED ✅ — Institutional footprint confirmed: ${footprint}` });
+            }
+          }
+
           if (evaluation.recommended_direction === "NONE" || evaluation.recommended_direction === "REQUIRE_LTF_DRILLDOWN" || confidence < 70) {
             let reason = "";
             if (evaluation.recommended_direction === "REQUIRE_LTF_DRILLDOWN") {
@@ -1231,7 +1259,7 @@ serve(async (req) => {
           // === BACKFILL INVALIDATION PRICE IN MARKET CONTEXT ===
           // Now that the AI has computed the stop loss, update the context row
           // so the Scalper knows exactly where the swing thesis is invalidated.
-          const entry = evaluation.execution_parameters.suggested_entry_price || snapshot.current_price || 0;
+          let entry = evaluation.execution_parameters.suggested_entry_price || snapshot.current_price || 0;
           const atrSlMultiplier = (evaluation.execution_parameters as any).atr_multiplier_sl || 1.5;
           const atr = (snapshot as any).atr_14 || 10;
           const slDistance = atr * atrSlMultiplier;
@@ -1260,10 +1288,31 @@ serve(async (req) => {
           let sl = aiSl;
 
           // --- OVERRIDE: DYNAMIC ATR MINIMUM (Respects wider AI structural stops) ---
+          // === IMPROVEMENT #4: ADAPTIVE ATR COMPRESSION FOR CHOP MARKETS ===
+          // In a ranging market (ADX < 20), the default minimum ATR multiplier often produces
+          // SL distances that are too wide relative to TP targets, causing the R:R check to fail
+          // on otherwise valid Fib setups. In CHOP, institutional entries use tighter structural
+          // stops anchored directly behind the nearest Order Block — not a full ATR width away.
+          // We halve the minimum ATR floor when ADX signals a ranging, directionless environment.
           if (atr > 0) {
             const preciousMetalsAndCrypto = ['XAUUSD', 'XAGUSD', 'BTCUSD'];
-            const minMultiplier = preciousMetalsAndCrypto.includes(symbol) ? 3.0 : 2.0;
-            
+            const adx = (snapshot as any).adx_14 ?? 25;
+            const isChopMarket = adx < 20;
+
+            // CHOP: halve the minimum multiplier floor to compress SL and improve R:R
+            // TRENDING: use wider multipliers to avoid being stopped out by normal volatility
+            let minMultiplier: number;
+            if (preciousMetalsAndCrypto.includes(symbol)) {
+              minMultiplier = isChopMarket ? 1.5 : 3.0;
+            } else {
+              minMultiplier = isChopMarket ? 1.0 : 2.0;
+            }
+
+            if (isChopMarket) {
+              sendEvent({ type: 'progress', message: `[${symbol}] CHOP ATR Compression: ADX=${adx.toFixed(1)} < 20 → Min SL floor reduced to ${minMultiplier}x ATR (was ${preciousMetalsAndCrypto.includes(symbol) ? '3.0' : '2.0'}x). Tightening stop to Fib/OB anchor.` });
+              console.log(`[CHOP ATR Compression] [Trace: ${traceId}] ${symbol}: ADX=${adx.toFixed(1)}, minMultiplier reduced to ${minMultiplier}x`);
+            }
+
             if (atrSlMultiplier < minMultiplier) {
                console.log(`[Execution Desk] Widening tight AI swing stop loss to minimum ${minMultiplier}x ATR for ${symbol}`);
                const minAtrDistance = atr * minMultiplier;
@@ -1275,9 +1324,9 @@ serve(async (req) => {
             }
           }
           evaluation.execution_parameters.suggested_stop_loss = sl;
-          const tp1 = evaluation.execution_parameters.take_profit_1;
-          const tp2 = evaluation.execution_parameters.take_profit_2;
-          const tp3 = evaluation.execution_parameters.take_profit_3;
+          let tp1 = evaluation.execution_parameters.take_profit_1;
+          let tp2 = evaluation.execution_parameters.take_profit_2;
+          let tp3 = evaluation.execution_parameters.take_profit_3;
 
           if (!entry || !sl || !tp2) {
             rejections.push({ symbol, reason: "Missing entry, SL, or TP2", layer: "Execution Desk" });
@@ -1299,8 +1348,14 @@ serve(async (req) => {
           } else {
             // Force exact entry to currentPrice for MARKET execution to ensure RR math stays somewhat intact, 
             // though the Execution Desk will recalculate it at live fill price anyway.
+            const entryShift = currentPrice - entry;
             entry = currentPrice;
-            console.log(`[${symbol}] Entry too close to live price (Dist: ${Math.abs(entry - currentPrice).toFixed(5)}). Converted to ${order_type} to prevent Error 10016.`);
+            sl = Number((sl + entryShift).toFixed(5));
+            evaluation.execution_parameters.suggested_stop_loss = sl;
+            if (tp1) tp1 = Number((tp1 + entryShift).toFixed(5));
+            if (tp2) tp2 = Number((tp2 + entryShift).toFixed(5));
+            if (tp3) tp3 = Number((tp3 + entryShift).toFixed(5));
+            console.log(`[${symbol}] Entry too close to live price (Dist: ${Math.abs(entryShift).toFixed(5)}). Converted to ${order_type} to prevent Error 10016. SL/TP adjusted.`);
           }
 
           const riskPct = Math.abs(entry - sl) / entry;
@@ -1486,14 +1541,7 @@ serve(async (req) => {
         }
       }
 
-      if (pendingNewsId && pendingNews) {
-        const wasApproved = results.some((r: any) => r.symbol === pendingNews.symbol);
-        if (!wasApproved) {
-           const rejection = rejections.find((r: any) => r.symbol === pendingNews.symbol);
-           const reason = rejection ? rejection.reason : "Abandoned due to lack of technical confluence or early filter";
-           await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: `Rejected: ${reason}` }).eq("id", pendingNewsId).catch(() => {});
-        }
-      }
+      // Note: pendingNewsId resolution is handled per-symbol inside the for-loop above.
 
       sendEvent({ type: "complete", opportunities: results, rejections });
       return { opportunities: results, rejections };
