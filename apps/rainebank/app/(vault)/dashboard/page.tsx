@@ -486,6 +486,7 @@ export default function VaultDashboard() {
           );
         })}
       </div>
+      )}
 
       {/* Pagination Controls */}
       {totalPages > 1 && (
