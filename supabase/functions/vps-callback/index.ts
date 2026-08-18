@@ -38,9 +38,12 @@ serve(async (req) => {
     if (error) throw error;
 
     if (status === "OPEN" && tradeData?.opportunity_id) {
+      const { data: oppData } = await supabase.from("trade_opportunities").select("ai_summary").eq("id", tradeData.opportunity_id).single();
+      const existingSummary = oppData?.ai_summary || "";
+
       await supabase.from("trade_opportunities").update({ 
         status: "ACTIVE",
-        ai_summary: `[VPS Engine] Trade executed successfully. Ticket: ${ticket}`
+        ai_summary: `${existingSummary}\n\n[VPS Engine] Trade executed successfully. Ticket: ${ticket}`
       }).eq("id", tradeData.opportunity_id);
     }
 
