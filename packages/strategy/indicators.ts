@@ -1,4 +1,4 @@
-import { EMA, RSI, ADX, ATR, BollingerBands } from 'technicalindicators';
+import { EMA, RSI, ADX, ATR, BollingerBands, MACD } from 'technicalindicators';
 
 export type LogicContext = {
   candlestick_pattern?: string;
@@ -20,9 +20,15 @@ export type LogicContext = {
   trend_alignment: 'BULLISH_TREND' | 'BULLISH_PULLBACK' | 'BEARISH_TREND' | 'BEARISH_PULLBACK' | 'CHOP';
   htf_support?: number[];
   htf_resistance?: number[];
+  htf_pivot?: number;
   mtfa_ema_50?: number | null;
   mtfa_ema_200?: number | null;
   mtfa_trend?: 'BULLISH' | 'BEARISH' | 'CHOP';
+  
+  // MACD
+  macd_line?: number | null;
+  macd_signal?: number | null;
+  macd_histogram?: number | null;
   
   // SMC (Smart Money Concepts)
   bullish_fvg_nearest?: number | null;
@@ -216,6 +222,9 @@ export function getContextSnapshot(
       liquidity_sweep_bullish: false,
       liquidity_sweep_bearish: false,
       momentum_spike: 'NONE',
+      macd_line: null,
+      macd_signal: null,
+      macd_histogram: null,
     };
   }
 
@@ -249,11 +258,20 @@ export function getContextSnapshot(
     console.warn("ADX calculation failed:", e);
   }
 
+  let macdResult: any[] = [];
+  try {
+    macdResult = MACD.calculate({ values: close, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, SimpleMAOscillator: false, SimpleMASignal: false });
+  } catch (e) {
+    console.warn("MACD calculation failed:", e);
+  }
+
   const current_ema_50 = ema50.length > 0 ? ema50[ema50.length - 1] : null;
   const current_ema_200 = ema200.length > 0 ? ema200[ema200.length - 1] : null;
   const current_rsi_14 = rsi14.length > 0 ? rsi14[rsi14.length - 1] : null;
   const current_adx_14 = adx14.length > 0 ? adx14[adx14.length - 1] : null;
   const current_atr_14 = atr14.length > 0 ? atr14[atr14.length - 1] : null;
+  
+  const current_macd = macdResult.length > 0 ? macdResult[macdResult.length - 1] : null;
   
   const current_bb_upper = bb20.length > 0 ? bb20[bb20.length - 1].upper : null;
   const current_bb_lower = bb20.length > 0 ? bb20[bb20.length - 1].lower : null;
@@ -348,6 +366,9 @@ export function getContextSnapshot(
     liquidity_sweep_bullish,
     liquidity_sweep_bearish,
     momentum_spike,
+    macd_line: current_macd ? Number(current_macd.MACD?.toFixed(5)) : null,
+    macd_signal: current_macd ? Number(current_macd.signal?.toFixed(5)) : null,
+    macd_histogram: current_macd ? Number(current_macd.histogram?.toFixed(5)) : null,
   };
 }
 
