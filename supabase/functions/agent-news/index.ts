@@ -262,6 +262,13 @@ serve(async (req) => {
   console.log(`[Macro Scout] [Trace: ${traceId}] Poll started — ${new Date().toISOString()}`);
 
   try {
+    // Log heartbeat for System Health Checklist
+    await supabase.from("audit_log").insert({
+      action: "RESEARCH_RUN",
+      actor_type: "SYSTEM",
+      payload_json: { agent: "agent-news" }
+    });
+
     // 1. Fetch Forex Factory JSON
     const ffResponse = await fetch("https://nfs.faireconomy.media/ff_calendar_thisweek.json");
     if (!ffResponse.ok) throw new Error("Failed to fetch Forex Factory calendar");
