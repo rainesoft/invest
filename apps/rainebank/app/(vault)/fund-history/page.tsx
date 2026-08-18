@@ -15,6 +15,7 @@ type SanitizedTrade = {
   is_win: boolean;
   created_at: string;
   closed_at: string | null;
+  meta_api_order_id?: string | null;
 };
 
 export default function FundHistoryPage() {
