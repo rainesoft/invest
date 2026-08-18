@@ -16,7 +16,7 @@ You will need the production `SUPABASE_SERVICE_ROLE_KEY` to authenticate the HTT
 
 If the keys are not available locally, you can view the linked project's secrets using the Supabase CLI:
 ```bash
-npx supabase secrets list
+supabase secrets list
 ```
 
 Note that the Supabase CLI may redact sensitive variables in the output. If so, you will need to manually copy the real `.env` keys from the Supabase Dashboard (Settings -> API) or your team's secure vault. For this project, the real keys are often securely stored in the root `.env` file.
