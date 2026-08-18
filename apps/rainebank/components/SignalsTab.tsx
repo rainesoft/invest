@@ -116,7 +116,7 @@ export default function SignalsTab({ liveTrades = [] }: { liveTrades?: any[] }) 
         .range(from, to);
 
       if (activeTab === 'ACTIVE') {
-        query = query.eq('status', 'APPROVED').not('ai_summary', 'ilike', '%C-Tier%');
+        query = query.in('status', ['APPROVED', 'QUEUED', 'ACTIVE', 'COMPLETED']).not('ai_summary', 'ilike', '%C-Tier%');
       } else if (activeTab === 'INVALIDATED') {
         query = query.eq('status', 'REJECTED').ilike('ai_risks', '%Invalidated%');
       } else {
