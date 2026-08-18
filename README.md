@@ -33,9 +33,10 @@ its performance to scale a retail and institutional subscriber base.
 
 ### 3. Intelligence & Signal Generation (The Agent Council)
 
-- **Agent News (`agent-news`):** The Macro Scout. Wakes up hourly to ingest macroeconomic data and breaking news via Tavily. If it detects a major catalyst, it queues a `PUBLISHED` signal and instantly webhooks `agent-swing` for zero-latency evaluation.
-- **Agent Swing (`agent-swing`):** The core technical analyst. Runs on a 4-hour cron *and* instantly via event-driven webhooks from `agent-news`. It computes Fibonacci retracements and liquidity sweeps. If technical structure aligns perfectly with pending news sentiment, it flags the trade as `APPROVED`.
-- **AI Execution Desk (`agent-trade`):** The Chief Risk Officer. Triggered instantly by a PostgreSQL database trigger the exact millisecond a trade is `APPROVED`. It calculates risk, enforces strict 1:2.5 Risk/Reward ratios, checks portfolio sizing, and dispatches the live trade to the broker.
+- **Agent News (`agent-news`):** The Macro Scout. **Runs every hour at the top of the hour.** It ingests macroeconomic data and breaking news via Tavily. If it detects a major catalyst, it queues a `PUBLISHED` signal and instantly webhooks `agent-swing` for zero-latency evaluation.
+- **Agent Swing (`agent-swing`):** The core technical analyst. **Runs every 4 hours.** It also executes instantly via event-driven webhooks from `agent-news`. It computes Fibonacci retracements and liquidity sweeps. If technical structure aligns perfectly with pending news sentiment, it flags the trade as `APPROVED`.
+- **Agent Day (`agent-day`):** The intraday pivot trader. **Runs every 30 minutes.** It evaluates current price action against the daily floor pivot regime and MACD confluence, generating S-Tier and A-Tier trades for the 30-minute timeframe.
+- **AI Execution Desk (`agent-trade`):** The Chief Risk Officer. **Runs instantly** via a PostgreSQL database trigger the exact millisecond a trade is `APPROVED` (and also polls every 5 minutes as a fallback). It calculates risk, enforces strict Risk/Reward ratios, checks portfolio sizing, and dispatches the live trade to the broker.
 
 ### 4. Execution Layer (PAMM Routing & Trade Resolution)
 
