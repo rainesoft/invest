@@ -709,6 +709,11 @@ serve(async (req) => {
           : Number((defaultEntryPrice - riskDist * 2).toFixed(5));
         console.warn(`[Execution Guard] TP direction mismatch on ${signal.symbol} ${signal.side}! Entry=${defaultEntryPrice}, TP=${takeProfit}. Corrected to ${correctedTp} (2R).`);
         takeProfit = correctedTp;
+        
+        // Persist corrected TP to the DB so the VPS EA can execute it
+        const updatedTpJson = { ...signal.take_profit_json, tp: correctedTp, tp_price: correctedTp };
+        await supabase.from("trade_opportunities").update({ take_profit_json: updatedTpJson }).eq("id", signal.id);
+        signal.take_profit_json = updatedTpJson;
       }
     }
 
