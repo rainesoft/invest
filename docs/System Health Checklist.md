@@ -6,8 +6,9 @@ This checklist is designed for App Support Engineers to verify the overall healt
 Verify that the underlying Supabase infrastructure is responsive and background scheduling is active.
 
 - [ ] **Database Connectivity:** Verify the Supabase dashboard is accessible and the database is accepting queries.
-- [ ] **Cron Scheduler Activity:** Navigate to `pg_cron` (or the internal cron dashboard) and ensure `agent-news` and `agent-swing` are firing on their expected schedules without `failed` statuses.
+- [ ] **Cron Scheduler Activity:** Navigate to `pg_cron` (or the internal cron dashboard) and ensure `agent-news`, `agent-swing`, and `agent-day` are firing on their expected schedules without `failed` statuses.
 - [ ] **Edge Function Error Rates:** Review the Supabase Edge Functions dashboard. Verify there are no massive spikes in `5xx` errors for:
+  - `agent-day`
   - `agent-trade`
   - `telegram-broadcast`
   - `agent-kill-switch`
@@ -98,12 +99,13 @@ ORDER BY created_at DESC
 LIMIT 10;
 ```
 
-The `created_at` timestamps should fall within the last 4 hours for `agent-swing` and within the last hour for `agent-news`.
+The `created_at` timestamps should fall within the last 4 hours for `agent-swing`, within the last 30 minutes for `agent-day`, and within the last hour for `agent-news`.
 
 ### Expected Cron Schedule Reference
 
 | Job Name | Schedule | Expected Behaviour |
 |---|---|---|
+| `agent-day-poll` | `*/30 * * * *` | Fires every 30 minutes to evaluate intraday pivot setups |
 | `agent-news-poll` | `0 * * * *` | Fires at the top of every hour, 7 days a week |
 | `agent-swing-poll` | `0 */4 * * *` | Fires every 4 hours, 7 days a week |
 | `agent-trade-poll` | `3-59/5 * * * *` | Fires every 5 min (offset 3m), 7 days a week |
@@ -276,6 +278,7 @@ Verify that the AI agents are actively evaluating the market and producing expec
 Scan through the system and ensure everything is working as expected below:
 - [ ] Agent News wakes up every hour, scans the news and attempts to generate S- and A- Tier trades based on news and fundamental analysis.
 - [ ] Agent Swing wakes up every 4 hours, scans the market and attempts to generate S- and A- Tier swing trades.
+- [ ] Agent Day wakes up every 30 minutes, evaluates the market based on Pivot Regimes and MACD, and generates S- and A- Tier intraday trades.
 - [ ] VPS Bridge (`vps-poll`) is actively receiving heartbeat pings from the MT5 EA every 15 seconds without throwing 401 Unauthorized or 1003 timeouts.
 
 **Last-Run Timestamp Check:**
@@ -361,7 +364,7 @@ If this query returns rows, investigate a routing failure or a hardcoded status 
 
 ---
 
-## ⚠️ 3B. Trade Execution — MT5 Invalid Volume (Code 10014)
+## ⚠️ 3B. Trade Execution — MT5 Execution Errors (10014, 10016, 10019)
 
 > [!WARNING]
 > **Incident (2026-08-04 & 2026-08-10):** The strategy logic split the minimum lot size (0.01) into two legs (0.005 lots each) and also incorrectly sent `0.01` lots for indices like `US30` which actually require a minimum of `0.1` lots on some brokers. MetaTrader 5 strictly enforces minimum lot sizes and increments, and instantly rejected the trades with `TRADE_RETCODE_INVALID_VOLUME` (Code 10014).
@@ -372,11 +375,13 @@ Monitor for execution blocks on the broker side:
 SELECT id, symbol, volume, error_message, created_at 
 FROM user_trades 
 WHERE status = 'FAILED' 
-  AND error_message LIKE '%10014%'
 ORDER BY created_at DESC;
 ```
 
-If this query returns rows, ensure that the volume algorithms in `agent-trade` and `agent-news` enforce a strict mathematical floor against a dynamic `volumeStep` mapping (e.g. `US30 = 0.1`, `BTCUSD = 0.01`), rather than hardcoding `0.01` universally.
+If this query returns rows, investigate the error code:
+- **Code 10014 (Invalid Volume):** Ensure that the volume algorithms in `agent-trade` and `agent-news` enforce a strict mathematical floor against a dynamic `volumeStep` mapping (e.g. `US30 = 0.1`, `BTCUSD = 0.01`), rather than hardcoding `0.01` universally.
+- **Code 10016 (Invalid Stops):** The Stop Loss or Take Profit was placed too close to the entry price or on the wrong side (e.g., placing a TP below the entry on a LONG trade).
+- **Code 10019 (No Money):** The user's account had insufficient free margin to open the required volume. This is working as intended to protect against margin calls if the account is overleveraged.
 
 ---
 
