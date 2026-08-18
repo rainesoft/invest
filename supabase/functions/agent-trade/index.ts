@@ -275,11 +275,11 @@ serve(async (req) => {
       }
       // --- END QUERY ---
       // --- FETCH MARKET DATA (FOR VPS EXCLUSION) ---
-      const { data: ptiData } = await supabase.from("market_data_pti").select("symbol, data_json");
+      const { data: ptiData } = await supabase.from("market_data_pti").select("symbol, c");
       const ptiMap = new Map<string, any>();
       if (ptiData) {
          for (const p of ptiData) {
-            ptiMap.set(p.symbol, p.data_json);
+            ptiMap.set(p.symbol, p);
          }
       }
       
@@ -297,7 +297,7 @@ serve(async (req) => {
                 unrealizedProfit: 0, 
                 profit: 0, 
                 currentPrice: snap?.c || (trade.trade_opportunities?.entry_plan_json?.price || 0),
-                stopLoss: trade.stop_loss || (trade.trade_opportunities?.stop_plan_json?.initial || 0),
+                stopLoss: trade.stop_loss || (trade.trade_opportunities?.stop_plan_json?.stop || trade.trade_opportunities?.stop_plan_json?.initial || 0),
                 volume: 0.01 
              };
           } else {
@@ -498,7 +498,7 @@ serve(async (req) => {
             const isImprovement = isLong ? trailSl > currentSl : trailSl < currentSl;
             const isSafeFromOriginal = isLong ? trailSl > originalSl : trailSl < originalSl;
 
-            if (isImprovement && isSafeFromOriginal && profit > 0) {
+            if (isImprovement && isSafeFromOriginal && (profit > 0 || priceMoveInR > 0)) {
               newSl = Number(trailSl.toFixed(5));
               actionName = `TRAIL_RUNNER (+${priceMoveInR.toFixed(1)}R)`;
             }
@@ -535,6 +535,7 @@ serve(async (req) => {
                    const modRes = await supabase.from("trade_opportunities").update({ stop_plan_json: updatedJson }).eq("id", opp.id);
                    
                    if (!modRes.error) {
+                     await supabase.from("user_trades").update({ stop_loss: newSl }).eq("meta_api_order_id", orderId);
                      moves.push({ symbol: trade.symbol, action: actionName + " (VPS)", from: currentSl, to: newSl });
                    } else {
                      errors.push(`${trade.symbol} ${orderId}: modify failed (DB Error)`);
@@ -552,6 +553,7 @@ serve(async (req) => {
                     if (currentOpp) {
                        const updatedJson = { ...currentOpp.stop_plan_json, stop: newSl };
                        await supabase.from("trade_opportunities").update({ stop_plan_json: updatedJson }).eq("id", opp.id);
+                       await supabase.from("user_trades").update({ stop_loss: newSl }).eq("meta_api_order_id", orderId);
                     }
                     moves.push({ symbol: trade.symbol, action: actionName + " (MetaAPI Failover)", from: currentSl, to: newSl });
                 } else {
