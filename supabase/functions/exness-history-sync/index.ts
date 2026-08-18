@@ -40,11 +40,12 @@ serve(async (req) => {
     const startTime = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
     const endTime = new Date().toISOString();
 
-    // Fetch all open trades across the entire PAMM
+    // Fetch all open trades across the entire PAMM, plus any that were marked CLOSED by Position Manager but haven't had profit calculated yet
     const { data: openTrades, error: openTradesError } = await supabase
       .from("user_trades")
       .select("id, user_id, volume, symbol, meta_api_order_id, status, trade_type, opportunity_id, risk_amount")
-      .in("status", ["OPEN", "PENDING"])
+      .in("status", ["OPEN", "PENDING", "VPS_CLOSE", "CLOSED"])
+      .is("profit_usd", null)
       .not("meta_api_order_id", "is", null);
 
     if (openTradesError || !openTrades || openTrades.length === 0) {
@@ -194,7 +195,8 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({
       success: true,
-      report: report
+      report: report,
+      debug_deals: historyDeals
     }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
