@@ -341,83 +341,12 @@ export default function VaultDashboard() {
         </div>
       </div>
 
-      {/* Ledger Table Section */}
-      <div style={{
-        background: '#111',
-        border: '1px solid rgba(255,255,255,0.05)',
-        borderRadius: '24px',
-        overflow: 'hidden',
-        marginBottom: '40px'
-      }}>
-        <div style={{ padding: '20px 24px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-          <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: '#fff' }}>Execution Log</h3>
+      {signals.length === 0 ? (
+        <div style={{ padding: '48px', textAlign: 'center', color: '#6b7280', background: '#111', borderRadius: '24px', border: '1px solid rgba(255,255,255,0.05)' }}>
+          No executions found in your vault yet.
         </div>
-        
-        {signals.length === 0 ? (
-          <div style={{ padding: '48px', textAlign: 'center', color: '#6b7280' }}>
-            No executions found in your vault yet.
-          </div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-              <thead>
-                <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
-                  <th style={{ padding: '16px 24px', color: '#9ca3af', fontWeight: 500, fontSize: '13px' }}>ASSET</th>
-                  <th style={{ padding: '16px 24px', color: '#9ca3af', fontWeight: 500, fontSize: '13px' }}>DIRECTION</th>
-                  <th style={{ padding: '16px 24px', color: '#9ca3af', fontWeight: 500, fontSize: '13px' }}>PRICE</th>
-                  <th style={{ padding: '16px 24px', color: '#9ca3af', fontWeight: 500, fontSize: '13px' }}>STATUS</th>
-                </tr>
-              </thead>
-              <tbody>
-                {signals.map((t) => (
-                  <tr key={t.id} style={{ borderTop: '1px solid rgba(255,255,255,0.02)', transition: 'background 0.2s', cursor: 'default' }} onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'} onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
-                    <td style={{ padding: '16px 24px', color: '#fff', fontWeight: 600 }}>{t.symbol}</td>
-                    <td style={{ padding: '16px 24px' }}>
-                      {t.side === 'LONG' || t.side === 'BUY' ? (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#4ade80', background: 'rgba(74, 222, 128, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 800 }}>
-                          <ArrowUpRight size={14} /> {t.side}
-                        </span>
-                      ) : (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#f87171', background: 'rgba(248, 113, 113, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 800 }}>
-                          <ArrowDownRight size={14} /> {t.side}
-                        </span>
-                      )}
-                    </td>
-                    <td style={{ padding: '16px 24px', color: '#e5e7eb', fontFamily: 'monospace' }}>
-                      {t.entry_plan_json?.price ? `$${t.entry_plan_json.price}` : '—'}
-                    </td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ 
-                          color: t.status === 'WON' ? '#10b981' : t.status === 'LOST' ? '#ef4444' : t.status === 'OPEN' ? '#3b82f6' : '#9ca3af',
-                          background: t.status === 'WON' ? 'rgba(16,185,129,0.1)' : t.status === 'LOST' ? 'rgba(239,68,68,0.1)' : t.status === 'OPEN' ? 'rgba(59,130,246,0.1)' : 'rgba(156,163,175,0.1)',
-                          padding: '4px 10px',
-                          borderRadius: '6px',
-                          fontSize: '12px',
-                          fontWeight: 700
-                        }}>{t.status}</span>
-                        {t.ai_risks && (
-                          <TooltipIcon 
-                            text={t.ai_risks} 
-                            bgColor="rgba(156,163,175,0.2)" 
-                            color="#9ca3af" 
-                          />
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      <div style={{ padding: '20px 24px', borderBottom: '1px solid rgba(255,255,255,0.05)', marginBottom: '24px' }}>
-         <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: '#fff' }}>Detailed Rationale</h3>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
         {signals.map((signal) => {
           const entryPrice = signal.entry_plan_json?.price || signal.entry_plan_json?.limit_price;
           const stopPrice = signal.stop_plan_json?.stop || signal.stop_plan_json?.stop_price;
