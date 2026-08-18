@@ -509,7 +509,7 @@ Headline: "${title}"`;
           const { error: insertErr } = await supabase.from("trade_opportunities").insert({
             symbol: parsed.symbol !== "NONE" ? parsed.symbol : "BTCUSD",
             side: "LONG", // Dummy
-            status: "DISCARDED", // silently discard by default to reduce noise
+            status: "REJECTED", // silently discard by default to reduce noise
             timeframe: "M1",
             ai_summary: headlineIdentifier,
             risk_summary: `Sentiment evaluation: ${parsed.sentiment} (${parsed.confidence}%)`,
