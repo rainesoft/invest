@@ -86,7 +86,7 @@ supabase <group> <command> --help  # Flags for a specific command
 
 **Supabase CLI Known gotchas:**
 
-- Always run the CLI binary directly (e.g., `supabase <command>`) rather than using `npx supabase`. Node/npx may not be available in all terminal environments, whereas the native Supabase CLI is generally installed directly on the system path.
+- Always run the CLI binary directly (e.g., `supabase <command>`) rather than using `npx supabase`. Node/npx may not be available in all terminal environments, whereas the native Supabase CLI is generally installed directly on the system path. Assume it is already installed. Do NOT attempt to download or install the CLI manually (via curl, brew, or scripts).
 - `supabase db query` requires **CLI v2.79.0+** → use MCP `execute_sql` or `psql` as fallback
 - `supabase db advisors` requires **CLI v2.81.3+** → use MCP `get_advisors` as fallback
 - In imperative migration projects, create new hand-authored migration files with `supabase migration new <name>` first. Never invent a migration filename or rely on memory for the expected format. Declarative schema projects generate migrations from `supabase/schemas/`; see "Making and Committing Schema Changes" below.
