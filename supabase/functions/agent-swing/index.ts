@@ -674,14 +674,30 @@ serve(async (req) => {
                 signal.symbol
               );
 
-              // 3. Math Validation (Stop Loss Hit)
+              // 3. Math Validation (Stop Loss & Take Profit Hit)
               const stopLoss = signal.stop_plan_json?.stop;
+              const takeProfit = signal.take_profit_json?.tp;
+              
               if (stopLoss) {
                 if ((signal.side === 'LONG' && snapshot.current_price <= stopLoss) || 
                     (signal.side === 'SHORT' && snapshot.current_price >= stopLoss)) {
                   await supabase.from("trade_opportunities").update({ status: "LOST", r_multiple: -1, ai_risks: "Technical Invalidation: Stop Loss crossed." }).eq("id", signal.id);
-                  // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
                   console.log(`[Validation] LOST ${signal.symbol}: Stop loss crossed by live price.`);
+                  return;
+                }
+              }
+
+              if (takeProfit) {
+                if ((signal.side === 'LONG' && snapshot.current_price >= takeProfit) || 
+                    (signal.side === 'SHORT' && snapshot.current_price <= takeProfit)) {
+                  const entryPrice = signal.entry_plan_json?.price || signal.entry_plan_json?.limit_price;
+                  let rMult = 2.0; // fallback
+                  if (entryPrice && stopLoss) {
+                    const risk = Math.abs(entryPrice - stopLoss);
+                    if (risk > 0) rMult = Math.abs(takeProfit - entryPrice) / risk;
+                  }
+                  await supabase.from("trade_opportunities").update({ status: "WON", r_multiple: Number(rMult.toFixed(2)), ai_risks: "Technical Validation: Take Profit hit!" }).eq("id", signal.id);
+                  console.log(`[Validation] WON ${signal.symbol}: Take Profit crossed by live price. (+${rMult.toFixed(2)}R)`);
                   return;
                 }
               }
