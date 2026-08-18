@@ -57,7 +57,11 @@ export async function GET(request: Request) {
     stop_plan_json: trade.trade_opportunities?.stop_plan_json,
     take_profit_json: trade.trade_opportunities?.take_profit_json,
     ai_summary: trade.trade_opportunities?.ai_summary,
-    ai_risks: trade.trade_opportunities?.ai_risks || trade.error_message
+    ai_risks: trade.trade_opportunities?.ai_risks || trade.error_message,
+    meta_api_order_id: trade.meta_api_order_id,
+    risk_amount: trade.risk_amount,
+    volume: trade.volume,
+    trade_type: trade.trade_type
   }));
 
   return NextResponse.json({ 

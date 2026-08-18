@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { supabase } from '@lib/supabase';
 import dynamic from 'next/dynamic';
-import { TrendingUp, TrendingDown, Minus, ArrowUpRight, ArrowDownRight, Activity } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, ArrowUpRight, ArrowDownRight, Activity, Target } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 function parseAnalysisText(text: string) {
@@ -117,11 +117,16 @@ type VaultSignal = {
   timeframe: string;
   status: string;
   created_at: string;
-  entry_plan_json?: { price: number; limit_price?: number } | null;
+  entry_plan_json?: { price: number; limit_price?: number; order_type?: string } | null;
   stop_plan_json?: { stop: number; stop_price?: number } | null;
   take_profit_json?: { tp: number; tp_price?: number } | null;
   ai_summary?: string | null;
   ai_risks?: string | null;
+  meta_api_order_id?: string;
+  risk_amount?: number;
+  volume?: number;
+  trade_type?: string;
+  confidence?: number;
 };
 
 export default function VaultDashboard() {
@@ -418,101 +423,123 @@ export default function VaultDashboard() {
           const stopPrice = signal.stop_plan_json?.stop || signal.stop_plan_json?.stop_price;
           const tpPrice = signal.take_profit_json?.tp || signal.take_profit_json?.tp_price;
 
+          const isWarning = signal.status === 'REJECTED';
+
           return (
-            <div key={signal.id} style={{
-              background: '#0a0a0a',
-              border: '1px solid rgba(255,255,255,0.05)',
-              padding: '32px',
-              borderRadius: '24px',
-              transition: 'transform 0.2s, box-shadow 0.2s',
-            }}
-              onMouseOver={(e) => {
-                e.currentTarget.style.transform = 'translateY(-2px)';
-                e.currentTarget.style.boxShadow = '0 12px 32px rgba(0,0,0,0.4)';
-                e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)';
+            <div
+              key={signal.id}
+              style={{
+                background: '#0a0a0a',
+                border: `1px solid ${isWarning ? 'rgba(248,113,113,0.3)' : 'rgba(255,255,255,0.05)'}`,
+                padding: '24px', borderRadius: '20px', transition: 'transform 0.2s, box-shadow 0.2s',
               }}
-              onMouseOut={(e) => {
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = 'none';
-                e.currentTarget.style.borderColor = 'rgba(255,255,255,0.05)';
-              }}
+              onMouseOver={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 12px 32px rgba(0,0,0,0.4)'; }}
+              onMouseOut={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '16px' }}>
-                <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                  <div style={{ fontSize: '24px', fontWeight: 800, color: '#fff' }}>{signal.symbol}</div>
+              {/* Symbol / Side / Time */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                  <div style={{ fontSize: '22px', fontWeight: 800, color: '#fff' }}>{signal.symbol}</div>
                   <div style={{
-                    background: signal.side === 'LONG' ? 'rgba(74,222,128,0.1)' : 'rgba(248,113,113,0.1)',
-                    color: signal.side === 'LONG' ? '#4ade80' : '#f87171',
-                    padding: '4px 12px',
-                    borderRadius: '100px',
-                    fontSize: '12px',
-                    fontWeight: 800
-                  }}>
-                    {signal.side}
-                  </div>
+                    background: signal.side === 'LONG' || signal.side === 'BUY' ? 'rgba(74,222,128,0.1)' : 'rgba(248,113,113,0.1)',
+                    color: signal.side === 'LONG' || signal.side === 'BUY' ? '#4ade80' : '#f87171',
+                    padding: '3px 10px', borderRadius: '100px', fontSize: '12px', fontWeight: 800
+                  }}>{signal.side}</div>
+                  <div style={{ color: '#9ca3af', fontSize: '13px', fontWeight: 600 }}>{signal.timeframe}</div>
+                  {signal.confidence && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(251,191,36,0.1)', color: '#fbbf24', padding: '3px 10px', borderRadius: '100px', fontSize: '12px', fontWeight: 800 }}>
+                      <Target size={14} />
+                      {signal.confidence}% CONFIDENCE
+                    </div>
+                  )}
+                </div>
+                <div style={{ color: '#6b7280', fontSize: '13px' }}>{new Date(signal.created_at).toLocaleString()}</div>
+              </div>
+
+              {/* LIVE EXECUTION BANNER */}
+              {(() => {
+                if (!signal.meta_api_order_id) return null;
+                
+                const orderType = (signal.entry_plan_json?.order_type || 'MARKET').toUpperCase();
+                const isPending = orderType.includes('LIMIT') || orderType.includes('STOP') || signal.status === 'VPS_PENDING' || signal.status === 'PENDING';
+                const label = isPending ? `PENDING (${orderType})` : 'LIVE EXECUTION';
+                const colorHex = isPending ? '#fbbf24' : '#34d399';
+                const bgRgba = isPending ? 'rgba(251,191,36,0.1)' : 'rgba(16,185,129,0.1)';
+                const borderRgba = isPending ? 'rgba(251,191,36,0.2)' : 'rgba(16,185,129,0.2)';
+                const shadowRgba = isPending ? 'rgba(251,191,36,0.05)' : 'rgba(16,185,129,0.05)';
+                const containerBg = isPending ? 'rgba(251,191,36,0.05)' : 'rgba(16,185,129,0.05)';
+
+                return (
                   <div style={{
-                    background: signal.status === 'REJECTED' ? 'rgba(248,113,113,0.1)' : signal.status === 'APPROVED' ? 'rgba(74,222,128,0.1)' : 'rgba(234,179,8,0.1)',
-                    color: signal.status === 'REJECTED' ? '#f87171' : signal.status === 'APPROVED' ? '#4ade80' : '#eab308',
-                    padding: '4px 12px',
-                    borderRadius: '100px',
-                    fontSize: '12px',
-                    fontWeight: 800,
-                    border: `1px solid ${signal.status === 'REJECTED' ? 'rgba(248,113,113,0.3)' : signal.status === 'APPROVED' ? 'rgba(74,222,128,0.3)' : 'rgba(234,179,8,0.3)'}`,
+                    background: containerBg,
+                    border: `1px solid ${borderRgba}`,
+                    borderRadius: '12px',
+                    padding: '16px',
+                    marginBottom: '20px',
                     display: 'flex',
+                    flexWrap: 'wrap',
+                    justifyContent: 'space-between',
                     alignItems: 'center',
-                    gap: '6px'
+                    gap: '16px',
+                    boxShadow: `0 0 20px ${shadowRgba}`
                   }}>
-                    {signal.status}
-                    {signal.ai_risks && (
-                      <TooltipIcon 
-                        text={signal.ai_risks} 
-                        bgColor={signal.status === 'REJECTED' ? 'rgba(248,113,113,0.2)' : 'rgba(156,163,175,0.2)'} 
-                        color={signal.status === 'REJECTED' ? '#f87171' : '#9ca3af'} 
-                      />
-                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', background: bgRgba, padding: '6px 12px', borderRadius: '100px' }}>
+                        <span style={{ display: 'flex', position: 'relative', width: '8px', height: '8px' }}>
+                          <span style={{ animation: 'ping 1s cubic-bezier(0, 0, 0.2, 1) infinite', position: 'absolute', display: 'inline-flex', height: '100%', width: '100%', borderRadius: '9999px', backgroundColor: colorHex, opacity: 0.75 }}></span>
+                          <span style={{ position: 'relative', display: 'inline-flex', borderRadius: '9999px', height: '8px', width: '8px', backgroundColor: colorHex }}></span>
+                        </span>
+                        <span style={{ color: colorHex, fontSize: '11px', fontWeight: 800, letterSpacing: '0.05em' }}>{label}</span>
+                      </div>
+                      <div style={{ color: '#9ca3af', fontSize: '12px', fontFamily: 'monospace' }}>ID: {signal.meta_api_order_id}</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '24px' }}>
+                      <div>
+                        <div style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '4px', fontWeight: 600 }}>RISK ALLOCATION</div>
+                        <div style={{ fontSize: '15px', fontWeight: 700, color: '#fff' }}>${signal.risk_amount?.toFixed(2) || '0.00'}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '4px', fontWeight: 600 }}>VOLUME</div>
+                        <div style={{ fontSize: '15px', fontWeight: 700, color: '#fff' }}>{signal.volume} Lots</div>
+                      </div>
+                      <div>
+                         <div style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '4px', fontWeight: 600 }}>TYPE</div>
+                         <div style={{ fontSize: '15px', fontWeight: 700, color: '#818cf8' }}>{signal.trade_type || 'STANDARD'}</div>
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ color: '#9ca3af', fontSize: '14px', fontWeight: 600 }}>{signal.timeframe}</div>
-                </div>
-                <div style={{ color: '#6b7280', fontSize: '13px', fontWeight: 500 }}>
-                  {new Date(signal.created_at).toLocaleString()}
-                </div>
+                );
+              })()}
+
+              {/* Price Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '12px', marginBottom: '20px' }}>
+                {[
+                  { label: 'ENTRY', value: entryPrice, color: '#e5e7eb' },
+                  { label: 'STOP LOSS', value: stopPrice, color: '#f87171' },
+                  { label: 'TAKE PROFIT', value: tpPrice, color: '#4ade80' },
+                ].map(({ label, value, color }) => (
+                  <div key={label} style={{ background: '#111', padding: '14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.02)' }}>
+                    <div style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '6px', fontWeight: 600 }}>{label}</div>
+                    <div style={{ fontSize: '17px', fontWeight: 700, color: value && isPro ? color : '#6b7280' }}>
+                      {value && isPro ? value : !isPro ? <span style={{ filter: 'blur(6px)', userSelect: 'none' }}>0.0000</span> : '—'}
+                    </div>
+                  </div>
+                ))}
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-                <div style={{ background: '#111', padding: '16px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.02)' }}>
-                  <div style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '8px', fontWeight: 600 }}>ENTRY</div>
-                  {entryPrice ? (
-                    <div style={{ fontSize: '18px', fontWeight: 700, color: '#e5e7eb' }}>{entryPrice}</div>
-                  ) : !isPro ? (
-                    <div style={{ fontSize: '18px', fontWeight: 700, color: '#e5e7eb', filter: 'blur(6px)', userSelect: 'none' }}>0.0000</div>
-                  ) : (
-                    <div style={{ fontSize: '18px', fontWeight: 700, color: '#6b7280' }}>—</div>
-                  )}
+              {/* Invalidation reason */}
+              {signal.status === 'REJECTED' && signal.ai_risks && (
+                <div style={{ background: 'rgba(248,113,113,0.1)', padding: '14px', borderRadius: '10px', border: '1px solid rgba(248,113,113,0.2)', marginBottom: '20px' }}>
+                  <div style={{ fontSize: '11px', color: '#f87171', marginBottom: '6px', fontWeight: 800 }}>REASON FOR REJECTION/INVALIDATION</div>
+                  <p style={{ margin: 0, fontSize: '14px', color: '#fca5a5', lineHeight: 1.5 }}>{signal.ai_risks}</p>
                 </div>
-                <div style={{ background: '#111', padding: '16px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.02)' }}>
-                  <div style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '8px', fontWeight: 600 }}>STOP LOSS</div>
-                  {stopPrice ? (
-                    <div style={{ fontSize: '18px', fontWeight: 700, color: '#f87171' }}>{stopPrice}</div>
-                  ) : !isPro ? (
-                    <div style={{ fontSize: '18px', fontWeight: 700, color: '#f87171', filter: 'blur(6px)', userSelect: 'none' }}>0.0000</div>
-                  ) : (
-                    <div style={{ fontSize: '18px', fontWeight: 700, color: '#6b7280' }}>—</div>
-                  )}
-                </div>
-                <div style={{ background: '#111', padding: '16px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.02)' }}>
-                  <div style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '8px', fontWeight: 600 }}>TAKE PROFIT</div>
-                  {tpPrice ? (
-                    <div style={{ fontSize: '18px', fontWeight: 700, color: '#4ade80' }}>{tpPrice}</div>
-                  ) : !isPro ? (
-                    <div style={{ fontSize: '18px', fontWeight: 700, color: '#4ade80', filter: 'blur(6px)', userSelect: 'none' }}>0.0000</div>
-                  ) : (
-                    <div style={{ fontSize: '18px', fontWeight: 700, color: '#6b7280' }}>—</div>
-                  )}
-                </div>
-              </div>
+              )}
 
-              <div style={{ background: 'rgba(37,99,235,0.05)', padding: '20px', borderRadius: '16px', border: '1px solid rgba(37,99,235,0.1)' }}>
-                <div style={{ fontSize: '12px', color: '#38bdf8', marginBottom: '8px', fontWeight: 700 }}>LLM INSTITUTIONAL RATIONALE</div>
+              {/* AI Rationale */}
+              <div style={{ background: isWarning ? 'rgba(248,113,113,0.05)' : 'rgba(37,99,235,0.05)', padding: '18px', borderRadius: '14px', border: `1px solid ${isWarning ? 'rgba(248,113,113,0.2)' : 'rgba(37,99,235,0.1)'}`, marginBottom: '20px' }}>
+                <div style={{ fontSize: '11px', color: isWarning ? '#f87171' : '#38bdf8', marginBottom: '10px', fontWeight: 700 }}>
+                  {isWarning ? 'AGENT-RISK WARNING' : 'LLM INSTITUTIONAL RATIONALE'}
+                </div>
                 {signal.ai_summary ? (
                   <>
                     <TrendBadge {...parseAnalysisText(signal.ai_summary)} />
@@ -522,7 +549,7 @@ export default function VaultDashboard() {
                   </>
                 ) : (
                   <p style={{ margin: 0, fontSize: '15px', color: '#9ca3af', fontStyle: 'italic' }}>
-                    Institutional thesis hidden. Upgrade to Alpha to view full LLM Rationale and logical validation sequence.
+                    {isPro ? 'Awaiting institutional analysis sequence.' : 'Institutional thesis hidden. Upgrade to Alpha to view full LLM Rationale and logical validation sequence.'}
                   </p>
                 )}
               </div>
