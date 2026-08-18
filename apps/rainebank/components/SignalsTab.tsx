@@ -206,10 +206,20 @@ export default function SignalsTab({ liveTrades = [] }: { liveTrades?: any[] }) 
               {(() => {
                 const trade = liveTrades.find(t => t.trade_opportunities?.id === signal.id);
                 if (!trade) return null;
+                
+                const orderType = (signal.entry_plan_json?.order_type || 'MARKET').toUpperCase();
+                const isPending = orderType.includes('LIMIT') || orderType.includes('STOP');
+                const label = isPending ? `PENDING (${orderType})` : 'LIVE EXECUTION';
+                const colorHex = isPending ? '#fbbf24' : '#34d399';
+                const bgRgba = isPending ? 'rgba(251,191,36,0.1)' : 'rgba(16,185,129,0.1)';
+                const borderRgba = isPending ? 'rgba(251,191,36,0.2)' : 'rgba(16,185,129,0.2)';
+                const shadowRgba = isPending ? 'rgba(251,191,36,0.05)' : 'rgba(16,185,129,0.05)';
+                const containerBg = isPending ? 'rgba(251,191,36,0.05)' : 'rgba(16,185,129,0.05)';
+
                 return (
                   <div style={{
-                    background: 'rgba(16,185,129,0.05)',
-                    border: '1px solid rgba(16,185,129,0.2)',
+                    background: containerBg,
+                    border: `1px solid ${borderRgba}`,
                     borderRadius: '12px',
                     padding: '16px',
                     marginBottom: '20px',
@@ -218,15 +228,15 @@ export default function SignalsTab({ liveTrades = [] }: { liveTrades?: any[] }) 
                     justifyContent: 'space-between',
                     alignItems: 'center',
                     gap: '16px',
-                    boxShadow: '0 0 20px rgba(16,185,129,0.05)'
+                    boxShadow: `0 0 20px ${shadowRgba}`
                   }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', background: 'rgba(16,185,129,0.1)', padding: '6px 12px', borderRadius: '100px' }}>
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', background: bgRgba, padding: '6px 12px', borderRadius: '100px' }}>
                         <span style={{ display: 'flex', position: 'relative', width: '8px', height: '8px' }}>
-                          <span style={{ animation: 'ping 1s cubic-bezier(0, 0, 0.2, 1) infinite', position: 'absolute', display: 'inline-flex', height: '100%', width: '100%', borderRadius: '9999px', backgroundColor: '#34d399', opacity: 0.75 }}></span>
-                          <span style={{ position: 'relative', display: 'inline-flex', borderRadius: '9999px', height: '8px', width: '8px', backgroundColor: '#10b981' }}></span>
+                          <span style={{ animation: 'ping 1s cubic-bezier(0, 0, 0.2, 1) infinite', position: 'absolute', display: 'inline-flex', height: '100%', width: '100%', borderRadius: '9999px', backgroundColor: colorHex, opacity: 0.75 }}></span>
+                          <span style={{ position: 'relative', display: 'inline-flex', borderRadius: '9999px', height: '8px', width: '8px', backgroundColor: colorHex }}></span>
                         </span>
-                        <span style={{ color: '#34d399', fontSize: '11px', fontWeight: 800, letterSpacing: '0.05em' }}>LIVE EXECUTION</span>
+                        <span style={{ color: colorHex, fontSize: '11px', fontWeight: 800, letterSpacing: '0.05em' }}>{label}</span>
                       </div>
                       <div style={{ color: '#9ca3af', fontSize: '12px', fontFamily: 'monospace' }}>ID: {trade.meta_api_order_id}</div>
                     </div>
