@@ -104,9 +104,12 @@ execution, monitoring, and marketing.
 ## 🚀 Local Development Quick Start
 
 1. **Install Dependencies**
+   If you do not have Node.js and `pnpm` installed, please refer to the [Developer Setup Guide](docs/developer_setup.md) for full installation instructions (including Mac/Homebrew). Once installed, run:
    ```bash
    pnpm install
    ```
+
+   *Alternative:* If you already have Docker running, you can skip `pnpm install` and use the Docker alias to boot the environment: `docker compose up --build`.
 
 2. **Environment Configuration** Copy `.env.example` to `.env` and fill in the
    required keys:

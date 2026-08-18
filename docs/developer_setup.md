@@ -6,9 +6,17 @@ This guide outlines the steps required to set up your local environment for deve
 
 Ensure you have a terminal open and `curl` installed (which is included by default on macOS).
 
-## 2. Install Node.js (via NVM)
+## 2. Install Node.js & pnpm
 
-We recommend using Node Version Manager (NVM) to manage your Node.js installations.
+### Option A: Homebrew (macOS Recommended)
+If you are on a Mac, you can quickly install both Node.js and pnpm via Homebrew. This is the fastest way to get started:
+```bash
+brew install node
+brew install pnpm
+```
+
+### Option B: Node Version Manager (NVM)
+Alternatively, you can use Node Version Manager (NVM) to manage your Node.js installations.
 
 1. Install NVM:
    ```bash
