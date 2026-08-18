@@ -61,7 +61,7 @@ export async function fetchRealtimeNews(symbol: string): Promise<string[] | null
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     
     const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}+Financial+News&hl=en-US&gl=US&ceid=US:en`;
     const response = await fetch(url, { signal: controller.signal });
@@ -94,7 +94,7 @@ export async function fetchRealtimeNews(symbol: string): Promise<string[] | null
 export async function fetchAllMacroEvents(): Promise<FFEvent[] | null> {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     const response = await fetch('https://nfs.faireconomy.media/ff_calendar_thisweek.json', {
       headers: {
