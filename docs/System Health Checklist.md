@@ -511,6 +511,27 @@ The system features an autonomous trade simulator that monitors active trades ag
 - [ ] **Outcome Grading:** Query `trade_opportunities` to ensure signals are correctly transitioning from `APPROVED` to `WON` or `LOST`.
 - [ ] **AI Post-Mortems:** Verify the `resolve-outcomes` edge function is firing correctly (no 5xx errors) and generating Post-Mortem text inside `ai_summary` for lost trades.
 
+---
+
+## ⚠️ 6A. Trade Resolution Diagnostic — 0% Win Rate (Take Profit Omission)
+
+> [!CAUTION]
+> **Incident (2026-08-18):** `agent-swing` and `agent-day` generated a mathematical 0% Win Rate because the live active sweep loops were strictly checking if the live price hit the Stop Loss, but completely omitted the logic to check if the Take Profit was hit. Winners sat in `APPROVED` purgatory until they either expired or retraced to hit Stop Loss. 
+
+### Step 1 — Check for 0% Win Rate Anomaly
+If the `WIN RATE (30D)` on the Vault Dashboard falls to exactly 0% with a deep negative Net R-multiple, run this query to check if there are aged trades stuck in `APPROVED` that should have been marked `WON`:
+
+```sql
+SELECT symbol, side, status, created_at
+FROM trade_opportunities
+WHERE status = 'APPROVED'
+  AND created_at < NOW() - INTERVAL '1 hour';
+```
+
+### Step 2 — Verify Active Sweep Take Profit Logic
+Check the edge function logs for `agent-swing` and `agent-day` and look for the keyword `[Validation] WON`. 
+If you only see `[Validation] LOST` and never `WON`, the Take Profit sweep logic may have been reverted or omitted. Ensure the live loop always contains the validation checks for both `stopLoss` and `takeProfit`.
+
 ## 7. Treasury Management & Solvency (`cron-treasury-snapshot`)
 The system calculates a monthly Solvency Ratio (Assets / Liability) and syncs master account balances with Exness.
 - [ ] **Snapshot Generation:** Verify the `treasury_snapshots` table is generating rows correctly.
