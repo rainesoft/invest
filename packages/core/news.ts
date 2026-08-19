@@ -241,6 +241,56 @@ export function detectCentralBankEvent(
 }
 
 // ============================================================
+// FOMC PRE-EVENT DETECTION
+// Returns whether a high-impact Fed/central bank event is
+// scheduled to fire within the next `lookAheadMinutes` minutes.
+// Used by agent-day and agent-swing to activate FOMC Pre-Event
+// Mode — boosting AI confidence and position sizing before the
+// volatility catalyst hits rather than reacting after.
+// ============================================================
+export interface UpcomingFedEvent {
+  isPending: boolean;
+  minutesUntil: number | null;
+  event: FFEvent | null;
+}
+
+export function detectUpcomingFedEvent(
+  events: FFEvent[] | null,
+  lookAheadMinutes = 90
+): UpcomingFedEvent {
+  if (!events || events.length === 0) {
+    return { isPending: false, minutesUntil: null, event: null };
+  }
+
+  const now = Date.now();
+  const windowMs = lookAheadMinutes * 60 * 1000;
+
+  // Find the nearest upcoming FOMC/Fed event within the look-ahead window
+  const upcoming = events
+    .filter((e) => {
+      if (e.impact !== "High") return false;
+      const eventTime = new Date(e.date).getTime();
+      const msUntil = eventTime - now;
+      // Event is in the future and within the look-ahead window
+      return msUntil >= 0 && msUntil <= windowMs && CENTRAL_BANK_PATTERNS.some((p) => p.test(e.title));
+    })
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+  if (upcoming.length === 0) {
+    return { isPending: false, minutesUntil: null, event: null };
+  }
+
+  const nearest = upcoming[0];
+  const minutesUntil = Math.round((new Date(nearest.date).getTime() - now) / (60 * 1000));
+
+  return {
+    isPending: true,
+    minutesUntil,
+    event: nearest,
+  };
+}
+
+// ============================================================
 // NEWS-ENHANCED CONFIDENCE BOOST
 // Returns 0–8 bonus confidence points when a high-impact macro
 // event has recently fired AND aligns with the technical direction
@@ -339,4 +389,93 @@ export function computeMacroConfidenceBoost(
   }
 
   return 0;
+}
+
+// ============================================================
+// ETF FLOW SENTIMENT
+// For BTC and ETH, fetches the latest ETF net flow data via
+// Tavily and parses it into a structured sentiment signal.
+// A large inflow creates an institutional demand floor (bullish),
+// while large outflows indicate distribution (bearish).
+// Returns NEUTRAL when no flow data is available.
+// ============================================================
+export interface ETFFlowSentiment {
+  signal: "BULLISH" | "BEARISH" | "NEUTRAL";
+  amount_usd_millions: number | null;
+  summary: string;
+}
+
+export async function fetchETFFlowSentiment(
+  symbol: string
+): Promise<ETFFlowSentiment> {
+  const neutral: ETFFlowSentiment = { signal: "NEUTRAL", amount_usd_millions: null, summary: "No ETF flow data available." };
+
+  // Only applicable for crypto assets with spot ETFs
+  const isBTC = symbol.includes("BTC");
+  const isETH = symbol.includes("ETH");
+  if (!isBTC && !isETH) return neutral;
+
+  const TAVILY_API_KEY = Deno.env.get("TAVILY_API_KEY");
+  if (!TAVILY_API_KEY) return neutral;
+
+  try {
+    const assetName = isBTC ? "Bitcoin" : "Ethereum";
+    const res = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: TAVILY_API_KEY,
+        query: `${assetName} spot ETF net inflows outflows today USD million`,
+        search_depth: "advanced",
+        include_answer: true,
+        days: 1,
+      }),
+    });
+
+    if (!res.ok) return neutral;
+    const data = await res.json();
+    const text: string = (data.answer || "") + " " + (data.results || []).slice(0, 3).map((r: any) => r.content).join(" ");
+
+    // Parse dollar amounts: match patterns like "$297.6 million", "$1.2B", "-$150M"
+    const amounts: number[] = [];
+    const amountPattern = /([+-]?\$?\s?[\d,.]+)\s*(billion|million|B|M)\s*(inflow|outflow|net flow|outflows|inflows)?/gi;
+    let match;
+    while ((match = amountPattern.exec(text)) !== null) {
+      const raw = parseFloat(match[1].replace(/[$,\s]/g, ""));
+      const unit = match[2].toLowerCase();
+      const multiplier = unit === "billion" || unit === "b" ? 1000 : 1;
+      const direction = match[3] ? (/(outflow|outflows)/i.test(match[3]) ? -1 : 1) : 1;
+      amounts.push(raw * multiplier * direction);
+    }
+
+    // Net the parsed amounts
+    const netFlow = amounts.length > 0 ? amounts.reduce((a, b) => a + b, 0) : null;
+
+    // Check for qualitative signals if no amounts were parsed
+    const hasInflow = /inflow|bought|purchased/i.test(text);
+    const hasOutflow = /outflow|redemption|sold/i.test(text);
+
+    let signal: "BULLISH" | "BEARISH" | "NEUTRAL";
+    if (netFlow !== null) {
+      if (netFlow >= 100) signal = "BULLISH";
+      else if (netFlow <= -100) signal = "BEARISH";
+      else signal = "NEUTRAL";
+    } else if (hasInflow && !hasOutflow) {
+      signal = "BULLISH";
+    } else if (hasOutflow && !hasInflow) {
+      signal = "BEARISH";
+    } else {
+      signal = "NEUTRAL";
+    }
+
+    const summary = netFlow !== null
+      ? `${assetName} ETF net flow today: ${netFlow >= 0 ? "+" : ""}$${netFlow.toFixed(0)}M (${signal})`
+      : `${assetName} ETF flow signal: ${signal} (qualitative).`;
+
+    console.log(`[ETF Flow] ${symbol}: ${summary}`);
+    return { signal, amount_usd_millions: netFlow, summary };
+  } catch (err: any) {
+    console.error(`[ETF Flow Error] ${symbol}: ${err.message}`);
+    return neutral;
+  }
 }
