@@ -275,13 +275,19 @@ serve(async (req) => {
       }
       // --- END QUERY ---
       // --- FETCH MARKET DATA (FOR VPS EXCLUSION) ---
-      const { data: ptiData } = await supabase.from("market_data_pti").select("symbol, c");
       const ptiMap = new Map<string, any>();
-      if (ptiData) {
-         for (const p of ptiData) {
-            ptiMap.set(p.symbol, p);
+      await Promise.all(uniqueSymbols.map(async (sym) => {
+         const { data: ptiData } = await supabase
+           .from("market_data_pti")
+           .select("symbol, c")
+           .eq("symbol", sym)
+           .order("ts", { ascending: false })
+           .limit(1)
+           .single();
+         if (ptiData) {
+            ptiMap.set(sym, ptiData);
          }
-      }
+      }));
       
       for (const [orderId, trade] of orderMap) {
         try {
@@ -700,7 +706,7 @@ serve(async (req) => {
     // Prevents placing orders where TP is on the wrong side of entry.
     // Root cause of USDJPY LONG having TP at 145.44 while entry was 163.7.
     if (defaultEntryPrice && takeProfit && stopLoss) {
-      const isLong = signal.side === "LONG";
+      const isLong = signal.side === "LONG" || signal.side === "BUY";
       const tpOnWrongSide = isLong ? takeProfit < defaultEntryPrice : takeProfit > defaultEntryPrice;
       if (tpOnWrongSide) {
         const riskDist = Math.abs(defaultEntryPrice - stopLoss);
@@ -711,7 +717,14 @@ serve(async (req) => {
         takeProfit = correctedTp;
         
         // Persist corrected TP to the DB so the VPS EA can execute it
-        const updatedTpJson = { ...signal.take_profit_json, tp: correctedTp, tp_price: correctedTp };
+        const updatedTpJson = { 
+          ...signal.take_profit_json, 
+          tp: correctedTp, 
+          tp_price: correctedTp,
+          tp1: correctedTp,
+          tp2: correctedTp,
+          tp3: correctedTp 
+        };
         await supabase.from("trade_opportunities").update({ take_profit_json: updatedTpJson }).eq("id", signal.id);
         signal.take_profit_json = updatedTpJson;
       }
@@ -744,14 +757,22 @@ serve(async (req) => {
         if (takeProfit) {
           const currentTpDist = Math.abs(takeProfit - defaultEntryPrice);
           if (currentTpDist < minDist) {
-            const correctedTp = signal.side === "LONG"
+            const isLong = signal.side === "LONG" || signal.side === "BUY";
+            const correctedTp = isLong
               ? Number((defaultEntryPrice + minDist).toFixed(5))
               : Number((defaultEntryPrice - minDist).toFixed(5));
             console.warn(`[Execution Guard] TP too close on ${signal.symbol}: ${currentTpDist.toFixed(5)} < min ${minDist}. Widening from ${takeProfit} → ${correctedTp}.`);
             takeProfit = correctedTp;
             
             // Persist corrected TP to the DB
-            const updatedTpJson = { ...signal.take_profit_json, tp: correctedTp, tp_price: correctedTp };
+            const updatedTpJson = { 
+              ...signal.take_profit_json, 
+              tp: correctedTp, 
+              tp_price: correctedTp,
+              tp1: correctedTp,
+              tp2: correctedTp,
+              tp3: correctedTp 
+            };
             await supabase.from("trade_opportunities").update({ take_profit_json: updatedTpJson }).eq("id", signal.id);
             signal.take_profit_json = updatedTpJson;
           }
@@ -877,6 +898,24 @@ serve(async (req) => {
     };
     const volumeStep = minVolumes[signal.symbol] || 0.01;
 
+    // --- FOMC WINDOW SIZE MULTIPLIER (1.5x) ---
+    // agent-day and agent-swing set this flag when a Fed/central bank event
+    // is active (±90 min pre-event or 6h post-event). We increase position
+    // sizing to capitalise on macro-driven volatility expansion.
+    // All downstream safety caps (MAX_LOT_CAP, drawdown, blowout) still apply.
+    let fomcSizeMultiplier = 1.0;
+    try {
+      const { data: fomcFlag } = await supabase
+        .from("system_settings")
+        .select("value")
+        .eq("key", "fomc_window_active")
+        .single();
+      if (fomcFlag?.value === true) {
+        fomcSizeMultiplier = 1.5;
+        console.log(`[FOMC] fomc_window_active = true. Applying 1.5x size multiplier.`);
+      }
+    } catch (_) { /* non-critical — default to 1.0 */ }
+
     let blockedByRiskManager = false;
 
     for (const scaledEntry of scaledEntries) {
@@ -931,7 +970,7 @@ serve(async (req) => {
             }
         }
         
-        const riskPerTrade = Number(user.portfolio_capital) * effectiveRiskPct * entryWeight * tierRiskModifier * confluenceMultiplier * drawdownModifier;
+        const riskPerTrade = Number(user.portfolio_capital) * effectiveRiskPct * entryWeight * tierRiskModifier * confluenceMultiplier * drawdownModifier * fomcSizeMultiplier;
         let volume = pointsAtRisk > 0 ? riskPerTrade / (pointsAtRisk * pointValueUsd) : 0.01;
         
         // --- HARD LOT CAP CIRCUIT BREAKER ---
@@ -977,9 +1016,17 @@ serve(async (req) => {
     const riskDistance = Math.abs(defaultEntryPrice - stopLoss);
     
     // Enforce strict 1.0R hardcoded cashout on TP1 for early profit taking
-    const quickExitTP = signal.side === "LONG"
+    const isLongForQuickExit = signal.side === "LONG" || signal.side === "BUY";
+    const quickExitTP = isLongForQuickExit
       ? Number((defaultEntryPrice + (riskDistance * 1.0)).toFixed(5))
       : Number((defaultEntryPrice - (riskDistance * 1.0)).toFixed(5));
+
+    // Inject quickExitTP into tp1 so MT5 EA executes the cashout
+    if (signal.take_profit_json) {
+      const updatedTpJsonWithQuickExit = { ...signal.take_profit_json, tp1: quickExitTP };
+      await supabase.from("trade_opportunities").update({ take_profit_json: updatedTpJsonWithQuickExit }).eq("id", signal.id);
+      signal.take_profit_json = updatedTpJsonWithQuickExit;
+    }
 
     // Dynamic Trailing Stop Fix: Clamp trailing distance to 1.5x initial risk if ATR is too wide
     const atrRaw = signal.stop_plan_json?.atr;
