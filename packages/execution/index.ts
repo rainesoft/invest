@@ -326,8 +326,12 @@ export async function fetchPaperBars(
         const isWeekend = today === 0 || today === 6;
         
         if (isWeekend) {
-          // Globally relax max-age to 168h (7 days) to ensure weekend survival for Crypto and holiday survival for Forex.
-          maxAgeMs = 168 * 60 * 60 * 1000;
+          const isCrypto = symbol.includes("BTC") || symbol.includes("ETH") || symbol.includes("XRP") || symbol.includes("SOL") || symbol.includes("ADA");
+          if (isCrypto) {
+            maxAgeMs = 4 * 60 * 60 * 1000; // Crypto trades 24/7
+          } else {
+            maxAgeMs = 48 * 60 * 60 * 1000; // Cap weekend gap to 48h (preventing 7-day stale freezes)
+          }
         }
 
         if (now - latestTs < maxAgeMs) {
