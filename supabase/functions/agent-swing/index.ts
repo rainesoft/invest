@@ -574,9 +574,10 @@ serve(async (req) => {
   });
 
   const dbSymbols = await getTradingSymbols(supabase);
-  const symbols = dbSymbols && dbSymbols.length > 0 
-      ? dbSymbols 
-      : symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean);
+  const isExplicitSymbolRequest = !!(reqBody.symbols || searchParams.get("symbols"));
+  const symbols = isExplicitSymbolRequest 
+      ? symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean)
+      : (dbSymbols && dbSymbols.length > 0 ? dbSymbols : symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean));
 
   const traceId = crypto.randomUUID();
 
