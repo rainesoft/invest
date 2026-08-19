@@ -87,7 +87,7 @@ serve(async (req) => {
       }
 
       if (rowsToInsert.length > 0) {
-        const { error: insertErr } = await supabase.from("market_data_pti").insert(rowsToInsert);
+        const { error: insertErr } = await supabase.from("market_data_pti").upsert(rowsToInsert, { onConflict: 'symbol,timeframe,ts' });
         if (insertErr) {
           throw new Error(`DB Bulk Insert Error: ${insertErr.message}`);
         }
