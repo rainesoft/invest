@@ -266,7 +266,7 @@ serve(async (req) => {
     await supabase.from("audit_log").insert({
       action: "RESEARCH_RUN",
       actor_type: "SYSTEM",
-      payload_json: { agent: "agent-news" }
+      payload_json: { agent: "agent-news", symbol: "MACRO" }
     });
 
     // 1. Fetch Forex Factory JSON
