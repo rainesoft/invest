@@ -260,6 +260,7 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
    - DO NOT use the Daily ATR or a wide Daily swing low for your Stop Loss.
    - You MUST scan the LTF timeframe (1H or 30m) provided in the snapshot. Find the nearest SMC Order Block (ltf_bullish_ob_nearest / ltf_bearish_ob_nearest) or FVG.
    - Anchor your Stop Loss directly behind the LTF Order Block. This compresses the risk by 80%, instantly transforming a 1:1 trade into a massive 1:5.0 S-Tier setup.
+   - For high-leverage assets like Indices (US30, NAS100) and Metals (XAGUSD, XAUUSD), you MUST tuck your Stop Loss extremely tightly behind the nearest Order Block or FVG to avoid triggering the 10% account blowout circuit breaker at the minimum lot size.
    - CRITICAL REQUIREMENT: Calculate your R:R mathematically before returning your parameters. Your TP2 MUST be at least 1.2x your Stop Loss distance. If the nearest structural resistance is closer than 1.2R, you must invalidate the setup.
    - LIMIT ORDERS FOR BETTER ENTRY: If the R:R at current market price fails the 1.2x requirement, you MUST calculate a deeper LIMIT order entry inside the FVG/OB and set 'suggested_entry_price' to that level to fix the math.
    - EXACT PRICE FORMAT REQUIRED: You will output an 'atr_multiplier_sl' between 1.0 and 3.0 instead of a raw price. The Execution Desk will calculate the exact Stop Loss price dynamically using live volatility.
@@ -299,10 +300,12 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
    - If the Percentage Distance is > ${inflectionThresholdPct}%, the price is NOT resting on a level. You CANNOT use INFLECTION_POINT_WAIT.
    - If price is resting squarely on a boundary (<= ${inflectionThresholdPct}%) AND momentum indicators (RSI flat, ADX low) do not provide overwhelming confirmation, do NOT instantly reject it as 'chop'. Instead, look for a Momentum Breakout setup using Buy-Stop or Sell-Stop orders just outside the Fib zone to catch the inevitable volatility expansion.
    - Invoke the reject_trade tool with the exact reason: 'INFLECTION_POINT_WAIT' to sideline capital until a definitive bounce or breakdown is confirmed via a candle close.
+   - LIMIT ORDERS FOR MID-RANGE MARKETS: If price is floating mid-range between key Fibonacci levels (e.g., between 38.2% and 50%), do NOT reject the setup as 'No setup'. Instead, originate a 'Buy Limit' or 'Sell Limit' order exactly at the optimal Fibonacci level to catch the wick when the price retraces.
 
 9. DYNAMIC ADX OSCILLATOR THRESHOLDS (EXHAUSTION VS CONTINUATION):
    - In a strong runaway trend where ADX > 25, you are FORBIDDEN from taking a Mean Reversion trade against the trend.
    - LOW ADX EXHAUSTION: If ADX is low (< 20), do NOT automatically reject the trade as "choppy". Low ADX during a pullback to the 61.8% or 78.6% Fib levels is HIGHLY DESIRABLE—it indicates the opposing trend is exhausted and ready to reverse.
+   - MEAN REVERSION IN CHOP: If ADX is low (< 20) and the market is in a 'CHOP' regime, do NOT automatically reject the setup. You are explicitly authorized to use a MEAN_REVERSION strategy to buy the bottom or sell the top of the chop range, provided there is a Liquidity Sweep or SMC confirmation.
    - Expand your RSI rejection bounds to > 90 (or < 10 for shorts) if ADX confirms strong momentum.
 
 10. LOWER TIMEFRAME (LTF) DRILLING:
