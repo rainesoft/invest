@@ -717,22 +717,44 @@ serve(async (req) => {
       }
     }
 
-    // === EXECUTION GUARD 2: MINIMUM SL DISTANCE ===
+    // === EXECUTION GUARD 2: MINIMUM SL & TP DISTANCE ===
     // Prevents ultra-tight stops that get swept by spread/volatility.
-    const minSlDistances: Record<string, number> = {
+    const minDistances: Record<string, number> = {
       XAGUSD: 0.30, XAUUSD: 2.00, UKOIL: 0.30, BTCUSD: 150,
       EURUSD: 0.0010, GBPUSD: 0.0010, USDJPY: 0.15, US30: 30, NAS100: 30,
+      AUDUSD: 0.0010, NZDUSD: 0.0010, EURJPY: 0.15, GBPJPY: 0.15,
     };
-    if (defaultEntryPrice && stopLoss) {
-      const minDist = minSlDistances[signal.symbol];
+    
+    if (defaultEntryPrice) {
+      const minDist = minDistances[signal.symbol];
       if (minDist) {
-        const currentDist = Math.abs(defaultEntryPrice - stopLoss);
-        if (currentDist < minDist) {
-          const correctedSl = signal.side === "LONG"
-            ? Number((defaultEntryPrice - minDist).toFixed(5))
-            : Number((defaultEntryPrice + minDist).toFixed(5));
-          console.warn(`[Execution Guard] SL too tight on ${signal.symbol}: ${currentDist.toFixed(5)} < min ${minDist}. Widening from ${stopLoss} → ${correctedSl}.`);
-          stopLoss = correctedSl;
+        // Validate Stop Loss Distance
+        if (stopLoss) {
+          const currentSlDist = Math.abs(defaultEntryPrice - stopLoss);
+          if (currentSlDist < minDist) {
+            const correctedSl = signal.side === "LONG"
+              ? Number((defaultEntryPrice - minDist).toFixed(5))
+              : Number((defaultEntryPrice + minDist).toFixed(5));
+            console.warn(`[Execution Guard] SL too tight on ${signal.symbol}: ${currentSlDist.toFixed(5)} < min ${minDist}. Widening from ${stopLoss} → ${correctedSl}.`);
+            stopLoss = correctedSl;
+          }
+        }
+        
+        // Validate Take Profit Distance
+        if (takeProfit) {
+          const currentTpDist = Math.abs(takeProfit - defaultEntryPrice);
+          if (currentTpDist < minDist) {
+            const correctedTp = signal.side === "LONG"
+              ? Number((defaultEntryPrice + minDist).toFixed(5))
+              : Number((defaultEntryPrice - minDist).toFixed(5));
+            console.warn(`[Execution Guard] TP too close on ${signal.symbol}: ${currentTpDist.toFixed(5)} < min ${minDist}. Widening from ${takeProfit} → ${correctedTp}.`);
+            takeProfit = correctedTp;
+            
+            // Persist corrected TP to the DB
+            const updatedTpJson = { ...signal.take_profit_json, tp: correctedTp, tp_price: correctedTp };
+            await supabase.from("trade_opportunities").update({ take_profit_json: updatedTpJson }).eq("id", signal.id);
+            signal.take_profit_json = updatedTpJson;
+          }
         }
       }
     }
