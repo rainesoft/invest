@@ -49,21 +49,30 @@ const serviceKey = prodEnv['SUPABASE_SERVICE_ROLE_KEY'];
 
 const PROJECT_URL = 'https://ktezlusdkqlfdwqrldtn.supabase.co';
 
-async function callAgent(agentName) {
+async function callAgent(agentName, body = null) {
   console.log(`Calling ${agentName}...`);
-  const res = await fetch(`${PROJECT_URL}/functions/v1/${agentName}`, {
+  const options = {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${serviceKey}`,
       'Content-Type': 'application/json'
     }
-  });
+  };
+  if (body) {
+    options.body = JSON.stringify(body);
+  }
+  const res = await fetch(`${PROJECT_URL}/functions/v1/${agentName}`, options);
   console.log(`Response from ${agentName} [${res.status}]:`, await res.text());
 }
 
 async function run() {
   await callAgent('agent-news');
-  await callAgent('agent-swing');
+  await callAgent('agent-day');
+  
+  // Split agent-swing to avoid 150s Edge Function timeouts
+  await callAgent('agent-swing', { symbols: ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "EURJPY", "GBPJPY"] });
+  await callAgent('agent-swing', { symbols: ["BTCUSD"] });
+  await callAgent('agent-swing', { symbols: ["US30", "NAS100", "XAUUSD", "XAGUSD", "UKOIL"] });
 }
 
 run();
