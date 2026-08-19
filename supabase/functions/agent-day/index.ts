@@ -5,9 +5,9 @@ import { sma, rsi, detectRegime } from "../../../packages/strategy/index.ts";
 import { insertAuditLog } from "../../../packages/core/audit.ts";
 import { isMarketOpen } from "../../../packages/core/market.ts";
 import { netEdge, transactionCost, slippage } from "../../../packages/strategy/index.ts";
-import { getContextSnapshot, LogicContext, calculatePivotPoints } from "../../../packages/strategy/indicators.ts";
+import { getContextSnapshot, LogicContext, calculatePivotPoints, computeLiquiditySweepScore } from "../../../packages/strategy/indicators.ts";
 import { validateGlobalSignal } from "../../../packages/strategy/agent-risk.ts";
-import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews } from "../../../packages/core/news.ts";
+import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews, detectCentralBankEvent, detectUpcomingFedEvent, computeMacroConfidenceBoost, fetchETFFlowSentiment } from "../../../packages/core/news.ts";
 import { isAutoTradingEnabled } from "../../../packages/core/settings.ts";
 
 import { revalidateOpportunity } from "../../../packages/strategy/revalidation.ts";
@@ -390,6 +390,38 @@ serve(async (req) => {
         }
 
         // ==========================================
+        // FOMC / CENTRAL BANK INTELLIGENCE
+        // Detect both pre-event (imminent) and post-event
+        // windows. Sets a system_settings flag so agent-trade
+        // can apply the 1.5x size multiplier at execution time.
+        // ==========================================
+        let fomcModeActive = false;
+        let fomcPreEventActive = false;
+        if (allEvents) {
+          // Post-event: fired within last 6 hours
+          const cbStatus = detectCentralBankEvent(allEvents, 6);
+          if (cbStatus.isActive) {
+            fomcModeActive = true;
+            const names = cbStatus.events.map((e: any) => e.title).join(", ");
+            console.log(`[FOMC Mode] Post-event window active: ${names}`);
+            sendEvent({ type: 'progress', message: `[POST-EVENT VOLATILITY MODE] Central bank event within 6H: ${names}. FOMC size multiplier (1.5x) ACTIVE.` });
+          }
+          // Pre-event: firing within next 90 minutes
+          const upcoming = detectUpcomingFedEvent(allEvents, 90);
+          if (upcoming.isPending && upcoming.event) {
+            fomcPreEventActive = true;
+            fomcModeActive = true;
+            console.log(`[FOMC Pre-Event] ${upcoming.event.title} firing in ${upcoming.minutesUntil} minutes. Pre-positioning mode active.`);
+            sendEvent({ type: 'progress', message: `[PRE-EVENT MODE] ${upcoming.event.title} fires in ${upcoming.minutesUntil} min. AI confidence boosted for macro-aligned setups. Size multiplier (1.5x) ACTIVE.` });
+          }
+          // Persist the FOMC window flag to system_settings so agent-trade can read it
+          await supabase.from("system_settings").upsert(
+            { key: "fomc_window_active", value: fomcModeActive },
+            { onConflict: "key" }
+          ).catch((e: any) => console.warn("[FOMC] Failed to persist fomc_window_active:", e.message));
+        }
+
+        // ==========================================
         // PHASE 1: ACTIVE SIGNAL VALIDATION SWEEP
         // ==========================================
         console.log(`[Phase 1] Sweeping active APPROVED signals for revalidation...`);
@@ -700,6 +732,31 @@ serve(async (req) => {
             if (!fundamental_context) {
               const headlines = await fetchRealtimeNews(symbol);
               fundamental_context = generateMacroContext(symbol, allEvents, headlines);
+              // FOMC context injection
+              if (fomcModeActive) {
+                const fomcTag = fomcPreEventActive ? `[FOMC_PRE_EVENT: Firing soon — high volatility expected]` : `[FOMC_JUST_FIRED: Post-event volatility window active]`;
+                fundamental_context = fomcTag + "\n" + fundamental_context;
+              }
+              // Macro confidence boost
+              const headlines2 = headlines || [];
+              const macroBoost = computeMacroConfidenceBoost(symbol, "LONG", allEvents, headlines2);
+              if (macroBoost > 0 && fomcModeActive) {
+                fundamental_context += `\n[FOMC MACRO BOOST: +8 confidence authorized for macro-aligned setup]`;
+              }
+            }
+
+            // ETF flow sentiment for crypto assets
+            let etf_flow_context: string | undefined;
+            if (symbol.includes("BTC") || symbol.includes("ETH")) {
+              try {
+                const etfFlow = await fetchETFFlowSentiment(symbol);
+                if (etfFlow.signal !== "NEUTRAL") {
+                  etf_flow_context = `[ETF FLOW INTELLIGENCE]\n${etfFlow.summary}\nDirective: ${etfFlow.signal === "BULLISH" ? "Institutional demand floor detected. Favour LONG setups with strong technical confluence." : "Distribution signal detected. Favour SHORT setups or tighter risk management on LONG."}\n`;
+                  sendEvent({ type: 'progress', message: `[ETF Flow] ${symbol}: ${etfFlow.summary}` });
+                }
+              } catch (etfErr: any) {
+                console.warn(`[ETF Flow] ${symbol}: ${etfErr.message}`);
+              }
             }
 
             // Fetch swing/positional agent context from market_context table
@@ -723,8 +780,9 @@ serve(async (req) => {
 
             const snapshot = {
               ...rawSnapshot,
-              fundamental_context,
-              agent_context: agent_context.length > 0 ? agent_context : undefined
+              fundamental_context: etf_flow_context ? (fundamental_context + "\n" + etf_flow_context) : fundamental_context,
+              agent_context: agent_context.length > 0 ? agent_context : undefined,
+              liquidity_sweep_directive: computeLiquiditySweepScore(rawSnapshot, (rawSnapshot as any).mtfa_trend).directive || undefined,
             };
 
             // PRE-EVALUATION ASSET ISOLATION (with candle-duration caching)
