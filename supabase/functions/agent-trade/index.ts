@@ -728,6 +728,54 @@ serve(async (req) => {
         await supabase.from("trade_opportunities").update({ take_profit_json: updatedTpJson }).eq("id", signal.id);
         signal.take_profit_json = updatedTpJson;
       }
+    // === EXECUTION GUARD 1B: SL DIRECTION VALIDATION ===
+    // Prevents placing orders where SL is on the wrong side of entry (MT5 Code 10016).
+    if (defaultEntryPrice && stopLoss) {
+      const isLong = signal.side === "LONG" || signal.side === "BUY";
+      const slOnWrongSide = isLong ? stopLoss > defaultEntryPrice : stopLoss < defaultEntryPrice;
+      if (slOnWrongSide) {
+        const currentRisk = Math.abs(defaultEntryPrice - stopLoss);
+        const correctedSl = isLong
+          ? Number((defaultEntryPrice - currentRisk).toFixed(5))
+          : Number((defaultEntryPrice + currentRisk).toFixed(5));
+        console.warn(`[Execution Guard] SL direction mismatch on ${signal.symbol} ${signal.side}! Entry=${defaultEntryPrice}, SL=${stopLoss}. Corrected to ${correctedSl}.`);
+        stopLoss = correctedSl;
+        
+        const updatedStopJson = {
+          ...signal.stop_plan_json,
+          stop: correctedSl,
+          stop_price: correctedSl
+        };
+        await supabase.from("trade_opportunities").update({ stop_plan_json: updatedStopJson }).eq("id", signal.id);
+        signal.stop_plan_json = updatedStopJson;
+      }
+    }
+
+    // === EXECUTION GUARD 1C: SPREAD BUFFER ON STOP LOSS ===
+    // Pushes the Stop Loss slightly wider to prevent broker spread hunting
+    if (defaultEntryPrice && stopLoss) {
+      const spreadBuffers: Record<string, number> = {
+        XAGUSD: 0.05, XAUUSD: 0.50, UKOIL: 0.05, BTCUSD: 25,
+        EURUSD: 0.0003, GBPUSD: 0.0003, USDJPY: 0.03, US30: 5, NAS100: 5,
+        AUDUSD: 0.0003, NZDUSD: 0.0003, EURJPY: 0.03, GBPJPY: 0.03,
+      };
+      const buffer = spreadBuffers[signal.symbol] || 0;
+      if (buffer > 0) {
+        const isLong = signal.side === "LONG" || signal.side === "BUY";
+        const bufferedSl = isLong
+          ? Number((stopLoss - buffer).toFixed(5))
+          : Number((stopLoss + buffer).toFixed(5));
+        console.log(`[Execution Guard] Applying ${buffer} spread buffer to ${signal.symbol} SL. ${stopLoss} → ${bufferedSl}`);
+        stopLoss = bufferedSl;
+        
+        const updatedStopJson = {
+          ...signal.stop_plan_json,
+          stop: bufferedSl,
+          stop_price: bufferedSl
+        };
+        await supabase.from("trade_opportunities").update({ stop_plan_json: updatedStopJson }).eq("id", signal.id);
+        signal.stop_plan_json = updatedStopJson;
+      }
     }
 
     // === EXECUTION GUARD 2: MINIMUM SL & TP DISTANCE ===
@@ -826,6 +874,21 @@ serve(async (req) => {
           confluenceMultiplier = 0.5;
           pmReason = "Portfolio Manager: 0.5x Risk Multiplier (Counter-Trend Scalp / Opposing Confluence)";
         }
+      }
+
+      // --- DUPLICATE ASSET LOCK ---
+      // Prevents stacking multiple trades for the exact same asset if one is already open.
+      const { data: existingOpenTrades } = await supabase
+        .from("user_trades")
+        .select("id")
+        .eq("symbol", signal.symbol)
+        .eq("status", "OPEN");
+      
+      if (existingOpenTrades && existingOpenTrades.length > 0) {
+        const rejectReason = `Rejected by Execution Desk: Duplicate lock. An open position already exists for ${signal.symbol}.`;
+        await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + rejectReason, ai_risks: rejectReason }).eq("id", signal.id);
+        console.log(`[Execution Desk] Rejected ${signal.symbol} due to existing open trade (Duplicate Lock).`);
+        return new Response(JSON.stringify({ success: true, message: "Rejected due to duplicate lock" }), { status: 200 });
       }
 
       // --- DYNAMIC CORRELATION LIMITS ---
