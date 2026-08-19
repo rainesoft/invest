@@ -728,6 +728,8 @@ serve(async (req) => {
         await supabase.from("trade_opportunities").update({ take_profit_json: updatedTpJson }).eq("id", signal.id);
         signal.take_profit_json = updatedTpJson;
       }
+    }
+
     // === EXECUTION GUARD 1B: SL DIRECTION VALIDATION ===
     // Prevents placing orders where SL is on the wrong side of entry (MT5 Code 10016).
     if (defaultEntryPrice && stopLoss) {
