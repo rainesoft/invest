@@ -135,6 +135,9 @@ CRITICAL RULES:
 4. If indicators are completely conflicting (e.g., Price > Pivot but MACD deeply negative and price < MA200), invoke 'reject_trade' to stay flat.
 5. NO MEAN REVERSION AGAINST PIVOT: Do not buy a dip if it breaks below the pivot. A break below the pivot is a trend reversal, not a pullback.
 6. REQUIRED PARAMETERS: You MUST provide a numeric suggested_entry_price, suggested_stop_loss, and suggested_take_profit for ANY trade setup. Do not return nulls for these fields.
+7. LIMIT ORDERS FOR BETTER ENTRIES: If the price is hovering mid-range between the Pivot and Support/Resistance, do not reject the setup. Instead, issue a BUY LIMIT or SELL LIMIT at the Pivot to catch the wick.
+8. HIGH-LEVERAGE ASSET STOP LOSSES: For high-leverage assets like Indices (US30, NAS100) and Metals (XAGUSD), you MUST tuck your Stop Loss extremely tightly behind the Pivot or nearest Order Block to avoid triggering the 10% account blowout circuit breaker at the minimum lot size.
+9. MEAN REVERSION IN CHOP: If the market is ranging/choppy (low ADX), you are authorized to use a MEAN_REVERSION strategy. Buy near Support and Sell near Resistance rather than waiting for a trend breakout.
 
 Historical Memory:
 ${historicalMemory || "None"}
