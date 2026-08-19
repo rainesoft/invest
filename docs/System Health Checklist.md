@@ -2,6 +2,9 @@
 
 This checklist is designed for App Support Engineers to verify the overall health, execution integrity, and safety limits of the autonomous agentic trading system at the start of each trading day.
 
+> [!IMPORTANT]
+> **Primary Architecture:** Raine Bank prioritizes the zero-latency **MT5 VPS Execution Architecture** as the primary source of truth for market data and trade execution. MetaAPI is strictly maintained as an autonomous failover layer. If the VPS stream fails, it must be investigated and restarted immediately to avoid long-term reliance on MetaAPI polling.
+
 ## 1. Edge Infrastructure & Core DB Health
 Verify that the underlying Supabase infrastructure is responsive and background scheduling is active.
 
@@ -13,6 +16,7 @@ Verify that the underlying Supabase infrastructure is responsive and background 
   - `telegram-broadcast`
   - `agent-kill-switch`
   - `vps-poll`
+  - `vps-market-feed` (Look specifically for `HTTP 500 DB Bulk Insert Error: duplicate key value` which indicates a live-candle UPSERT failure from the EA).
 
 ---
 
@@ -424,6 +428,37 @@ WHERE status = 'VPS_PENDING'
 ORDER BY created_at ASC;
 ```
 - ❌ **FAILED:** If any trade has `minutes_stuck` > 1.0, the EA is failing to execute trades (e.g. MetaTrader disconnected from broker or Auto-Trading is turned off).
+
+---
+
+---
+
+## ⚠️ 3D. Trade Execution — Stale Data Execution Bypass (The 26-Hour Freeze)
+
+> [!CAUTION]
+> **Incident (2026-08-19):** The MT5 VPS EA froze but continued sending heartbeat pings. The central database recorded a `vps_last_heartbeat` within 60 seconds, but `market_data_pti` was stuck on a 26-hour-old candle. Because `fetchPaperBars` had a relaxed 7-day weekend cache validity, the AI swallowed the 26-hour-old data as "live", failed to find any valid structural setups, and silently aborted trading operations.
+
+If the system has gone unusually quiet, verify that the AI is not being poisoned by a stale VPS data feed:
+
+### Step 1 — Verify Cache Freshness vs Heartbeat
+Run this query to ensure the data stream matches the heartbeat:
+
+```sql
+SELECT 
+  (SELECT vps_last_heartbeat FROM user_risk_settings LIMIT 1) as heartbeat,
+  symbol,
+  MAX(ts) as last_candle_pushed,
+  ROUND(EXTRACT(EPOCH FROM (NOW() - MAX(ts))) / 3600, 1) as hours_stale
+FROM market_data_pti
+GROUP BY symbol
+ORDER BY hours_stale DESC
+LIMIT 10;
+```
+
+- ❌ **FAILED:** If the heartbeat is fresh (within minutes) but `hours_stale` is > 4.0 during weekdays, the EA is frozen (or the broker connection is lost) but still pinging. The Edge Function `fetchPaperBars` will automatically reject this and fall back to MetaAPI, but you **must immediately restart the MT5 EA on the VPS** to restore primary zero-latency execution.
+
+### Step 2 — Verify vps-market-feed Upsert Integrity
+If you have just restarted the EA and see a barrage of `HTTP 500` errors in the MT5 Journal ("Failed to push data... duplicate key value violates unique constraint"), this indicates the backend is incorrectly using `.insert()` instead of `.upsert()` for live tick fluctuations on the same timestamp. Ensure `vps-market-feed` is enforcing `ON CONFLICT (symbol, timeframe, ts)` to safely overwrite live unclosed candles.
 
 ---
 
