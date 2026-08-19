@@ -240,6 +240,7 @@ ${JSON.stringify(snapshot, null, 2)}`,
           entry_type: args.order_type,
           suggested_entry_price: args.entry_price || args.suggested_entry_price,
           suggested_stop_loss: args.stop_loss || args.suggested_stop_loss,
+          suggested_take_profit: args.take_profit || args.take_profit_1 || args.take_profit_2,
           take_profit_1: args.take_profit_1,
           take_profit_2: args.take_profit_2
         },
