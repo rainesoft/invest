@@ -691,12 +691,14 @@ serve(async (req) => {
               );
 
               // 3. Math Validation (Stop Loss & Take Profit Hit)
+              const currentHigh = result.length > 0 ? result[result.length - 1].h : snapshot.current_price;
+              const currentLow = result.length > 0 ? result[result.length - 1].l : snapshot.current_price;
               const stopLoss = signal.stop_plan_json?.stop;
               const takeProfit = signal.take_profit_json?.tp;
               
               if (stopLoss) {
-                if ((signal.side === 'LONG' && snapshot.current_price <= stopLoss) || 
-                    (signal.side === 'SHORT' && snapshot.current_price >= stopLoss)) {
+                if ((signal.side === 'LONG' && currentLow <= stopLoss) || 
+                    (signal.side === 'SHORT' && currentHigh >= stopLoss)) {
                   await supabase.from("trade_opportunities").update({ status: "LOST", r_multiple: -1, ai_risks: "Technical Invalidation: Stop Loss crossed." }).eq("id", signal.id);
                   console.log(`[Validation] LOST ${signal.symbol}: Stop loss crossed by live price.`);
                   return;
@@ -704,8 +706,8 @@ serve(async (req) => {
               }
 
               if (takeProfit) {
-                if ((signal.side === 'LONG' && snapshot.current_price >= takeProfit) || 
-                    (signal.side === 'SHORT' && snapshot.current_price <= takeProfit)) {
+                if ((signal.side === 'LONG' && currentHigh >= takeProfit) || 
+                    (signal.side === 'SHORT' && currentLow <= takeProfit)) {
                   const entryPrice = signal.entry_plan_json?.price || signal.entry_plan_json?.limit_price;
                   let rMult = 2.0; // fallback
                   if (entryPrice && stopLoss) {
