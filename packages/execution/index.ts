@@ -317,9 +317,18 @@ export async function fetchPaperBars(
         const now = new Date().getTime();
         
         const tfLower = timeframe.toLowerCase();
-        // Globally relax max-age to 168h (7 days) to ensure weekend survival for Crypto 
-        // and holiday survival for Forex.
-        let maxAgeMs = 168 * 60 * 60 * 1000;
+        
+        // Dynamically enforce stricter cache limits
+        let maxAgeMs = 4 * 60 * 60 * 1000; // Default: 4 hours during weekdays
+        
+        // Check if today is a weekend
+        const today = new Date().getUTCDay(); // 0 = Sunday, 6 = Saturday
+        const isWeekend = today === 0 || today === 6;
+        
+        if (isWeekend) {
+          // Globally relax max-age to 168h (7 days) to ensure weekend survival for Crypto and holiday survival for Forex.
+          maxAgeMs = 168 * 60 * 60 * 1000;
+        }
 
         if (now - latestTs < maxAgeMs) {
           // Reverse because we want oldest first for the indicator logic
