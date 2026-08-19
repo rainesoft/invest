@@ -735,7 +735,7 @@ serve(async (req) => {
     const minDistances: Record<string, number> = {
       XAGUSD: 0.30, XAUUSD: 2.00, UKOIL: 0.30, BTCUSD: 150,
       EURUSD: 0.0010, GBPUSD: 0.0010, USDJPY: 0.15, US30: 30, NAS100: 30,
-      AUDUSD: 0.0010, NZDUSD: 0.0010, EURJPY: 0.15, GBPJPY: 0.15,
+      AUDUSD: 0.0010, NZDUSD: 0.0020, EURJPY: 0.15, GBPJPY: 0.15,
     };
     
     if (defaultEntryPrice) {
