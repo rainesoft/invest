@@ -2,6 +2,9 @@
 
 This checklist is designed for App Support Engineers to verify the overall health, execution integrity, and safety limits of the autonomous agentic trading system at the start of each trading day.
 
+> [!TIP]
+> **Automated Diagnostics:** You can run all the SQL diagnostic queries listed in this document at once by executing `scripts/healthcheck.sql` against the database.
+
 > [!IMPORTANT]
 > **Primary Architecture:** Raine Bank prioritizes the zero-latency **MT5 VPS Execution Architecture** as the primary source of truth for market data and trade execution. MetaAPI is strictly maintained as an autonomous failover layer. If the VPS stream fails, it must be investigated and restarted immediately to avoid long-term reliance on MetaAPI polling.
 
