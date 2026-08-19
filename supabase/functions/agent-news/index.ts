@@ -344,8 +344,13 @@ serve(async (req) => {
             const opportunityData = {
               symbol: action.symbol,
               side: action.side,
-              status: "ACTIVE",
+              status: "APPROVED", // Route to agent-trade execution engine
+              source_agent: "agent-news",
               timeframe: "M1",
+              entry_plan_json: { price: entryPx, order_type: action.side === "BUY" ? "Market" : "Market" },
+              stop_plan_json: { stop: slPx, stop_price: slPx, initial: slPx },
+              // Dummy take profit; agent-trade Quick Exit logic will override this to 1.0R
+              take_profit_json: { tp: action.side === "BUY" ? entryPx + action.slDistance : entryPx - action.slDistance },
               ai_summary: `[S-Tier] [MACRO] Fast-Execution: ${event.title}. Actual: ${event.actual}, Forecast: ${event.forecast}. ${summaryText}.`,
               risk_summary: `${eventIdentifier} Automated news trade execution.`,
               created_at: new Date().toISOString(),
@@ -379,36 +384,17 @@ serve(async (req) => {
             });
 
             if (!DRY_RUN) {
-              const body = {
-                symbol: action.symbol,
-                actionType: action.side === "BUY" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
-                volume: volume,
-                stopLoss: slPx,
-                stopLossUnits: "ABSOLUTE_PRICE",
-                clientId: `mac_${opp.id.substring(0, 8)}`,
-              };
-
-              const orderRes = await mtPost("/trade", body);
-              
-              await supabase.from("user_trades").insert({
-                 user_id: "00000000-0000-0000-0000-000000000000",
-                 opportunity_id: opp.id,
-                 status: "OPEN",
-                 execution_price: entryPx,
-                 size: volume
-              });
-
               await notify(
                 `⚡ <b>MACRO EVENT TRIGGERED</b>\n` +
                 `<b>${event.title}</b>\n` +
                 `Forecast: ${event.forecast} | Actual: ${event.actual}\n\n` +
-                `Executed: <b>${action.side} ${action.symbol}</b>\n` +
-                `Volume: ${volume} lots`
+                `Signal: <b>${action.side} ${action.symbol}</b>\n` +
+                `<i>Queued for PAMM Execution Engine...</i>`
               );
               
               results.push({ rule: rule.id, action: action.side, symbol: action.symbol });
             } else {
-              console.log(`[Macro Scout] [Trace: ${traceId}] DRY RUN: Would execute`, action);
+              console.log(`[Macro Scout] [Trace: ${traceId}] DRY RUN: Would queue execution for`, action);
               results.push({ rule: rule.id, action: action.side, symbol: action.symbol, dry_run: true });
             }
           }
