@@ -2,13 +2,13 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2.108.2";
 import { fetchPaperBars, Bar } from "../../../packages/execution/index.ts";
 import { insertAuditLog } from "../../../packages/core/audit.ts";
-import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews, detectCentralBankEvent, computeMacroConfidenceBoost } from "../../../packages/core/news.ts";
+import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews, detectCentralBankEvent, detectUpcomingFedEvent, computeMacroConfidenceBoost, fetchETFFlowSentiment } from "../../../packages/core/news.ts";
 import { isAutoTradingEnabled, getTradingSymbols } from "../../../packages/core/settings.ts";
 import { isMarketOpen } from "../../../packages/core/market.ts";
 
 import { revalidateOpportunity } from "../../../packages/strategy/revalidation.ts";
 
-import { getContextSnapshot, LogicContext, isBullishEngulfing, isBearishRejection, computeHtfFibAlignment, calibrateProbability } from "../../../packages/strategy/indicators.ts";
+import { getContextSnapshot, LogicContext, isBullishEngulfing, isBearishRejection, computeHtfFibAlignment, calibrateProbability, computeLiquiditySweepScore } from "../../../packages/strategy/indicators.ts";
 import { validateGlobalSignal } from "../../../packages/strategy/agent-risk.ts";
 import OpenAI from "npm:openai";
 import { z } from "npm:zod";
@@ -617,13 +617,27 @@ serve(async (req) => {
       // Detect if a central bank event fired in the last 6 hours and expand
       // the INFLECTION_POINT_WAIT threshold from 0.5% → 1.5% accordingly.
       const cbStatus = detectCentralBankEvent(allEvents, 6);
-      const fomcModeActive = cbStatus.isActive;
+      let fomcModeActive = cbStatus.isActive;
+      let fomcPreEventActive = false;
       const inflectionThresholdPct = fomcModeActive ? 1.5 : 0.5;
       if (fomcModeActive) {
         const cbNames = cbStatus.events.map((e: any) => e.title).join(", ");
         console.log(`[FOMC Mode] Central bank event detected: ${cbNames}. Expanding INFLECTION threshold to 1.5%.`);
         sendEvent({ type: 'progress', message: `[POST-EVENT VOLATILITY MODE] Central bank event within 6H: ${cbNames}. INFLECTION threshold expanded to 1.5% for all symbols.` });
       }
+      // Pre-event: firing within next 90 minutes
+      const upcomingFed = detectUpcomingFedEvent(allEvents, 90);
+      if (upcomingFed.isPending && upcomingFed.event) {
+        fomcPreEventActive = true;
+        fomcModeActive = true;
+        console.log(`[FOMC Pre-Event] ${upcomingFed.event.title} firing in ${upcomingFed.minutesUntil} minutes.`);
+        sendEvent({ type: 'progress', message: `[PRE-EVENT MODE] ${upcomingFed.event.title} fires in ${upcomingFed.minutesUntil} min. AI confidence boosted. Size multiplier (1.5x) ACTIVE.` });
+      }
+      // Persist the FOMC window flag so agent-trade can apply 1.5x size multiplier
+      await supabase.from("system_settings").upsert(
+        { key: "fomc_window_active", value: fomcModeActive },
+        { onConflict: "key" }
+      ).catch((e: any) => console.warn("[FOMC] Failed to persist fomc_window_active:", e.message));
 
         // ==========================================
         // PHASE 1: ACTIVE SIGNAL VALIDATION SWEEP
@@ -1123,6 +1137,17 @@ serve(async (req) => {
             adjustedConfidence = Math.min(100, adjustedConfidence + newsBoost);
             confidenceAdjustments.push(`+${newsBoost} News-Macro Alignment`);
             sendEvent({ type: 'progress', message: `[${symbol}] News-Macro Boost: +${newsBoost} (macro event aligns with ${evaluation.recommended_direction} direction)` });
+          }
+
+          // === FEATURE 4B: FOMC WINDOW CONFIDENCE BOOST (+8) ===
+          // Extra boost when FOMC window is active, compounding with macro alignment.
+          if (fomcModeActive && evaluation.recommended_direction !== "NONE") {
+            const fomcBoost = computeMacroConfidenceBoost(symbol, evaluation.recommended_direction, allEvents, headlines);
+            if (fomcBoost > 0) {
+              adjustedConfidence = Math.min(100, adjustedConfidence + 8);
+              confidenceAdjustments.push(`+8 FOMC Window Alignment (${fomcPreEventActive ? "pre-event" : "post-event"})`);
+              sendEvent({ type: 'progress', message: `[${symbol}] FOMC Window Boost: +8 (${fomcPreEventActive ? "pre-event" : "post-event"} macro alignment)` });
+            }
           }
 
           // === FEATURE 3 (applied): HTF FIB ALIGNMENT BONUS (+5) ===
