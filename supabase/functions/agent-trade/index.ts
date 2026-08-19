@@ -971,7 +971,7 @@ serve(async (req) => {
         }
         
         const riskPerTrade = Number(user.portfolio_capital) * effectiveRiskPct * entryWeight * tierRiskModifier * confluenceMultiplier * drawdownModifier * fomcSizeMultiplier;
-        let volume = pointsAtRisk > 0 ? riskPerTrade / (pointsAtRisk * pointValueUsd) : 0.01;
+        let volume = pointsAtRisk > 0 ? riskPerTrade / (pointsAtRisk * pointValueUsd) : volumeStep;
         
         // --- HARD LOT CAP CIRCUIT BREAKER ---
         const MAX_LOT_CAP = 0.50;
