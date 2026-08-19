@@ -82,8 +82,8 @@ void OnDeinit(const int reason)
    Print("RaineBank VPS Bridge stopped.");
   }
 
-string TrackedSymbols[] = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "EURJPY", "GBPJPY", "XAUUSD", "XAGUSD", "BTCUSD", "UKOIL"};
-datetime lastBarTimes[11];
+string TrackedSymbols[] = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "EURJPY", "GBPJPY", "XAUUSD", "XAGUSD", "BTCUSD", "UKOIL", "NAS100"};
+datetime lastBarTimes[12];
 datetime lastHFTTime = 0;
 bool hftOpen = false;
 int rsiHandle = INVALID_HANDLE;
@@ -628,7 +628,7 @@ void PushMarketData()
               }
               
             // Push H1 and H4 Data for specific symbols
-            if (sym == "XAUUSD" || sym == "BTCUSD" || sym == "XAGUSD" || sym == "US30")
+            if (sym == "XAUUSD" || sym == "BTCUSD" || sym == "XAGUSD" || sym == "US30" || sym == "NAS100")
               {
                // H1
                MqlRates ratesH1[];

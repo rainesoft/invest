@@ -634,10 +634,11 @@ serve(async (req) => {
         sendEvent({ type: 'progress', message: `[PRE-EVENT MODE] ${upcomingFed.event.title} fires in ${upcomingFed.minutesUntil} min. AI confidence boosted. Size multiplier (1.5x) ACTIVE.` });
       }
       // Persist the FOMC window flag so agent-trade can apply 1.5x size multiplier
-      await supabase.from("system_settings").upsert(
-        { key: "fomc_window_active", value: fomcModeActive },
+      const { error: persistError } = await supabase.from("system_settings").upsert(
+        { key: "fomc_window_active", value: String(fomcModeActive) },
         { onConflict: "key" }
-      ).catch((e: any) => console.warn("[FOMC] Failed to persist fomc_window_active:", e.message));
+      );
+      if (persistError) console.warn("[FOMC] Failed to persist fomc_window_active:", persistError.message);
 
         // ==========================================
         // PHASE 1: ACTIVE SIGNAL VALIDATION SWEEP
@@ -775,8 +776,11 @@ serve(async (req) => {
           }));
         }
 
+      const chunkArray = <T>(arr: T[], size: number): T[][] => arr.length > 0 ? [arr.slice(0, size), ...chunkArray(arr.slice(size), size)] : [];
+      const symbolChunks = chunkArray(symbols, 3);
 
-      for (const symbol of symbols) {
+      for (const chunk of symbolChunks) {
+        await Promise.all(chunk.map(async (symbol) => {
         // --- LOG RESEARCH RUN ---
         await insertAuditLog(supabase, {
           actor_type: "SYSTEM",
@@ -789,7 +793,7 @@ serve(async (req) => {
           console.log(`[Market Hours] Skipping ${symbol} as market is currently closed.`);
           sendEvent({ type: 'progress', message: `[Market Hours] Skipping ${symbol}: Market Closed.` });
           rejections.push({ symbol, reason: "Market is currently closed", layer: "Market Hours" });
-          continue;
+          return;
         }
 
         // --- LAYER 0: MACRO BLACKOUT WINDOW ---
@@ -812,7 +816,7 @@ serve(async (req) => {
                reason: `Macro Blackout Window: Halting origination due to High-Impact USD event within ±30m (${evNames})`,
                layer: "Layer 0"
              });
-             continue; // Skip this symbol completely
+             return; // Skip this symbol completely
           }
         }
 
@@ -825,13 +829,13 @@ serve(async (req) => {
           } catch (err: any) {
             console.error(`[Data Error] [Trace: ${traceId}] ${symbol}: ${err.message}`);
             rejections.push({ symbol, reason: `Data fetch failed: ${err.message}`, layer: "Data" });
-            continue;
+            return;
           }
 
           if (bars.length < 100) {
             rejections.push({ symbol, reason: `Insufficient data (${bars.length} bars, need 100+)`, layer: "Data" });
             sendEvent({ type: "progress", message: `[${symbol}] Skipped: insufficient data` });
-            continue;
+            return;
           }
 
           sendEvent({ type: "progress", message: `[${symbol}] ${bars.length} bars loaded. Computing Fibonacci levels...` });
@@ -868,7 +872,7 @@ serve(async (req) => {
               payload_json: { symbol, reason: riskValidation.reason },
             });
             rejections.push({ symbol, reason: riskValidation.reason, layer: "Pre-AI Guard" });
-            continue;
+            return;
           }
 
           // Enrich with MTFA (weekly) if available
@@ -1118,7 +1122,7 @@ serve(async (req) => {
             console.error(`[AI Error] [Trace: ${traceId}] ${symbol}: ${err.message}`);
             rejections.push({ symbol, reason: `AI evaluation failed: ${err.message}`, layer: "AI" });
             sendEvent({ type: "progress", message: `[${symbol}] AI evaluation failed: ${err.message}` });
-            continue;
+            return;
           }
 
           const confidence = evaluation.confidence_score;
@@ -1294,7 +1298,7 @@ serve(async (req) => {
               trace_id: traceId,
             });
             rejections.push({ symbol, reason, layer: "Swing AI" });
-            continue;
+            return;
           }
 
           // === BACKFILL INVALIDATION PRICE IN MARKET CONTEXT ===
@@ -1371,7 +1375,7 @@ serve(async (req) => {
 
           if (!entry || !sl || !tp2) {
             rejections.push({ symbol, reason: "Missing entry, SL, or TP2", layer: "Execution Desk" });
-            continue;
+            return;
           }
 
           // Determine if we should use Market or Pending orders
@@ -1419,7 +1423,7 @@ serve(async (req) => {
               trace_id: traceId,
             });
             rejections.push({ symbol, reason: msg, layer: "Execution Desk" });
-            continue;
+            return;
           }
 
           const rrToTp2 = Math.abs(tp2 - entry) / Math.abs(entry - sl);
@@ -1451,7 +1455,7 @@ serve(async (req) => {
               trace_id: traceId,
             });
             rejections.push({ symbol, reason: msg, layer: "Execution Desk" });
-            continue;
+            return;
           }
 
           // === APPROVED — SAVE TO DB ===
@@ -1503,7 +1507,7 @@ serve(async (req) => {
           if (dbError) {
             console.error(`[DB Error] [Trace: ${traceId}] ${symbol}: ${dbError.message}`);
             rejections.push({ symbol, reason: dbError.message, layer: "Database" });
-            continue;
+            return;
           }
 
           console.log(`[Swing] [Trace: ${traceId}] APPROVED ${symbol} — ID: ${dbData.id} | ${tier} | R:R 1:${rrToTp2.toFixed(1)} to TP2`);
@@ -1551,6 +1555,7 @@ serve(async (req) => {
           console.error(`[Global Error] [Trace: ${traceId}] ${symbol}: ${symbolErr.message}`);
           rejections.push({ symbol, reason: symbolErr.message, layer: "System" });
         }
+        }));
       }
 
       // Note: pendingNewsId resolution is handled per-symbol inside the for-loop above.

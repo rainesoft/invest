@@ -92,10 +92,10 @@ const TradeEvaluationSchema = z.object({
   strategy_applied: z.enum(["PULLBACK", "MOMENTUM_CONTINUATION", "MEAN_REVERSION", "MOMENTUM_BREAKOUT", "NONE"]),
   execution_parameters: z.object({
     entry_type: z.enum(["Buy Limit", "Sell Limit", "Buy Stop", "Sell Stop", "Market", "NONE"]),
-    suggested_entry_price: z.number().nullable(),
+    suggested_entry_price: z.number().describe("The exact numeric price level to enter the trade. MUST be provided."),
     scaled_entries: z.array(z.object({ price: z.number(), weight: z.number() })).nullable().optional(),
-    suggested_stop_loss: z.number().nullable(),
-    suggested_take_profit: z.number().nullable()
+    suggested_stop_loss: z.number().describe("The exact numeric price level for the stop loss. MUST be provided."),
+    suggested_take_profit: z.number().describe("The exact numeric price level for the take profit. MUST be provided.")
   }),
   confidence_score: z.number(),
   institutional_rationale: z.object({
@@ -134,6 +134,7 @@ CRITICAL RULES:
 3. INVALIDATION: Set your suggested_stop_loss strictly on the opposite side of the Pivot. E.g., if you are SHORT below the pivot, the stop loss is just above the pivot.
 4. If indicators are completely conflicting (e.g., Price > Pivot but MACD deeply negative and price < MA200), invoke 'reject_trade' to stay flat.
 5. NO MEAN REVERSION AGAINST PIVOT: Do not buy a dip if it breaks below the pivot. A break below the pivot is a trend reversal, not a pullback.
+6. REQUIRED PARAMETERS: You MUST provide a numeric suggested_entry_price, suggested_stop_loss, and suggested_take_profit for ANY trade setup. Do not return nulls for these fields.
 
 Historical Memory:
 ${historicalMemory || "None"}
@@ -415,10 +416,11 @@ serve(async (req) => {
             sendEvent({ type: 'progress', message: `[PRE-EVENT MODE] ${upcoming.event.title} fires in ${upcoming.minutesUntil} min. AI confidence boosted for macro-aligned setups. Size multiplier (1.5x) ACTIVE.` });
           }
           // Persist the FOMC window flag to system_settings so agent-trade can read it
-          await supabase.from("system_settings").upsert(
-            { key: "fomc_window_active", value: fomcModeActive },
+          const { error: persistError } = await supabase.from("system_settings").upsert(
+            { key: "fomc_window_active", value: String(fomcModeActive) },
             { onConflict: "key" }
-          ).catch((e: any) => console.warn("[FOMC] Failed to persist fomc_window_active:", e.message));
+          );
+          if (persistError) console.warn("[FOMC] Failed to persist fomc_window_active:", persistError.message);
         }
 
         // ==========================================
