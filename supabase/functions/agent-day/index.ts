@@ -1255,38 +1255,7 @@ serve(async (req) => {
 
               // Execution is now entirely delegated to the exness-executor webhook, 
               // which automatically listens for INSERTs with status: 'APPROVED'.
-              // FALLBACK: In case the DB webhook fails, we manually invoke the trade agent
-              try {
-                await supabase.functions.invoke('agent-trade', {
-                  headers: { "x-webhook-secret": Deno.env.get("WEBHOOK_SECRET") || "FALLBACK_SECRET_123" },
-                  body: {
-                    type: "INSERT",
-                    table: "trade_opportunities",
-                    record: {
-                      id: data.id,
-                      symbol,
-                      side: dbSide,
-                      timeframe: timeframe.toLowerCase(),
-                      status: "APPROVED",
-                      entry_plan_json: {
-                        price: entry_price,
-                        order_type: order_type,
-                        scaled_entries: evaluation.execution_parameters?.scaled_entries || null
-                      },
-                      stop_plan_json: { stop: stop_loss, initial: stop_loss, atr: snapshot.atr_14 },
-                      take_profit_json: { tp: take_profit },
-                      risk_summary: `RSI ${snapshot.rsi_14}`,
-                      confidence: confidence_score,
-                      ai_summary: institutional_rationale,
-                      ai_risks: "Managed by AI Risk Officer",
-                      model_id: "agent-day",
-                      model_version: modelVersion,
-                    }
-                  }
-                });
-              } catch (e) {
-                console.error(`[Agent Trade] Fallback invocation failed for ${symbol}:`, e);
-              }
+
 
               results.push({ 
                 symbol, 

@@ -1515,35 +1515,6 @@ serve(async (req) => {
           // Clean up any active sniper watchlists for this symbol to prevent duplicate execution
           await supabase.from("trade_watchlists").update({ status: 'CANCELLED' }).eq('symbol', symbol).eq('status', 'WATCHING');
           
-          // FALLBACK: In case the DB webhook fails, we manually invoke the trade agent
-          if (!isManual) {
-            try {
-            await supabase.functions.invoke('agent-trade', {
-              headers: { "x-webhook-secret": Deno.env.get("WEBHOOK_SECRET") || "FALLBACK_SECRET_123" },
-              body: {
-                type: "INSERT",
-                table: "trade_opportunities",
-                record: {
-                  id: dbData.id,
-                  symbol,
-                  side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
-                  timeframe: timeframe.toLowerCase(),
-                  status: "APPROVED",
-                  entry_plan_json: { price: entry, order_type, scaled_entries: null },
-                  stop_plan_json: { stop: sl, initial: sl, atr: snapshot.atr_14 },
-                  take_profit_json: { tp: tp2, tp1, tp2_json: tp2, tp3 },
-                  risk_summary: `RSI ${snapshot.rsi_14} | ATR ${snapshot.atr_14}`,
-                  confidence,
-                  ai_summary: aiSummary,
-                  ai_risks: "Managed by agent-risk",
-                  trace_id: traceId,
-                }
-              }
-            });
-          } catch (e) {
-            console.error(`[Agent Trade] Fallback invocation failed for ${symbol}:`, e);
-          }
-        }
         sendEvent({
             type: "progress",
             message: `[${symbol}] ✅ SWING SIGNAL APPROVED — ${tier} | Entry: $${entry.toLocaleString()} | SL: $${sl.toLocaleString()} | TP2: $${tp2.toLocaleString()} | R:R 1:${rrToTp2.toFixed(1)}`,
