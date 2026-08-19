@@ -517,3 +517,72 @@ export function calibrateProbability(
 
   return rounded;
 }
+
+// ============================================================
+// LIQUIDITY SWEEP SCORING
+// Wraps detectLiquiditySweeps() boolean output into a named,
+// human-readable pattern label with HTF trend alignment context.
+// This gives the AI explicit, actionable narrative instead of
+// raw boolean flags which it may underweight or ignore.
+//
+// BSL_SWEEP (Buy-Side Liquidity Sweep): Price wicked ABOVE a
+//   bearish fractal (short squeeze trap), then closed back below.
+//   → Cleared weak shorts. HIGH-CONVICTION LONG signal.
+//
+// SSL_SWEEP (Sell-Side Liquidity Sweep): Price wicked BELOW a
+//   bullish fractal (long squeeze trap), then closed back above.
+//   → Cleared weak longs. HIGH-CONVICTION SHORT signal.
+// ============================================================
+export type LiquiditySweepPattern = "BSL_SWEEP" | "SSL_SWEEP" | null;
+
+export interface LiquiditySweepScore {
+  pattern: LiquiditySweepPattern;
+  htfAligned: boolean;
+  directive: string;
+}
+
+export function computeLiquiditySweepScore(
+  snapshot: LogicContext,
+  htfTrend?: "BULLISH" | "BEARISH" | "NEUTRAL" | string | null
+): LiquiditySweepScore {
+  const { liquidity_sweep_bullish, liquidity_sweep_bearish } = snapshot;
+  const trend = htfTrend?.toUpperCase() ?? "NEUTRAL";
+
+  if (liquidity_sweep_bearish) {
+    // Price wicked above bearish fractal resistance, then closed back below.
+    // Bearish fractals = prior swing highs = pools of resting buy stops.
+    // Clearing them indicates a short squeeze has been exhausted.
+    const htfAligned = trend === "BULLISH";
+    return {
+      pattern: "BSL_SWEEP",
+      htfAligned,
+      directive:
+        `[LIQUIDITY SWEEP DETECTED: BSL_SWEEP]\n` +
+        `Price wicked above a prior swing high (bearish fractal resistance), triggering a short squeeze cascade, then closed back below the level.\n` +
+        `Interpretation: Weak short positions have been cleared. Institutional buyers absorbing the liquidity.\n` +
+        `Directive: ${htfAligned
+          ? "HTF trend is BULLISH — this sweep CONFIRMS the macro direction. Treat any retest of the swept level as a HIGH-CONVICTION LONG entry."
+          : "HTF trend is not bullish — proceed with caution. The sweep is valid but requires additional confluence before entering LONG."}`,
+    };
+  }
+
+  if (liquidity_sweep_bullish) {
+    // Price wicked below a bullish fractal (prior swing low = resting sell stops),
+    // then closed back above. Weak longs have been stopped out.
+    const htfAligned = trend === "BEARISH";
+    return {
+      pattern: "SSL_SWEEP",
+      htfAligned,
+      directive:
+        `[LIQUIDITY SWEEP DETECTED: SSL_SWEEP]\n` +
+        `Price wicked below a prior swing low (bullish fractal support), triggering a long squeeze, then closed back above the level.\n` +
+        `Interpretation: Weak long positions have been stopped out. Institutions absorbing the sell-side liquidity.\n` +
+        `Directive: ${htfAligned
+          ? "HTF trend is BEARISH — this sweep CONFIRMS the macro direction. Treat any retest of the swept level as a HIGH-CONVICTION SHORT entry."
+          : "HTF trend is not bearish — proceed with caution. The sweep is valid but requires additional confluence before entering SHORT."}`,
+    };
+  }
+
+  return { pattern: null, htfAligned: false, directive: "" };
+}
+
