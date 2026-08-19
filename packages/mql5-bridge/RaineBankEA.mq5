@@ -626,6 +626,64 @@ void PushMarketData()
                if(resD1 == 200) Print("D1 Data successfully pushed to Supabase for ", sym);
                else Print("Failed to push D1 data for ", sym, ": HTTP ", resD1, " Body: ", CharArrayToString(resultD1));
               }
+              
+            // Push H1 and H4 Data for specific symbols
+            if (sym == "XAUUSD" || sym == "BTCUSD" || sym == "XAGUSD" || sym == "US30")
+              {
+               // H1
+               MqlRates ratesH1[];
+               ArraySetAsSeries(ratesH1, true);
+               if(CopyRates(sym, PERIOD_H1, 0, 300, ratesH1) > 0)
+                 {
+                  string jsonH1 = "{\"user_id\":\"" + InpUserID + "\",\"symbol\":\"" + sym + "\",\"timeframe\":\"1h\",\"bars\":[";
+                  for(int i=0; i<ArraySize(ratesH1); i++)
+                    {
+                     jsonH1 += "{\"t\":" + IntegerToString(ratesH1[i].time) + 
+                             ",\"o\":" + DoubleToString(ratesH1[i].open, 5) + 
+                             ",\"h\":" + DoubleToString(ratesH1[i].high, 5) + 
+                             ",\"l\":" + DoubleToString(ratesH1[i].low, 5) + 
+                             ",\"c\":" + DoubleToString(ratesH1[i].close, 5) + 
+                             ",\"v\":" + IntegerToString(ratesH1[i].tick_volume) + "}";
+                     if(i < ArraySize(ratesH1)-1) jsonH1 += ",";
+                    }
+                  jsonH1 += "]}";
+                  
+                  char postH1[], resultH1[];
+                  StringToCharArray(jsonH1, postH1);
+                  ArrayResize(postH1, ArraySize(postH1)-1);
+                  
+                  int resH1 = WebRequest("POST", url, req_headers, 5000, postH1, resultH1, res_headers);
+                  if(resH1 == 200) Print("H1 Data successfully pushed to Supabase for ", sym);
+                  else Print("Failed to push H1 data for ", sym, ": HTTP ", resH1, " Body: ", CharArrayToString(resultH1));
+                 }
+               
+               // H4
+               MqlRates ratesH4[];
+               ArraySetAsSeries(ratesH4, true);
+               if(CopyRates(sym, PERIOD_H4, 0, 300, ratesH4) > 0)
+                 {
+                  string jsonH4 = "{\"user_id\":\"" + InpUserID + "\",\"symbol\":\"" + sym + "\",\"timeframe\":\"4h\",\"bars\":[";
+                  for(int i=0; i<ArraySize(ratesH4); i++)
+                    {
+                     jsonH4 += "{\"t\":" + IntegerToString(ratesH4[i].time) + 
+                             ",\"o\":" + DoubleToString(ratesH4[i].open, 5) + 
+                             ",\"h\":" + DoubleToString(ratesH4[i].high, 5) + 
+                             ",\"l\":" + DoubleToString(ratesH4[i].low, 5) + 
+                             ",\"c\":" + DoubleToString(ratesH4[i].close, 5) + 
+                             ",\"v\":" + IntegerToString(ratesH4[i].tick_volume) + "}";
+                     if(i < ArraySize(ratesH4)-1) jsonH4 += ",";
+                    }
+                  jsonH4 += "]}";
+                  
+                  char postH4[], resultH4[];
+                  StringToCharArray(jsonH4, postH4);
+                  ArrayResize(postH4, ArraySize(postH4)-1);
+                  
+                  int resH4 = WebRequest("POST", url, req_headers, 5000, postH4, resultH4, res_headers);
+                  if(resH4 == 200) Print("H4 Data successfully pushed to Supabase for ", sym);
+                  else Print("Failed to push H4 data for ", sym, ": HTTP ", resH4, " Body: ", CharArrayToString(resultH4));
+                 }
+              }
            }
          lastBarTimes[s] = currentBarTime;
         }
