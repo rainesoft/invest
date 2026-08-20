@@ -1293,7 +1293,7 @@ serve(async (req) => {
             }
 
             sendEvent({ type: "progress", message: `[${symbol}] No trade: ${reason.slice(0, 120)}` });
-            await supabase.from("trade_opportunities").insert({
+            const rejectedObj = {
               symbol,
               side: "LONG", // placeholder — no trade
               timeframe: timeframe.toLowerCase(),
@@ -1302,7 +1302,12 @@ serve(async (req) => {
               ai_risks: `Rejected by Swing AI: ${reason.slice(0, 200)}`,
               confidence,
               trace_id: traceId,
-            });
+            };
+            if (pendingNewsId) {
+              await supabase.from("trade_opportunities").update(rejectedObj).eq("id", pendingNewsId);
+            } else {
+              await supabase.from("trade_opportunities").insert(rejectedObj);
+            }
             rejections.push({ symbol, reason, layer: "Swing AI" });
             return;
           }
@@ -1338,42 +1343,9 @@ serve(async (req) => {
           // === LAYER C: STRUCTURAL RISK VALIDATION ===
           let sl = aiSl;
 
-          // --- OVERRIDE: DYNAMIC ATR MINIMUM (Respects wider AI structural stops) ---
-          // === IMPROVEMENT #4: ADAPTIVE ATR COMPRESSION FOR CHOP MARKETS ===
-          // In a ranging market (ADX < 20), the default minimum ATR multiplier often produces
-          // SL distances that are too wide relative to TP targets, causing the R:R check to fail
-          // on otherwise valid Fib setups. In CHOP, institutional entries use tighter structural
-          // stops anchored directly behind the nearest Order Block — not a full ATR width away.
-          // We halve the minimum ATR floor when ADX signals a ranging, directionless environment.
-          if (atr > 0) {
-            const preciousMetalsAndCrypto = ['XAUUSD', 'XAGUSD', 'BTCUSD'];
-            const adx = (snapshot as any).adx_14 ?? 25;
-            const isChopMarket = adx < 20;
-
-            // CHOP: halve the minimum multiplier floor to compress SL and improve R:R
-            // TRENDING: use wider multipliers to avoid being stopped out by normal volatility
-            let minMultiplier: number;
-            if (preciousMetalsAndCrypto.includes(symbol)) {
-              minMultiplier = isChopMarket ? 1.5 : 3.0;
-            } else {
-              minMultiplier = isChopMarket ? 1.0 : 2.0;
-            }
-
-            if (isChopMarket) {
-              sendEvent({ type: 'progress', message: `[${symbol}] CHOP ATR Compression: ADX=${adx.toFixed(1)} < 20 → Min SL floor reduced to ${minMultiplier}x ATR (was ${preciousMetalsAndCrypto.includes(symbol) ? '3.0' : '2.0'}x). Tightening stop to Fib/OB anchor.` });
-              console.log(`[CHOP ATR Compression] [Trace: ${traceId}] ${symbol}: ADX=${adx.toFixed(1)}, minMultiplier reduced to ${minMultiplier}x`);
-            }
-
-            if (atrSlMultiplier < minMultiplier) {
-               console.log(`[Execution Desk] Widening tight AI swing stop loss to minimum ${minMultiplier}x ATR for ${symbol}`);
-               const minAtrDistance = atr * minMultiplier;
-               if (evaluation.recommended_direction === "LONG") {
-                   sl = Number((entry - minAtrDistance).toFixed(5));
-               } else {
-                   sl = Number((entry + minAtrDistance).toFixed(5));
-               }
-            }
-          }
+          // --- TRUST AI STRUCTURAL STOPS (No Dynamic ATR Override) ---
+          // We explicitly do NOT mechanically widen the stop loss here, as doing so artificially inflates risk
+          // and corrupts the mathematical R:R calculation, causing valid asymmetric setups to be rejected.
           evaluation.execution_parameters.suggested_stop_loss = sl;
           let tp1 = evaluation.execution_parameters.take_profit_1;
           let tp2 = evaluation.execution_parameters.take_profit_2;
@@ -1415,7 +1387,7 @@ serve(async (req) => {
           if (riskPct > maxRiskPct) {
             const msg = `Stop loss ${(riskPct * 100).toFixed(2)}% exceeds swing maximum of ${(maxRiskPct * 100).toFixed(0)}%`;
             sendEvent({ type: "progress", message: `[${symbol}] REJECTED: ${msg}` });
-            await supabase.from("trade_opportunities").insert({
+            const rejectedObj = {
               symbol,
               side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
               timeframe: timeframe.toLowerCase(),
@@ -1427,7 +1399,12 @@ serve(async (req) => {
               ai_risks: msg,
               confidence: adjustedConfidence,
               trace_id: traceId,
-            });
+            };
+            if (pendingNewsId) {
+              await supabase.from("trade_opportunities").update(rejectedObj).eq("id", pendingNewsId);
+            } else {
+              await supabase.from("trade_opportunities").insert(rejectedObj);
+            }
             rejections.push({ symbol, reason: msg, layer: "Execution Desk" });
             return;
           }
@@ -1447,7 +1424,7 @@ serve(async (req) => {
           if (rrToTp2 < requiredRR - 0.1) {
             const msg = `R:R to TP2 is 1:${rrToTp2.toFixed(2)}, below required 1:${requiredRR} for ${tier}`;
             sendEvent({ type: "progress", message: `[${symbol}] REJECTED: ${msg}` });
-            await supabase.from("trade_opportunities").insert({
+            const rejectedObj = {
               symbol,
               side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
               timeframe: timeframe.toLowerCase(),
@@ -1459,7 +1436,12 @@ serve(async (req) => {
               ai_risks: `Rejected by Swing Desk: ${msg}`,
               confidence: adjustedConfidence,
               trace_id: traceId,
-            });
+            };
+            if (pendingNewsId) {
+              await supabase.from("trade_opportunities").update(rejectedObj).eq("id", pendingNewsId);
+            } else {
+              await supabase.from("trade_opportunities").insert(rejectedObj);
+            }
             rejections.push({ symbol, reason: msg, layer: "Execution Desk" });
             return;
           }
@@ -1478,9 +1460,7 @@ serve(async (req) => {
             `R:R to TP2: 1:${rrToTp2.toFixed(1)} | Fib Swing: $${fib.swing_low.toLocaleString()} → $${fib.swing_high.toLocaleString()}`,
           ].filter(Boolean).join(" | ");
 
-          const { data: dbData, error: dbError } = await supabase
-            .from("trade_opportunities")
-            .insert({
+          const approvedObj = {
               symbol,
               side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
               timeframe: timeframe.toLowerCase(),
@@ -1506,9 +1486,18 @@ serve(async (req) => {
               ai_summary: aiSummary,
               ai_risks: "Managed by agent-risk",
               trace_id: traceId,
-            })
-            .select("id")
-            .single();
+            };
+
+          let dbData, dbError;
+          if (pendingNewsId) {
+            const res = await supabase.from("trade_opportunities").update(approvedObj).eq("id", pendingNewsId).select("id").single();
+            dbData = res.data;
+            dbError = res.error;
+          } else {
+            const res = await supabase.from("trade_opportunities").insert(approvedObj).select("id").single();
+            dbData = res.data;
+            dbError = res.error;
+          }
 
           if (dbError) {
             console.error(`[DB Error] [Trace: ${traceId}] ${symbol}: ${dbError.message}`);
