@@ -378,9 +378,6 @@ serve(async (req) => {
              } else if (isOppositeMacro && trade.trade_type === "SWING") {
                  shouldInvalidate = true;
                  reason = "AI Macro Trend Reversal (Opposing S-Tier/A-Tier Setup Detected)";
-             } else if (isCTier && trade.trade_type !== "RUNNER" && trade.trade_type !== "SWING") {
-                 shouldInvalidate = true;
-                 reason = "AI Momentum Invalidation (C-Tier / No Setup Detected)";
              }
              
              if (shouldInvalidate) {
