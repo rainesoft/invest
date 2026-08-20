@@ -130,14 +130,15 @@ CRITICAL RULES:
    - STEP 3: Ensure Indicator Confluence. If Regime is BEARISH, ensure MACD is negative and price is below MA 50 before shorting. If Regime is BULLISH, ensure MACD is positive and price is above MA 50 before longing.
 
 1. PIVOT DIRECTIONAL BIAS: You are trading the 30-minute Intraday timeframe. You MUST align your direction with the Pivot Regime. Do NOT force a LONG trade if the price is below the Daily Pivot (htf_pivot), regardless of the 1D macro trend. If price breaks below the Pivot, it is a SHORT setup.
-2. TARGETS: If originating a LONG trade, set take_profit_1 to Resistance 1 (htf_resistance[0]) and take_profit_2 to Resistance 2. If originating a SHORT trade, set take_profit_1 to Support 1 (htf_support[0]) and take_profit_2 to Support 2.
-3. INVALIDATION: Set your suggested_stop_loss strictly on the opposite side of the Pivot. E.g., if you are SHORT below the pivot, the stop loss is just above the pivot.
+2. TARGETS (ASYMMETRIC RISK): If originating a LONG trade, you MUST target the second liquidity pool (Resistance 2) as your primary suggested_take_profit to ensure high R:R. If originating a SHORT trade, target Support 2 as your primary take_profit.
+3. INVALIDATION (TIGHT STOPS): Do NOT use a wide HTF moving average or loose pivot for your stop loss. You MUST tuck your suggested_stop_loss strictly and tightly behind the most immediate M5/M15 structural pivot or order block to aggressively maximize Risk:Reward (R:R). Your RR MUST be > 1.75.
 4. If indicators are completely conflicting (e.g., Price > Pivot but MACD deeply negative and price < MA200), invoke 'reject_trade' to stay flat.
 5. NO MEAN REVERSION AGAINST PIVOT: Do not buy a dip if it breaks below the pivot. A break below the pivot is a trend reversal, not a pullback.
 6. REQUIRED PARAMETERS: You MUST provide a numeric suggested_entry_price, suggested_stop_loss, and suggested_take_profit for ANY trade setup. Do not return nulls for these fields.
 7. LIMIT ORDERS FOR BETTER ENTRIES: If the price is hovering mid-range between the Pivot and Support/Resistance, do not reject the setup. Instead, issue a BUY LIMIT or SELL LIMIT at the Pivot to catch the wick.
 8. HIGH-LEVERAGE ASSET STOP LOSSES: For high-leverage assets like Indices (US30, NAS100) and Metals (XAGUSD), you MUST tuck your Stop Loss extremely tightly behind the Pivot or nearest Order Block to avoid triggering the 10% account blowout circuit breaker at the minimum lot size.
 9. MEAN REVERSION IN CHOP: If the market is ranging/choppy (low ADX), you are authorized to use a MEAN_REVERSION strategy. Buy near Support and Sell near Resistance rather than waiting for a trend breakout.
+10. PROXIMITY RULES: Do not reject a trade for being 'too close' to resistance/support unless the distance is < 0.1% for Forex pairs, or < 0.015% for Indices (US30, NAS100) and Metals.
 
 Historical Memory:
 ${historicalMemory || "None"}
@@ -227,6 +228,8 @@ ${JSON.stringify(snapshot, null, 2)}`,
     const mathProof = args.rejection_math_proof ? `\n[Math Proof]: ${args.rejection_math_proof}` : "";
     return {
       recommended_direction: "NONE",
+      market_structure: "NONE",
+      strategy_applied: "NONE",
       thought_process: args.thought_process || args.reason || args.rationale || JSON.stringify(args),
       institutional_rationale: { directional_bias: args.reason + mathProof },
       confidence_score: 0
@@ -965,25 +968,11 @@ serve(async (req) => {
             
             let entry_price = Number((evaluation.execution_parameters?.suggested_entry_price || snapshot.current_price).toFixed(3));
             let stop_loss = Number((evaluation.execution_parameters?.suggested_stop_loss || (dbSide === "LONG" ? snapshot.safe_long_stop_loss : snapshot.safe_short_stop_loss)).toFixed(3));
+            // --- TRUST AI STRUCTURAL STOPS (No Dynamic ATR Override) ---
+            // The AI is trained to tuck stops tightly behind structural order blocks to achieve > 1.75 R:R.
+            // We explicitly do NOT mechanically widen the stop loss here, as doing so artificially inflates risk
+            // and corrupts the mathematical R:R calculation, causing valid asymmetric setups to be rejected.
             
-            // --- OVERRIDE: DYNAMIC ATR MINIMUM (Respects wider AI structural stops) ---
-            const atr = snapshot.atr_14 || 0;
-            if (atr > 0) {
-              const preciousMetalsAndCrypto = ['XAUUSD', 'XAGUSD', 'BTCUSD'];
-              const atrMultiplier = preciousMetalsAndCrypto.includes(symbol) ? 3.0 : 2.0;
-              const minAtrDistance = atr * atrMultiplier;
-              const currentDistance = Math.abs(entry_price - stop_loss);
-              
-              // Only widen the stop loss if the AI suggested one is too tight
-              if (currentDistance < minAtrDistance) {
-                 console.log(`[Execution Desk] Widening tight AI stop loss to minimum ${atrMultiplier}x ATR for ${symbol}`);
-                 if (dbSide === "LONG") {
-                   stop_loss = Number((entry_price - minAtrDistance).toFixed(3));
-                 } else {
-                   stop_loss = Number((entry_price + minAtrDistance).toFixed(3));
-                 }
-              }
-            }
             let raw_confidence = evaluation.confidence_score || 50;
             const confidence_score = raw_confidence <= 1.0 ? raw_confidence * 100 : raw_confidence;
             let tier = "C-Tier";
