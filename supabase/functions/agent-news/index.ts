@@ -469,6 +469,7 @@ serve(async (req) => {
 Analyze this news headline and return ONLY a JSON object.
 Format: { "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL", "confidence": 0-100, "symbol": "BTCUSD" | "NONE", "requires_verification": boolean }
 If the news is ambiguous, a rumor, or confidence is below 85, set requires_verification to true.
+CRITICAL RULE: If the headline is a generic homepage index title (e.g. "Bitcoin News Today", "Latest Updates", "Live News"), you MUST set the sentiment to NEUTRAL, confidence to 0, and symbol to NONE. Only process specific, actionable macroeconomic catalysts.
 Headline: "${title}"`;
 
           const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -531,7 +532,8 @@ Web Search Context:
 ${tavilyContext}
 
 Based on this additional context, provide a final evaluation. Return ONLY a JSON object.
-Format: { "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL", "confidence": 0-100, "symbol": "BTCUSD" | "NONE" }`;
+Format: { "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL", "confidence": 0-100, "symbol": "BTCUSD" | "NONE" }
+CRITICAL RULE: If the headline and context refer to a generic homepage index (e.g. "Bitcoin News Today", "Live Updates") without a specific underlying catalyst, you MUST set the sentiment to NEUTRAL, confidence to 0, and symbol to NONE.`;
 
                  const verifyRes = await fetch("https://api.openai.com/v1/chat/completions", {
                     method: "POST",
