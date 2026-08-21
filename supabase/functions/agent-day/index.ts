@@ -131,14 +131,15 @@ CRITICAL RULES:
 
 1. PIVOT DIRECTIONAL BIAS: You are trading the 30-minute Intraday timeframe. You MUST align your direction with the Pivot Regime. Do NOT force a LONG trade if the price is below the Daily Pivot (htf_pivot), regardless of the 1D macro trend. If price breaks below the Pivot, it is a SHORT setup.
 2. TARGETS (ASYMMETRIC RISK): If originating a LONG trade, you MUST target the second liquidity pool (Resistance 2) as your primary suggested_take_profit to ensure high R:R. If originating a SHORT trade, target Support 2 as your primary take_profit.
-3. INVALIDATION (TIGHT STOPS): Do NOT use a wide HTF moving average or loose pivot for your stop loss. You MUST tuck your suggested_stop_loss strictly and tightly behind the most immediate M5/M15 structural pivot or order block to aggressively maximize Risk:Reward (R:R). Your RR MUST be > 1.75.
+3. INVALIDATION (SAFE STOPS): Your stop loss MUST be placed safely outside the ATR buffer and behind major HTF structural pivots. Do NOT place overly tight stops just to maximize R:R. A safe stop with a 1.5 R:R is far superior to a tight stop that gets hunted.
 4. If indicators are completely conflicting (e.g., Price > Pivot but MACD deeply negative and price < MA200), invoke 'reject_trade' to stay flat.
 5. NO MEAN REVERSION AGAINST PIVOT: Do not buy a dip if it breaks below the pivot. A break below the pivot is a trend reversal, not a pullback.
 6. REQUIRED PARAMETERS: You MUST provide a numeric suggested_entry_price, suggested_stop_loss, and suggested_take_profit for ANY trade setup. Do not return nulls for these fields.
 7. LIMIT ORDERS FOR BETTER ENTRIES: If the price is hovering mid-range between the Pivot and Support/Resistance, do not reject the setup. Instead, issue a BUY LIMIT or SELL LIMIT at the Pivot to catch the wick.
-8. HIGH-LEVERAGE ASSET STOP LOSSES: For high-leverage assets like Indices (US30, NAS100) and Metals (XAGUSD), you MUST tuck your Stop Loss extremely tightly behind the Pivot or nearest Order Block to avoid triggering the 10% account blowout circuit breaker at the minimum lot size.
-9. MEAN REVERSION IN CHOP: If the market is ranging/choppy (low ADX), you are authorized to use a MEAN_REVERSION strategy. Buy near Support and Sell near Resistance rather than waiting for a trend breakout.
+8. HIGH-LEVERAGE ASSETS (VOLATILITY): Indices (US30, NAS100) and Metals (XAGUSD) have massive volatility wicks. You MUST use wider structural stops for these assets to survive normal market noise. Do not use tight stops.
+9. MEAN REVERSION STRICT GUARD: You are ONLY authorized to use a MEAN_REVERSION strategy if ADX < 25 (Choppy/Ranging). If ADX > 25, the market has strong momentum—DO NOT attempt mean reversion against strong momentum, as you will be run over.
 10. PROXIMITY RULES: Do not reject a trade for being 'too close' to resistance/support unless the distance is < 0.1% for Forex pairs, or < 0.015% for Indices (US30, NAS100) and Metals.
+11. NO COUNTER-TREND HEROICS: Do not attempt to catch "short-term retracements" against the dominant macro trend. If the HTF Trend is BEARISH, you may ONLY look for SHORT setups. If BULLISH, ONLY look for LONG setups.
 
 Historical Memory:
 ${historicalMemory || "None"}
@@ -599,7 +600,7 @@ serve(async (req) => {
               actor_type: "SYSTEM",
               action: "RESEARCH_RUN",
               entity_type: "research",
-              payload_json: { symbol, timeframe, model_id: modelId, model_version: modelVersion },
+              payload_json: { symbol, timeframe, agent: "agent-day", model_id: modelId, model_version: modelVersion },
             });
 
             // --- LAYER 0: MACRO BLACKOUT WINDOW ---
@@ -675,6 +676,7 @@ serve(async (req) => {
             let htf_trend: 'BULLISH' | 'BEARISH' | 'CHOP' = 'CHOP';
             let htf_support: number[] = [];
             let htf_resistance: number[] = [];
+            let htf_pivot: number | null = null;
             
             let mtfa_trend: 'BULLISH' | 'BEARISH' | 'CHOP' | undefined;
             let mtfa_ema_50: number | null = null;
@@ -698,7 +700,7 @@ serve(async (req) => {
                   const pivots = calculatePivotPoints(lastBar.h, lastBar.l, lastBar.c);
                   htf_support = pivots.support;
                   htf_resistance = pivots.resistance;
-                  rawSnapshot.htf_pivot = pivots.pivot;
+                  htf_pivot = pivots.pivot;
                 }
                 
                 // Fetch MTFA (1H or 4H) for confluence
@@ -729,6 +731,7 @@ serve(async (req) => {
               bars.map((b) => b.l),
               bars.map((b) => b.c)
             );
+            if (htf_pivot) rawSnapshot.htf_pivot = htf_pivot;
             rawSnapshot.htf_trend = htf_trend;
             rawSnapshot.mtfa_trend = mtfa_trend;
             rawSnapshot.mtfa_ema_50 = mtfa_ema_50;
@@ -1145,9 +1148,11 @@ serve(async (req) => {
             let deskRequiredRR = 1.5;
             if (symbol === 'XAGUSD' || symbol === 'UKOIL') {
               deskRequiredRR = 1.0; // Lower threshold due to high volatility and wider stops
+            } else if (symbol === 'BTCUSD' || symbol === 'US30' || symbol === 'NAS100') {
+              deskRequiredRR = 1.25; // Indices/Crypto have wider swings, need wider stops
             } else {
-              if (confidence_score >= 90) deskRequiredRR = 2.0;
-              else if (confidence_score >= 80) deskRequiredRR = 1.75;
+              if (confidence_score >= 90) deskRequiredRR = 1.75;
+              else if (confidence_score >= 80) deskRequiredRR = 1.5;
             }
 
             // --- Regime Enforcement ---
