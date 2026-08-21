@@ -58,15 +58,63 @@ serve(async (req) => {
         return new Response("No active trades found for this signal. Nothing to eject.", { status: 200 });
       }
       console.log(`🚨 [Auto-Eject] AI downgraded signal ${signal.symbol}. ${openTrades.length} open trades found.`);
-      const tgMessage = `⚠️ <b>AI INVALIDATION ALERT (${signal.symbol})</b> ⚠️\n\nThe AI has dynamically downgraded and REJECTED an active signal.\n\n<i>${signal.ai_risks || "AI invalidated the setup."}</i>\n\n<b>${openTrades.length} open PAMM trades are tied to this setup!</b>\n\n⚠️ <i>Manual Assessment Required:</i> Administrator must log in to assess/close these open positions.`;
+      
+      const { data: vpsSettings } = await supabase.from("user_risk_settings").select("vps_last_heartbeat").eq("is_master_account", true).single();
+      const lastHeartbeat = vpsSettings?.vps_last_heartbeat ? new Date(vpsSettings.vps_last_heartbeat).getTime() : 0;
+      const isVpsAlive = (Date.now() - lastHeartbeat) < 60000;
+      
+      const META_TOKEN = Deno.env.get("META_API_TOKEN") || "";
+      const META_ACCOUNT = Deno.env.get("META_API_ACCOUNT_ID") || "";
+      const META_BASE_URL = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.london.agiliumtrade.ai";
+
+      if (!isVpsAlive && (!META_TOKEN || !META_ACCOUNT)) {
+        const err = "VPS is dead and missing META_API credentials. Cannot execute auto-eject.";
+        console.error(`[Auto-Eject] ${err}`);
+        await notifyTelegram(`🔴 <b>Auto-Eject FAILED</b>\n\n${err}`);
+        return new Response(err, { status: 500 });
+      }
+
+      let closedCount = 0;
+      let errorCount = 0;
+
+      for (const trade of openTrades) {
+         if (!trade.meta_api_order_id) continue;
+         try {
+            if (isVpsAlive) {
+               await supabase.from("user_trades").update({ status: "VPS_CLOSE", error_message: "AI Auto-Eject Triggered" }).eq("meta_api_order_id", trade.meta_api_order_id);
+               closedCount++;
+            } else {
+               const closeRes = await fetch(`${META_BASE_URL}/users/current/accounts/${META_ACCOUNT}/trade`, {
+                 method: "POST",
+                 headers: { "auth-token": META_TOKEN, "Content-Type": "application/json" },
+                 body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: trade.meta_api_order_id })
+               });
+               if (closeRes.ok) {
+                 await supabase.from("user_trades").update({ status: "AUTO_CLOSED", error_message: "AI Auto-Eject (MetaAPI)" }).eq("meta_api_order_id", trade.meta_api_order_id);
+                 closedCount++;
+               } else {
+                 errorCount++;
+               }
+            }
+         } catch (e) {
+            errorCount++;
+         }
+      }
+
+      const tgMessage = `⚠️ <b>AI AUTO-EJECT TRIGGERED (${signal.symbol})</b> ⚠️\n\nThe AI has dynamically downgraded and REJECTED an active signal.\n\n<i>${signal.ai_risks || "AI invalidated the setup."}</i>\n\n<b>Action Taken:</b> Automatically liquidated ${closedCount} open trades via ${isVpsAlive ? "MT5 VPS" : "MetaAPI"} to flatten exposure. ${errorCount > 0 ? `(${errorCount} errors during execution)` : ""}`;
+      
       await notifyTelegram(tgMessage);
-      await insertAuditLog(supabase, { actor_type: "SYSTEM", action: "AUTO_EJECT_ALERT", entity_type: "research", entity_id: signal.id, payload_json: { reason: "Signal rejected by agent-risk. Manual intervention requested." } });
-      return new Response("Auto-eject alert sent.", { status: 200 });
+      await insertAuditLog(supabase, { actor_type: "SYSTEM", action: "AUTO_EJECT_EXECUTED", entity_type: "research", entity_id: signal.id, payload_json: { reason: "Signal rejected by agent-risk. Trades automatically liquidated.", closedCount, errorCount, route: isVpsAlive ? "VPS" : "MetaAPI" } });
+      return new Response(`Auto-eject executed via ${isVpsAlive ? "VPS" : "MetaAPI"}. ${closedCount} trades closed.`, { status: 200 });
     }
 
     // --- 3. WEEKEND / END-OF-SESSION ROLL-OVER DEFENSE ---
     if (payload.action === "WEEKEND_DEFENSE") {
       console.log("🛡️ [Weekend Defense] Executing Roll-over sweep...");
+
+      const { data: vpsSettings } = await supabase.from("user_risk_settings").select("vps_last_heartbeat").eq("is_master_account", true).single();
+      const lastHeartbeat = vpsSettings?.vps_last_heartbeat ? new Date(vpsSettings.vps_last_heartbeat).getTime() : 0;
+      const isVpsAlive = (Date.now() - lastHeartbeat) < 60000;
 
       const META_TOKEN = Deno.env.get("META_API_TOKEN") || "";
       const META_ACCOUNT = Deno.env.get("META_API_ACCOUNT_ID") || "";
@@ -75,8 +123,8 @@ serve(async (req) => {
       // DRY_RUN defaults to FALSE (live). Set WEEKEND_DEFENSE_DRY_RUN=true only for testing.
       const DRY_RUN = Deno.env.get("WEEKEND_DEFENSE_DRY_RUN") === "true";
 
-      if (!META_TOKEN || !META_ACCOUNT) {
-        const err = "Missing META_API_TOKEN or META_API_ACCOUNT_ID. Cannot execute weekend defense.";
+      if (!isVpsAlive && (!META_TOKEN || !META_ACCOUNT)) {
+        const err = "VPS is dead and missing META_API credentials. Cannot execute weekend defense.";
         console.error(`[Weekend Defense] ${err}`);
         await notifyTelegram(`🔴 <b>Weekend Defense FAILED</b>\n\n${err}`);
         return new Response(err, { status: 500 });
@@ -101,7 +149,7 @@ serve(async (req) => {
       });
 
       const uniqueOrders = [...new Set(vulnerableTrades.map(t => t.meta_api_order_id))];
-      console.log(`[Weekend Defense] Found ${uniqueOrders.length} unique master orders to evaluate (exempting 24/7 crypto).`);
+      console.log(`[Weekend Defense] Found ${uniqueOrders.length} unique master orders to evaluate (exempting 24/7 crypto). Routing via ${isVpsAlive ? "VPS" : "MetaAPI"}.`);
 
       let closedCount = 0, movedToBeCount = 0, errorCount = 0;
       const closedSymbols: string[] = [];
@@ -110,41 +158,57 @@ serve(async (req) => {
       for (const orderId of uniqueOrders) {
         try {
           const posUrl = `${META_BASE_URL}/users/current/accounts/${META_ACCOUNT}/positions/${orderId}`;
-          const posRes = await fetch(posUrl, { headers: { "auth-token": META_TOKEN } });
-
-          if (!posRes.ok) {
-            console.log(`[Weekend Defense] Position ${orderId} not found on broker. Marking closed in DB.`);
-            await supabase.from("user_trades").update({ status: "CLOSED" }).eq("meta_api_order_id", orderId).eq("status", "OPEN");
-            continue;
+          let position = null;
+          
+          if (!isVpsAlive) {
+             const posRes = await fetch(posUrl, { headers: { "auth-token": META_TOKEN } });
+             if (!posRes.ok) {
+               console.log(`[Weekend Defense] Position ${orderId} not found on broker. Marking closed in DB.`);
+               await supabase.from("user_trades").update({ status: "CLOSED" }).eq("meta_api_order_id", orderId).eq("status", "OPEN");
+               continue;
+             }
+             position = await posRes.json();
+             if (position.error) { errorCount++; continue; }
+          } else {
+             // Mock position data if relying strictly on DB via VPS
+             const tradeData = openTrades.find(t => t.meta_api_order_id === orderId);
+             if (!tradeData) continue;
+             // If we're relying on VPS, we might not have live profit, but we can attempt to close.
+             // We'll close all vulnerable trades if via VPS, since determining BE requires live price which is best handled by MT5 or MetaAPI.
+             // For simplicity, if VPS is alive, we just fire VPS_CLOSE for everything as it's the safest gap protection.
           }
 
-          const position = await posRes.json();
-          if (position.error) { errorCount++; continue; }
+          const profit = position ? (Number(position.profit) || 0) : 0;
+          const openPrice = position ? Number(position.openPrice) : 0;
+          const symbol = position ? position.symbol : openTrades.find(t => t.meta_api_order_id === orderId)?.symbol;
 
-          const profit = Number(position.profit) || 0;
-          const openPrice = Number(position.openPrice);
-          const symbol = position.symbol || openTrades.find(t => t.meta_api_order_id === orderId)?.symbol;
-
-          if (profit <= 0) {
-            // LOSING → CLOSE AT MARKET
-            console.log(`[Weekend Defense] ${symbol} (${orderId}) drawdown $${profit.toFixed(2)}. CLOSING.`);
+          // If VPS is alive, we just close everything vulnerable. 
+          // (Calculating live BE requires pulling tick data which we avoid to keep it zero-latency).
+          if (isVpsAlive || profit <= 0) {
+            console.log(`[Weekend Defense] ${symbol} (${orderId}) CLOSING via ${isVpsAlive ? "VPS" : "MetaAPI"}.`);
             if (!DRY_RUN) {
-              const closeRes = await fetch(`${META_BASE_URL}/users/current/accounts/${META_ACCOUNT}/trade`, {
-                method: "POST",
-                headers: { "auth-token": META_TOKEN, "Content-Type": "application/json" },
-                body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: orderId })
-              });
-              if (closeRes.ok) {
-                await supabase.from("user_trades").update({ status: "AUTO_CLOSED" }).eq("meta_api_order_id", orderId);
-                closedSymbols.push(`${symbol} ($${profit.toFixed(2)})`);
-                closedCount++;
-              } else { errorCount++; }
+              if (isVpsAlive) {
+                 await supabase.from("user_trades").update({ status: "VPS_CLOSE", error_message: "Weekend Defense Liquidation" }).eq("meta_api_order_id", orderId);
+                 closedSymbols.push(`${symbol} (via VPS)`);
+                 closedCount++;
+              } else {
+                 const closeRes = await fetch(`${META_BASE_URL}/users/current/accounts/${META_ACCOUNT}/trade`, {
+                   method: "POST",
+                   headers: { "auth-token": META_TOKEN, "Content-Type": "application/json" },
+                   body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: orderId })
+                 });
+                 if (closeRes.ok) {
+                   await supabase.from("user_trades").update({ status: "AUTO_CLOSED", error_message: "Weekend Defense (MetaAPI)" }).eq("meta_api_order_id", orderId);
+                   closedSymbols.push(`${symbol} ($${profit.toFixed(2)})`);
+                   closedCount++;
+                 } else { errorCount++; }
+              }
             } else {
-              closedSymbols.push(`${symbol} ($${profit.toFixed(2)}) [DRY]`);
+              closedSymbols.push(`${symbol} [DRY]`);
               closedCount++;
             }
-          } else {
-            // PROFITABLE → MOVE SL TO BREAK-EVEN
+          } else if (!isVpsAlive && profit > 0) {
+            // PROFITABLE → MOVE SL TO BREAK-EVEN (MetaAPI Fallback)
             console.log(`[Weekend Defense] ${symbol} (${orderId}) profit $${profit.toFixed(2)}. Moving SL to BE (${openPrice}).`);
             if (!DRY_RUN) {
               const modRes = await fetch(`${META_BASE_URL}/users/current/accounts/${META_ACCOUNT}/trade`, {
