@@ -31,7 +31,7 @@ export async function GET(request: Request) {
     const { data: trades, error: tradesError } = await supabaseAdmin
       .from('user_trades')
       .select(`
-        id, symbol, side, status, close_price, profit_usd, created_at, closed_at, meta_api_order_id,
+        id, symbol, side, status, open_price, close_price, profit_usd, created_at, closed_at, meta_api_order_id,
         trade_opportunities ( entry_plan_json )
       `)
       .eq('user_id', masterUserId)
@@ -49,7 +49,7 @@ export async function GET(request: Request) {
 
     // 3. Post-process to calculate Pips/Points and sanitize data
     const sanitizedTrades = trades.map((trade: any) => {
-      const entry_price = trade.trade_opportunities?.entry_plan_json?.price ? Number(trade.trade_opportunities.entry_plan_json.price) : null;
+      const entry_price = trade.open_price ? Number(trade.open_price) : (trade.trade_opportunities?.entry_plan_json?.price ? Number(trade.trade_opportunities.entry_plan_json.price) : null);
       
       // Calculate Points gained/lost
       let points = 0;

@@ -167,7 +167,7 @@ export default function FundHistoryPage() {
                     <td style={{ padding: '16px 24px', textAlign: 'right' }}>
                       {['CLOSED', 'WON', 'LOST'].includes(trade.status) ? (
                         <span style={{ fontWeight: 800, color: trade.is_win ? '#4ade80' : (trade.status === 'CLOSED' && trade.points_yield === 0 ? '#9ca3af' : '#f87171') }}>
-                          {trade.points_yield > 0 ? '+' : ''}{trade.points_yield ? trade.points_yield.toFixed(3) : '0.000'}
+                          {trade.points_yield > 0 ? '+' : ''}{trade.points_yield != null ? Number(trade.points_yield.toFixed(5)) : '0.000'}
                         </span>
                       ) : (
                         <span style={{ color: '#6b7280' }}>-</span>

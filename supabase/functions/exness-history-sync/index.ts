@@ -84,6 +84,8 @@ serve(async (req) => {
       const closingDeal = closingDeals.find((deal: any) => String(deal.positionId) === String(trade.meta_api_order_id));
 
       if (closingDeal) {
+        const entryDeal = historyDeals.find((deal: any) => String(deal.positionId) === String(trade.meta_api_order_id) && deal.entryType === "DEAL_ENTRY_IN");
+
         const masterProfitUsd = Number(closingDeal.profit) || 0;
         const masterVolume = Number(closingDeal.volume) || 1;
         
@@ -96,16 +98,22 @@ serve(async (req) => {
         const closePrice = closingDeal.price;
         const closedAt = closingDeal.time;
 
-        console.log(`[History Sync] Trade ${trade.meta_api_order_id} for User ${trade.user_id} resolved as ${finalStatus} with $${userProfitUsd.toFixed(2)} profit`);
-
-        await supabase
-          .from("user_trades")
-          .update({
+        const updateData: any = {
             status: finalStatus,
             profit_usd: userProfitUsd,
             close_price: closePrice,
             closed_at: closedAt
-          })
+        };
+        
+        if (entryDeal && entryDeal.price) {
+            updateData.open_price = entryDeal.price;
+        }
+
+        console.log(`[History Sync] Trade ${trade.meta_api_order_id} for User ${trade.user_id} resolved as ${finalStatus} with $${userProfitUsd.toFixed(2)} profit`);
+
+        await supabase
+          .from("user_trades")
+          .update(updateData)
           .eq("id", trade.id);
 
         // --- DRAWDOWN BREAKER: UPDATE PORTFOLIO CAPITAL & HWM ---
