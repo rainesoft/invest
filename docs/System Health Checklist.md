@@ -246,6 +246,9 @@ Use `cron.alter_job()` to update the command.
 
 Verify that all long-running cron jobs explicitly declare a `timeout_milliseconds` parameter in their `pg_net` payload.
 
+> [!TIP]
+> This check, along with the `x-cron-secret` authorization check, is now automatically swept by the `scripts/healthcheck.sql` diagnostic. It will proactively flag any misconfigured `cron.job` entries before they fail.
+
 ```sql
 SELECT jobname, command
 FROM cron.job
