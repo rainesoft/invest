@@ -46,8 +46,9 @@ serve(async (req) => {
       continue;
     }
     
+    const entryPrice = entry_plan_json?.price ?? entry_plan_json?.limit_price ?? entry_plan_json?.entry_price;
     // Safety check
-    if (!entry_plan_json?.price || !stop_plan_json?.stop || !take_profit_json?.tp) {
+    if (entryPrice === undefined || entryPrice === null || !stop_plan_json?.stop || !take_profit_json?.tp) {
       continue;
     }
     
@@ -72,7 +73,6 @@ serve(async (req) => {
     let closedAt = null;
     let state: 'PENDING' | 'ACTIVE' = 'PENDING';
 
-    const entryPrice = entry_plan_json.price;
     // Calculate actual risk in price units to compute real R-multiple
     const riskPerUnit = Math.abs(entryPrice - stopLoss);
 

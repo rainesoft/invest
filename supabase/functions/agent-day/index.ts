@@ -811,7 +811,7 @@ serve(async (req) => {
 
             // PRE-EVALUATION ASSET ISOLATION (with candle-duration caching)
             // Check if this symbol was already isolated on this cron cycle's candle
-            const tfMinutes: Record<string, number> = { '1H': 60, '4H': 240, '1D': 1440 };
+            const tfMinutes: Record<string, number> = { '30M': 30, '1H': 60, '4H': 240, '1D': 1440 };
             const candleDurationMs = (tfMinutes[timeframe.toUpperCase()] || 240) * 60 * 1000;
             const { data: recentIsolation } = await supabase
               .from('audit_log')
