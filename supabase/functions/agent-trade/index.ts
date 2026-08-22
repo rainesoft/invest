@@ -325,19 +325,37 @@ serve(async (req) => {
                // --- PENDING ORDER GARBAGE COLLECTION ---
                try {
                  const orderData = await ordRes.json();
+                 let isMissedFill = false;
+                 
+                 // 1. Price-Action Based GC: Did the market hit TP1 without us?
+                 const currentPrice = orderData.currentPrice || ptiMap.get(trade.symbol)?.c;
+                 const opp = trade.trade_opportunities;
+                 const tp1 = opp?.take_profit_json?.tp1 || opp?.take_profit_json?.tp;
+                 
+                 if (currentPrice && tp1) {
+                    const isLong = trade.side === "LONG" || trade.side === "BUY";
+                    if (isLong && currentPrice >= tp1) isMissedFill = true;
+                    if (!isLong && currentPrice <= tp1) isMissedFill = true;
+                 }
+
+                 // 2. Time-Based GC: Is the limit order > 24h old?
+                 let ageHours = 0;
                  if (orderData.time) {
                    const orderTime = new Date(orderData.time).getTime();
-                   const ageHours = (Date.now() - orderTime) / (1000 * 60 * 60);
+                   ageHours = (Date.now() - orderTime) / (1000 * 60 * 60);
+                 }
                    
-                   if (ageHours >= 24) {
-                     console.log(`[Position Manager] Garbage Collection: Cancelling stale pending order ${orderId} for ${trade.symbol}.`);
-                     await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
-                       method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
-                       body: JSON.stringify({ actionType: "ORDER_CANCEL", orderId })
-                     });
-                     await supabase.from("user_trades").update({ status: "CLOSED", error_message: "Order cancelled (stale limit order > 24h)" }).eq("meta_api_order_id", orderId);
-                     isGCd = true;
-                   }
+                 if (ageHours >= 24 || isMissedFill) {
+                   const reasonStr = isMissedFill 
+                      ? "Missed Fill: Market reached Take Profit target without triggering entry"
+                      : "Stale limit order > 24h";
+                   console.log(`[Position Manager] Garbage Collection: Cancelling pending order ${orderId} for ${trade.symbol}. Reason: ${reasonStr}`);
+                   await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                     method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                     body: JSON.stringify({ actionType: "ORDER_CANCEL", orderId })
+                   });
+                   await supabase.from("user_trades").update({ status: "CLOSED", error_message: `Order cancelled (${reasonStr})` }).eq("meta_api_order_id", orderId);
+                   isGCd = true;
                  }
                } catch (e) {
                  console.error(`[Position Manager] Failed to process pending order for GC:`, e);
