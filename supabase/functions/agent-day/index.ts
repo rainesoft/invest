@@ -292,6 +292,16 @@ serve(async (req) => {
     (reqBody as any).symbols?.join(",") || searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "XAUUSD,XAGUSD,BTCUSD,UKOIL,EURUSD,GBPUSD,USDJPY,US30,NAS100";
   const symbols = symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean);
 
+  symbols.sort((a, b) => {
+    if (a === 'BTCUSD' && b !== 'BTCUSD') return -1;
+    if (b === 'BTCUSD' && a !== 'BTCUSD') return 1;
+    const aOpen = isMarketOpen(a);
+    const bOpen = isMarketOpen(b);
+    if (aOpen && !bOpen) return -1;
+    if (!aOpen && bOpen) return 1;
+    return 0;
+  });
+
   const url = Deno.env.get("SUPABASE_URL");
   const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 

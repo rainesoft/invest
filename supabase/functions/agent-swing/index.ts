@@ -581,6 +581,16 @@ serve(async (req) => {
   const symbols = isExplicitSymbolRequest 
       ? symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean)
       : (dbSymbols && dbSymbols.length > 0 ? dbSymbols : symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean));
+      
+  symbols.sort((a, b) => {
+    if (a === 'BTCUSD' && b !== 'BTCUSD') return -1;
+    if (b === 'BTCUSD' && a !== 'BTCUSD') return 1;
+    const aOpen = isMarketOpen(a);
+    const bOpen = isMarketOpen(b);
+    if (aOpen && !bOpen) return -1;
+    if (!aOpen && bOpen) return 1;
+    return 0;
+  });
 
   const traceId = crypto.randomUUID();
 
