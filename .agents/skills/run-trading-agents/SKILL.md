@@ -61,8 +61,23 @@ async function callAgent(agentName, body = null) {
   if (body) {
     options.body = JSON.stringify(body);
   }
-  const res = await fetch(`${PROJECT_URL}/functions/v1/${agentName}`, options);
-  console.log(`Response from ${agentName} [${res.status}]:`, await res.text());
+  try {
+      const res = await fetch(`${PROJECT_URL}/functions/v1/${agentName}`, options);
+      const text = await res.text();
+      try {
+        const json = JSON.parse(text);
+        if (json.rejections && json.rejections.length > 0) {
+           console.log(`Response from ${agentName} [${res.status}]:\n  - Opportunities: ${json.opportunities?.length || 0}\n  - Rejections:`);
+           json.rejections.forEach(r => console.log(`    ⚠️ ${r.symbol} [${r.layer}]: ${r.reason}`));
+        } else {
+           console.log(`Response from ${agentName} [${res.status}]:`, json);
+        }
+      } catch (e) {
+        console.log(`Response from ${agentName} [${res.status}]:`, text);
+      }
+  } catch(e) {
+      console.error(`Error calling ${agentName}:`, e);
+  }
 }
 
 async function run() {
