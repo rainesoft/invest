@@ -1306,6 +1306,11 @@ serve(async (req) => {
         return { opportunities: results, rejections };
       } catch (err: any) {
         console.error(`[Pipeline Error] ${err.message}`);
+        await insertAuditLog(supabase, {
+          actor_type: "SYSTEM",
+          action: "AGENT_CRASH",
+          payload_json: { agent: "agent-day", error: err.message, stack: err.stack },
+        });
         return { error: err.message };
       }
   }
