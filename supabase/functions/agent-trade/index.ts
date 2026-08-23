@@ -191,7 +191,8 @@ serve(async (req) => {
 
 
 
-      // --- REVERSE SYNC: ORPHAN RECOVERY ---
+      // --- REVERSE SYNC: ORPHAN RECOVERY & PENDING ORDERS ---
+      const pendingOrdersMap = new Map<string, any>();
       try {
         const allPosRes = await fetch(
           `${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/positions`,
@@ -219,8 +220,19 @@ serve(async (req) => {
              }
           }
         }
+
+        const allOrdRes = await fetch(
+          `${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/orders`,
+          { headers: { "auth-token": META_API_TOKEN } }
+        );
+        if (allOrdRes.ok) {
+           const allOrders = await allOrdRes.json();
+           for (const ord of allOrders) {
+              pendingOrdersMap.set(ord.id, ord);
+           }
+        }
       } catch (e) {
-        console.error("[Position Manager] Reverse-Sync failed:", e);
+        console.error("[Position Manager] Reverse/Orders-Sync failed:", e);
       }
 
       const moves: { symbol: string; action: string; from: number; to: number }[] = [];
@@ -291,40 +303,15 @@ serve(async (req) => {
       
       for (const [orderId, trade] of orderMap) {
         try {
-          // --- 1. BROKER SYNC CHECK ---
+          // --- 1. BROKER SYNC CHECK & GARBAGE COLLECTION ---
           let position = null;
-          let isPendingOrder = false;
+          let isPendingOrder = pendingOrdersMap.has(orderId);
+          let orderData = pendingOrdersMap.get(orderId);
 
-          if (isVpsAlive) {
-             // For VPS EXCLUSION, we bypass MetaAPI polling as the VPS EA locally manages position existence.
-             // We mock the position object with live PTI data so that AI invalidation and trailing stop math can execute.
-             const snap = ptiMap.get(trade.symbol);
-             position = { 
-                unrealizedProfit: 0, 
-                profit: 0, 
-                currentPrice: snap?.c || (trade.trade_opportunities?.entry_plan_json?.price || 0),
-                stopLoss: trade.stop_loss || (trade.trade_opportunities?.stop_plan_json?.stop || trade.trade_opportunities?.stop_plan_json?.initial || 0),
-                volume: 0.01 
-             };
-          } else {
-            const posRes = await fetch(
-              `${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/positions/${orderId}`,
-              { headers: { "auth-token": META_API_TOKEN } }
-            );
-
-            if (!posRes.ok) {
-              // Check if it's a pending order before assuming it's closed
-              const ordRes = await fetch(
-              `${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/orders/${orderId}`,
-              { headers: { "auth-token": META_API_TOKEN } }
-            );
-            
-            if (ordRes.ok) {
-               isPendingOrder = true;
-               let isGCd = false;
-               // --- PENDING ORDER GARBAGE COLLECTION ---
-               try {
-                 const orderData = await ordRes.json();
+          if (isPendingOrder) {
+             let isGCd = false;
+             // --- PENDING ORDER GARBAGE COLLECTION ---
+             try {
                  let isMissedFill = false;
                  
                  // 1. Price-Action Based GC: Did the market hit TP1 without us?
@@ -357,22 +344,43 @@ serve(async (req) => {
                    await supabase.from("user_trades").update({ status: "CLOSED", error_message: `Order cancelled (${reasonStr})` }).eq("meta_api_order_id", orderId);
                    isGCd = true;
                  }
-               } catch (e) {
+             } catch (e) {
                  console.error(`[Position Manager] Failed to process pending order for GC:`, e);
-               }
-               if (isGCd) continue;
-            } else if (posRes.status === 404 && ordRes.status === 404) {
-               // Not a position, not an order AND broker confirmed 404 Not Found -> It is TRULY CLOSED
-               await supabase.from("user_trades").update({ status: "CLOSED" }).eq("meta_api_order_id", orderId).eq("status", "OPEN");
-               continue;
-            } else {
-               // Broker returned a 500 error or timeout, DO NOT close the trade!
-               console.warn(`[Position Manager] Broker sync failed for ${orderId}. posRes: ${posRes.status}, ordRes: ${ordRes.status}. Retrying later.`);
-               continue;
-            }
-            } else {
-              position = await posRes.json();
-            }
+             }
+             if (isGCd) continue;
+          } else {
+             // NOT a pending order. Check positions.
+             if (isVpsAlive) {
+                 // For VPS EXCLUSION, we bypass MetaAPI polling as the VPS EA locally manages position existence.
+                 // We mock the position object with live PTI data so that AI invalidation and trailing stop math can execute.
+                 const snap = ptiMap.get(trade.symbol);
+                 position = { 
+                    unrealizedProfit: 0, 
+                    profit: 0, 
+                    currentPrice: snap?.c || (trade.trade_opportunities?.entry_plan_json?.price || 0),
+                    stopLoss: trade.stop_loss || (trade.trade_opportunities?.stop_plan_json?.stop || trade.trade_opportunities?.stop_plan_json?.initial || 0),
+                    volume: 0.01 
+                 };
+             } else {
+                 const posRes = await fetch(
+                   `${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/positions/${orderId}`,
+                   { headers: { "auth-token": META_API_TOKEN } }
+                 );
+
+                 if (!posRes.ok) {
+                    if (posRes.status === 404) {
+                       // Not a position, not an order (we checked pendingOrdersMap) -> It is TRULY CLOSED
+                       await supabase.from("user_trades").update({ status: "CLOSED" }).eq("meta_api_order_id", orderId).eq("status", "OPEN");
+                       continue;
+                    } else {
+                       // Broker returned a 500 error or timeout, DO NOT close the trade!
+                       console.warn(`[Position Manager] Broker sync failed for ${orderId}. posRes: ${posRes.status}. Retrying later.`);
+                       continue;
+                    }
+                 } else {
+                    position = await posRes.json();
+                 }
+             }
           }
 
           if (position?.error) continue;
