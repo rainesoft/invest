@@ -129,3 +129,11 @@ SELECT symbol, side, status, created_at
 FROM trade_opportunities
 WHERE status = 'APPROVED'
   AND created_at < NOW() - INTERVAL '1 hour';
+
+-- 14. Edge Function Agent Crashes
+SELECT '\n--- Edge Function Agent Crashes ---' AS section;
+SELECT payload_json->>'agent' AS agent, payload_json->>'error' AS error_message, created_at
+FROM audit_log
+WHERE action = 'AGENT_CRASH'
+ORDER BY created_at DESC
+LIMIT 10;

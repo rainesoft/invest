@@ -281,6 +281,27 @@ SELECT cron.alter_job(
 
 ---
 
+## ⚠️ 1F. pg_cron Diagnostic — Silent Agent Crashes (AGENT_CRASH)
+
+> [!CAUTION]
+> **Incident (2026-08-23):** `agent-day` stalled and stopped evaluating trades because it silently crashed during the pipeline execution. Because it returned an HTTP 200 containing `{"error": "..."}`, `pg_cron` recorded the run as `succeeded`, hiding the crash from standard cron monitoring.
+
+### Step 1 — Check Audit Logs for AGENT_CRASH
+The agents have been patched to emit an `AGENT_CRASH` event to the `audit_log` whenever an unhandled exception causes the pipeline to fail. 
+Run the following query:
+
+```sql
+SELECT payload_json->>'agent' AS agent, payload_json->>'error' AS error_message, created_at
+FROM audit_log
+WHERE action = 'AGENT_CRASH'
+ORDER BY created_at DESC
+LIMIT 10;
+```
+
+- ❌ **FAILED:** If rows are returned, the Edge Function is failing internally. Review the stack trace and the Edge Function logs to resolve the code-level exception.
+
+---
+
 ## 2. Autonomous Agent Activity
 Verify that the AI agents are actively evaluating the market and producing expected heartbeat logs.
 

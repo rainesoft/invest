@@ -14,6 +14,7 @@ Whenever the user requests a "system health check", you should:
 2. Run the `scripts/healthcheck.sql` file using `psql` or a custom DB query script to quickly dump the health of the system.
 3. Verify the output to ensure:
    - `pg_cron` jobs are firing successfully and have no missing `timeout_milliseconds` or `x-cron-secret` configurations (the proactive sweep will flag this).
+   - No silent agent crashes are occurring (query `audit_log` for `AGENT_CRASH`).
    - Autonomous agents (`agent-news`, `agent-swing`, `agent-day`) are generating signals and heartbeats.
    - Orphaned signals (stuck in `PUBLISHED` or `PENDING`) are not piling up.
    - `vps-poll` receives fresh MT5 heartbeats.
