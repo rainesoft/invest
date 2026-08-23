@@ -315,7 +315,12 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
 11. CONFIDENCE CALIBRATION (CRITICAL):
     - A confidence score of 100 is STATISTICALLY IMPOSSIBLE in trading. Do not ever output a confidence of 100.
     - A "perfect" structural setup should realistically max out around 85-90.
-    - You MUST actively deduct points for mixed signals, such as low ADX, choppy price action, or imperfect Fib alignment.`;
+    - You MUST actively deduct points for mixed signals, such as low ADX, choppy price action, or imperfect Fib alignment.
+
+12. CRYPTO COUNTER-TREND & MOMENTUM SCALPING (CRITICAL):
+    - EXPLICIT COUNTER-TREND AUTHORIZATION: For crypto assets (e.g. BTCUSD), you are EXPLICITLY AUTHORIZED to originate "Mean Reversion Shorts" when the RSI exceeds 85 AND strong bearish divergence is present on the MACD. Do not reject simply due to 'bullish macro trend' if these extreme overbought conditions exist.
+    - SHORT-TERM PULLBACK LOGIC: When generating a counter-trend short, do NOT wait for a massive macro structural swing. Generate a quick A-Tier short setup targeting a pullback to the nearest Fibonacci retracement level (e.g., the 0.382 or 0.5 level) for TP1/TP2.
+    - DYNAMIC RSI WEIGHTING (MOMENTUM SCALPS): If the news sentiment is overwhelmingly positive (via agent-news), IGNORE the overbought RSI up to 90. Instead of rejecting the setup, look for 'continuation momentum scalps' targeting immediate structural highs.`;
 
   console.log(`[Responses API] Submitting ${symbol} analysis...`);
   
