@@ -600,12 +600,12 @@ serve(async (req) => {
         for (let i = 0; i < symbols.length; i += chunkSize) {
           const chunk = symbols.slice(i, i + chunkSize);
           await Promise.all(chunk.map(async (symbol) => {
-            if (isCron && !isMarketOpen(symbol)) {
-            console.log(`[Market Hours] Skipping ${symbol}: Market is closed.`);
-            sendEvent({ type: 'progress', message: `[Market Hours] Skipping ${symbol}: Market is closed.` });
-            return;
-          }
           try {
+            if (isCron && !isMarketOpen(symbol)) {
+              console.log(`[Market Hours] Skipping ${symbol}: Market is closed.`);
+              sendEvent({ type: 'progress', message: `[Market Hours] Skipping ${symbol}: Market is closed.` });
+              return;
+            }
             await insertAuditLog(supabase, {
               actor_type: "SYSTEM",
               action: "RESEARCH_RUN",
