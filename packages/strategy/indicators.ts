@@ -38,6 +38,22 @@ export type LogicContext = {
   liquidity_sweep_bullish?: boolean;
   liquidity_sweep_bearish?: boolean;
   momentum_spike?: 'BULLISH' | 'BEARISH' | 'NONE';
+
+  // Smart Money Order Flow & Volume Engine
+  vwap?: number | null;
+  vwap_upper_1?: number | null;
+  vwap_lower_1?: number | null;
+  vwap_upper_2?: number | null;
+  vwap_lower_2?: number | null;
+  vwap_relation?: 'ABOVE_VWAP' | 'BELOW_VWAP' | 'AT_VWAP' | 'EXTREME_OVERBOUGHT' | 'EXTREME_OVERSOLD' | 'NONE';
+  poc_price?: number | null;
+  vah_price?: number | null;
+  val_price?: number | null;
+  in_value_area?: boolean;
+  volume_ratio?: number | null;
+  volume_surge?: boolean;
+  volume_regime?: 'VERY_HIGH' | 'HIGH' | 'NORMAL' | 'LOW' | 'ANEMIC';
+  nearest_hvn?: number | null;
 };
 
 export function calculateFractals(high: number[], low: number[]) {
@@ -118,19 +134,32 @@ export function detectFVG(open: number[], high: number[], low: number[], close: 
   return { bullish_fvg_nearest, bearish_fvg_nearest };
 }
 
-export function detectOrderBlocks(open: number[], high: number[], low: number[], close: number[]) {
+export function detectOrderBlocks(open: number[], high: number[], low: number[], close: number[], volume?: number[]) {
   let bullish_ob_nearest: number | null = null;
   let bearish_ob_nearest: number | null = null;
   
   const n = close.length;
   const lookback = Math.min(30, n);
-  
+  const hasVolume = volume && volume.length === n && volume.some(v => v > 0);
+
   for (let i = n - 2; i >= n - lookback; i--) {
     const body = Math.abs(close[i] - open[i]);
     const prevBody = Math.abs(close[i-1] - open[i-1]);
     
+    // Volume validation: ensure the displacement or setup candle has above-average volume
+    let volumeConfirmed = true;
+    if (hasVolume && i >= 5) {
+      let localSum = 0;
+      for (let k = i - 5; k < i; k++) localSum += volume![k] || 0;
+      const localAvg = localSum / 5;
+      if (localAvg > 0) {
+        const candidateVol = Math.max(volume![i] || 0, volume![i-1] || 0);
+        volumeConfirmed = candidateVol >= localAvg * 1.1;
+      }
+    }
+    
     // Bullish OB
-    if (i >= 1 && close[i] > open[i] && body > prevBody * 1.5 && close[i-1] < open[i-1]) {
+    if (i >= 1 && close[i] > open[i] && body > prevBody * 1.5 && close[i-1] < open[i-1] && volumeConfirmed) {
       const obHigh = high[i-1];
       let mitigated = false;
       for (let j = i + 1; j < n; j++) {
@@ -142,7 +171,7 @@ export function detectOrderBlocks(open: number[], high: number[], low: number[],
     }
     
     // Bearish OB
-    if (i >= 1 && close[i] < open[i] && body > prevBody * 1.5 && close[i-1] > open[i-1]) {
+    if (i >= 1 && close[i] < open[i] && body > prevBody * 1.5 && close[i-1] > open[i-1] && volumeConfirmed) {
       const obLow = low[i-1];
       let mitigated = false;
       for (let j = i + 1; j < n; j++) {
@@ -154,6 +183,287 @@ export function detectOrderBlocks(open: number[], high: number[], low: number[],
     }
   }
   return { bullish_ob_nearest, bearish_ob_nearest };
+}
+
+export interface VWAPResult {
+  vwap: number | null;
+  upper1: number | null;
+  lower1: number | null;
+  upper2: number | null;
+  lower2: number | null;
+  relation: 'ABOVE_VWAP' | 'BELOW_VWAP' | 'AT_VWAP' | 'EXTREME_OVERBOUGHT' | 'EXTREME_OVERSOLD' | 'NONE';
+}
+
+export function calculateVWAP(
+  timestamps: string[],
+  high: number[],
+  low: number[],
+  close: number[],
+  volume?: number[]
+): VWAPResult {
+  const n = close.length;
+  if (n === 0) {
+    return { vwap: null, upper1: null, lower1: null, upper2: null, lower2: null, relation: 'NONE' };
+  }
+
+  const hasVolume = volume && volume.length === n && volume.some(v => v > 0);
+  const effectiveVolume = hasVolume ? volume! : new Array(n).fill(1);
+
+  // Session Anchor: Find session start index (UTC day boundary: YYYY-MM-DD change)
+  let sessionStartIndex = 0;
+  if (timestamps && timestamps.length === n) {
+    const lastDate = (timestamps[n - 1] || '').slice(0, 10);
+    for (let i = n - 1; i >= 0; i--) {
+      if ((timestamps[i] || '').slice(0, 10) !== lastDate) {
+        sessionStartIndex = i + 1;
+        break;
+      }
+    }
+  }
+
+  // If session has fewer than 3 bars, fallback to rolling last 30 bars for depth
+  const startIndex = (n - sessionStartIndex < 3) ? Math.max(0, n - 30) : sessionStartIndex;
+
+  let cumVolume = 0;
+  let cumVolTypicalPrice = 0;
+  const typicalPrices: number[] = [];
+  const sessionVolumes: number[] = [];
+
+  for (let i = startIndex; i < n; i++) {
+    const tp = (high[i] + low[i] + close[i]) / 3;
+    const v = effectiveVolume[i] > 0 ? effectiveVolume[i] : 1;
+    typicalPrices.push(tp);
+    sessionVolumes.push(v);
+    cumVolume += v;
+    cumVolTypicalPrice += tp * v;
+  }
+
+  if (cumVolume === 0) {
+    return { vwap: null, upper1: null, lower1: null, upper2: null, lower2: null, relation: 'NONE' };
+  }
+
+  const currentVWAP = cumVolTypicalPrice / cumVolume;
+
+  // Calculate volume-weighted standard deviation
+  let sumWeightedSquaredDiff = 0;
+  for (let j = 0; j < typicalPrices.length; j++) {
+    const diff = typicalPrices[j] - currentVWAP;
+    sumWeightedSquaredDiff += sessionVolumes[j] * (diff * diff);
+  }
+  const variance = sumWeightedSquaredDiff / cumVolume;
+  const stdDev = Math.sqrt(variance);
+
+  const upper1 = currentVWAP + stdDev;
+  const lower1 = currentVWAP - stdDev;
+  const upper2 = currentVWAP + (2 * stdDev);
+  const lower2 = currentVWAP - (2 * stdDev);
+
+  const currentPrice = close[n - 1];
+  let relation: VWAPResult['relation'] = 'AT_VWAP';
+
+  if (currentPrice > upper2) relation = 'EXTREME_OVERBOUGHT';
+  else if (currentPrice < lower2) relation = 'EXTREME_OVERSOLD';
+  else if (currentPrice > upper1) relation = 'ABOVE_VWAP';
+  else if (currentPrice < lower1) relation = 'BELOW_VWAP';
+  else if (currentPrice >= currentVWAP) relation = 'ABOVE_VWAP';
+  else relation = 'BELOW_VWAP';
+
+  return {
+    vwap: Number(currentVWAP.toFixed(5)),
+    upper1: Number(upper1.toFixed(5)),
+    lower1: Number(lower1.toFixed(5)),
+    upper2: Number(upper2.toFixed(5)),
+    lower2: Number(lower2.toFixed(5)),
+    relation
+  };
+}
+
+export interface VolumeProfileResult {
+  poc: number | null;
+  vah: number | null;
+  val: number | null;
+  hvns: number[];
+  lvns: number[];
+  in_value_area: boolean;
+  nearest_hvn: number | null;
+}
+
+export function calculateVolumeProfile(
+  high: number[],
+  low: number[],
+  close: number[],
+  volume?: number[],
+  lookback = 50,
+  numBins = 24
+): VolumeProfileResult {
+  const n = close.length;
+  if (n === 0) {
+    return { poc: null, vah: null, val: null, hvns: [], lvns: [], in_value_area: false, nearest_hvn: null };
+  }
+
+  const start = Math.max(0, n - lookback);
+  const effectiveHighs = high.slice(start);
+  const effectiveLows = low.slice(start);
+  const effectiveCloses = close.slice(start);
+  const rawVol = volume ? volume.slice(start) : [];
+  const effectiveVols = rawVol.length === effectiveCloses.length ? rawVol : new Array(effectiveCloses.length).fill(1);
+
+  const minPrice = Math.min(...effectiveLows);
+  const maxPrice = Math.max(...effectiveHighs);
+  const range = maxPrice - minPrice;
+
+  if (range <= 0) {
+    const p = close[n - 1];
+    return { poc: p, vah: p, val: p, hvns: [p], lvns: [], in_value_area: true, nearest_hvn: p };
+  }
+
+  const binSize = range / numBins;
+  const bins: { price: number; volume: number }[] = [];
+  for (let b = 0; b < numBins; b++) {
+    bins.push({ price: minPrice + (b + 0.5) * binSize, volume: 0 });
+  }
+
+  let totalVolume = 0;
+  for (let i = 0; i < effectiveCloses.length; i++) {
+    const barLow = effectiveLows[i];
+    const barHigh = effectiveHighs[i];
+    const barVol = effectiveVols[i] > 0 ? effectiveVols[i] : 1;
+    totalVolume += barVol;
+
+    let touchedBins = 0;
+    const touchedIndices: number[] = [];
+    for (let b = 0; b < numBins; b++) {
+      const binBottom = minPrice + b * binSize;
+      const binTop = binBottom + binSize;
+      if (barHigh >= binBottom && barLow <= binTop) {
+        touchedIndices.push(b);
+        touchedBins++;
+      }
+    }
+
+    if (touchedBins > 0) {
+      const volPerBin = barVol / touchedBins;
+      for (const idx of touchedIndices) {
+        bins[idx].volume += volPerBin;
+      }
+    } else {
+      const idx = Math.min(numBins - 1, Math.max(0, Math.floor((effectiveCloses[i] - minPrice) / binSize)));
+      bins[idx].volume += barVol;
+    }
+  }
+
+  // Find POC
+  let maxVol = -1;
+  let pocIndex = 0;
+  for (let b = 0; b < numBins; b++) {
+    if (bins[b].volume > maxVol) {
+      maxVol = bins[b].volume;
+      pocIndex = b;
+    }
+  }
+  const poc = Number(bins[pocIndex].price.toFixed(5));
+
+  // Compute Value Area (70% total volume centered around POC)
+  const targetVaVolume = totalVolume * 0.70;
+  let currentVaVol = bins[pocIndex].volume;
+  let upIdx = pocIndex;
+  let downIdx = pocIndex;
+
+  while (currentVaVol < targetVaVolume && (upIdx < numBins - 1 || downIdx > 0)) {
+    const nextUpVol = upIdx < numBins - 1 ? bins[upIdx + 1].volume : -1;
+    const nextDownVol = downIdx > 0 ? bins[downIdx - 1].volume : -1;
+
+    if (nextUpVol >= nextDownVol && upIdx < numBins - 1) {
+      upIdx++;
+      currentVaVol += bins[upIdx].volume;
+    } else if (downIdx > 0) {
+      downIdx--;
+      currentVaVol += bins[downIdx].volume;
+    } else if (upIdx < numBins - 1) {
+      upIdx++;
+      currentVaVol += bins[upIdx].volume;
+    } else {
+      break;
+    }
+  }
+
+  const vah = Number((minPrice + (upIdx + 1) * binSize).toFixed(5));
+  const val = Number((minPrice + downIdx * binSize).toFixed(5));
+
+  // Identify High Volume Nodes (HVNs) and Low Volume Nodes (LVNs)
+  const hvns: number[] = [];
+  const lvns: number[] = [];
+  const avgBinVol = totalVolume / numBins;
+
+  for (let b = 1; b < numBins - 1; b++) {
+    if (bins[b].volume > bins[b-1].volume && bins[b].volume > bins[b+1].volume && bins[b].volume > avgBinVol * 1.1) {
+      hvns.push(Number(bins[b].price.toFixed(5)));
+    } else if (bins[b].volume < bins[b-1].volume && bins[b].volume < bins[b+1].volume && bins[b].volume < avgBinVol * 0.7) {
+      lvns.push(Number(bins[b].price.toFixed(5)));
+    }
+  }
+
+  if (hvns.length === 0) {
+    hvns.push(poc);
+  }
+
+  const currentPrice = close[n - 1];
+  const in_value_area = currentPrice >= val && currentPrice <= vah;
+
+  // Find nearest HVN
+  let nearest_hvn: number | null = null;
+  let minDist = Infinity;
+  for (const hvn of hvns) {
+    const dist = Math.abs(currentPrice - hvn);
+    if (dist < minDist) {
+      minDist = dist;
+      nearest_hvn = hvn;
+    }
+  }
+
+  return { poc, vah, val, hvns, lvns, in_value_area, nearest_hvn };
+}
+
+export interface VolumeSurgeResult {
+  volume_ratio: number | null;
+  volume_surge: boolean;
+  volume_regime: 'VERY_HIGH' | 'HIGH' | 'NORMAL' | 'LOW' | 'ANEMIC';
+}
+
+export function detectVolumeSurge(volume?: number[], period = 20): VolumeSurgeResult {
+  const n = volume ? volume.length : 0;
+  if (n === 0 || !volume || !volume.some(v => v > 0)) {
+    return { volume_ratio: 1.0, volume_surge: false, volume_regime: 'NORMAL' };
+  }
+
+  const currentVol = volume[n - 1] || 0;
+  const lookback = Math.min(period, n - 1);
+  if (lookback === 0) {
+    return { volume_ratio: 1.0, volume_surge: false, volume_regime: 'NORMAL' };
+  }
+
+  let sum = 0;
+  for (let i = n - 1 - lookback; i < n - 1; i++) {
+    sum += volume[i] || 0;
+  }
+  const avgVol = sum / lookback;
+
+  if (avgVol <= 0) {
+    return { volume_ratio: 1.0, volume_surge: false, volume_regime: 'NORMAL' };
+  }
+
+  const ratio = Number((currentVol / avgVol).toFixed(2));
+  let volume_regime: VolumeSurgeResult['volume_regime'] = 'NORMAL';
+
+  if (ratio >= 2.0) volume_regime = 'VERY_HIGH';
+  else if (ratio >= 1.4) volume_regime = 'HIGH';
+  else if (ratio >= 0.7) volume_regime = 'NORMAL';
+  else if (ratio >= 0.4) volume_regime = 'LOW';
+  else volume_regime = 'ANEMIC';
+
+  const volume_surge = ratio >= 1.5;
+
+  return { volume_ratio: ratio, volume_surge, volume_regime };
 }
 
 export function detectLiquiditySweeps(
@@ -192,8 +502,19 @@ export function getContextSnapshot(
   high: number[],
   low: number[],
   close: number[],
-  symbol?: string
+  volumeOrSymbol?: number[] | string,
+  symbolParam?: string
 ): LogicContext {
+  let volume: number[] | undefined = undefined;
+  let symbol: string | undefined = undefined;
+
+  if (Array.isArray(volumeOrSymbol)) {
+    volume = volumeOrSymbol;
+    symbol = symbolParam;
+  } else if (typeof volumeOrSymbol === 'string') {
+    symbol = volumeOrSymbol;
+  }
+
   // Edge case: Not enough data
   if (close.length === 0) {
     return {
@@ -225,6 +546,20 @@ export function getContextSnapshot(
       macd_line: null,
       macd_signal: null,
       macd_histogram: null,
+      vwap: null,
+      vwap_upper_1: null,
+      vwap_lower_1: null,
+      vwap_upper_2: null,
+      vwap_lower_2: null,
+      vwap_relation: 'NONE',
+      poc_price: null,
+      vah_price: null,
+      val_price: null,
+      in_value_area: false,
+      volume_ratio: 1.0,
+      volume_surge: false,
+      volume_regime: 'NORMAL',
+      nearest_hvn: null,
     };
   }
 
@@ -237,10 +572,15 @@ export function getContextSnapshot(
   const recent_swing_high = bearish_fractals.length > 0 ? bearish_fractals[bearish_fractals.length - 1].price : null;
   const recent_swing_low = bullish_fractals.length > 0 ? bullish_fractals[bullish_fractals.length - 1].price : null;
 
-  // SMC Calculations
+  // SMC Calculations (with volume validation)
   const { bullish_fvg_nearest, bearish_fvg_nearest } = detectFVG(open, high, low, close);
-  const { bullish_ob_nearest, bearish_ob_nearest } = detectOrderBlocks(open, high, low, close);
+  const { bullish_ob_nearest, bearish_ob_nearest } = detectOrderBlocks(open, high, low, close, volume);
   const { liquidity_sweep_bullish, liquidity_sweep_bearish } = detectLiquiditySweeps(high, low, close, open, bullish_fractals, bearish_fractals);
+
+  // Smart Money Order Flow & Volume Calculations
+  const vwapResult = calculateVWAP(timestamps, high, low, close, volume);
+  const volProfile = calculateVolumeProfile(high, low, close, volume);
+  const volSurge = detectVolumeSurge(volume);
 
   // Calculate indicators
   const ema50 = EMA.calculate({ period: 50, values: close });
@@ -254,7 +594,6 @@ export function getContextSnapshot(
     const adxResult = ADX.calculate({ period: 14, high, low, close });
     adx14 = adxResult.map(res => res.adx);
   } catch (e) {
-    // technicalindicators ADX might throw if arrays are not equal length or too short
     console.warn("ADX calculation failed:", e);
   }
 
@@ -369,6 +708,20 @@ export function getContextSnapshot(
     macd_line: current_macd ? Number(current_macd.MACD?.toFixed(5)) : null,
     macd_signal: current_macd ? Number(current_macd.signal?.toFixed(5)) : null,
     macd_histogram: current_macd ? Number(current_macd.histogram?.toFixed(5)) : null,
+    vwap: vwapResult.vwap,
+    vwap_upper_1: vwapResult.upper1,
+    vwap_lower_1: vwapResult.lower1,
+    vwap_upper_2: vwapResult.upper2,
+    vwap_lower_2: vwapResult.lower2,
+    vwap_relation: vwapResult.relation,
+    poc_price: volProfile.poc,
+    vah_price: volProfile.vah,
+    val_price: volProfile.val,
+    in_value_area: volProfile.in_value_area,
+    volume_ratio: volSurge.volume_ratio,
+    volume_surge: volSurge.volume_surge,
+    volume_regime: volSurge.volume_regime,
+    nearest_hvn: volProfile.nearest_hvn,
   };
 }
 
