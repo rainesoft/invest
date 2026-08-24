@@ -550,7 +550,7 @@ serve(async (req) => {
     reqBody.symbols?.join(",") ||
     searchParams.get("symbols") ||
     Deno.env.get("SWING_SYMBOLS") ||
-    "XAUUSD,XAGUSD,BTCUSD,UKOIL,EURUSD,GBPUSD,USDJPY,US30,NAS100";
+    "XAUUSD,XAGUSD,BTCUSD,UKOIL,EURUSD,GBPUSD,USDJPY,EURJPY,GBPJPY,AUDUSD,NZDUSD,AUDJPY,CADJPY,EURGBP,US30,NAS100";
   const newsContext = searchParams.get("news") ?? undefined;
 
   const url = Deno.env.get("SUPABASE_URL");
@@ -951,10 +951,10 @@ serve(async (req) => {
             console.warn(`[${symbol}] [Trace: ${traceId}] Weekly MTFA fetch failed, continuing without it.`);
           }
 
-          // Enrich with LTF (1H or 30m) for BOS confirmation
+          // Enrich with LTF (30m / 15m) for SMC Order Block & FVG precision anchoring
           try {
-            const ltfTimeframe = timeframe.toLowerCase() === "1d" ? "1h" : "30m";
-            const ltfBars = await fetchPaperBars(symbol, ltfTimeframe, 100, supabase);
+            const ltfTimeframe = timeframe.toLowerCase() === "1d" ? "30m" : "15m";
+            const ltfBars = await fetchPaperBars(symbol, ltfTimeframe, 150, supabase);
             if (ltfBars.length > 20) {
               const ltfSnap = getContextSnapshot(
                 ltfBars.map((b) => b.t),
@@ -969,6 +969,7 @@ serve(async (req) => {
               (snapshot as any).ltf_trend = ltfSnap.trend_alignment;
               (snapshot as any).ltf_bos_bullish = ltfSnap.ltf_bos === 'BULLISH';
               (snapshot as any).ltf_bos_bearish = ltfSnap.ltf_bos === 'BEARISH';
+              (snapshot as any).ltf_atr_14 = ltfSnap.atr_14;
               
               // Map LTF SMC Context
               (snapshot as any).ltf_bullish_fvg_nearest = ltfSnap.bullish_fvg_nearest;
@@ -1349,14 +1350,33 @@ serve(async (req) => {
             return;
           }
 
-          // === BACKFILL INVALIDATION PRICE IN MARKET CONTEXT ===
-          // Now that the AI has computed the stop loss, update the context row
-          // so the Scalper knows exactly where the swing thesis is invalidated.
+          // === DYNAMIC SMC / LTF PRECISION ENTRY & STOP LOSS ANCHORING ===
+          const isLong = evaluation.recommended_direction === "LONG";
+          const ltfOb = isLong ? (snapshot as any).ltf_bullish_ob_nearest : (snapshot as any).ltf_bearish_ob_nearest;
+          const ltfFvg = isLong ? (snapshot as any).ltf_bullish_fvg_nearest : (snapshot as any).ltf_bearish_fvg_nearest;
+          const dailyAtr = (snapshot as any).atr_14 || 10;
+          const ltfAtr = (snapshot as any).ltf_atr_14 || (dailyAtr * 0.35);
+
           let entry = evaluation.execution_parameters.suggested_entry_price || snapshot.current_price || 0;
-          const atrSlMultiplier = (evaluation.execution_parameters as any).atr_multiplier_sl || 1.5;
-          const atr = (snapshot as any).atr_14 || 10;
-          const slDistance = atr * atrSlMultiplier;
-          let aiSl = evaluation.recommended_direction === "LONG" ? entry - slDistance : entry + slDistance;
+          
+          // If an LTF Order Block or FVG is nearby (within 3%), anchor entry directly inside the LTF zone
+          if (ltfOb && Math.abs(ltfOb - currentPrice) / currentPrice < 0.03) {
+            entry = Number(ltfOb.toFixed(5));
+          } else if (ltfFvg && Math.abs(ltfFvg - currentPrice) / currentPrice < 0.03) {
+            entry = Number(ltfFvg.toFixed(5));
+          }
+
+          // Invalidation / Stop Loss: Prioritize structural LTF OB invalidation over wide daily ATR
+          let aiSl = evaluation.execution_parameters.suggested_stop_loss;
+          if (!aiSl || isNaN(aiSl)) {
+            if (ltfOb) {
+              aiSl = isLong ? ltfOb - (ltfAtr * 1.25) : ltfOb + (ltfAtr * 1.25);
+            } else {
+              const atrSlMultiplier = (evaluation.execution_parameters as any).atr_multiplier_sl || 1.5;
+              const slDistance = dailyAtr * atrSlMultiplier;
+              aiSl = isLong ? entry - slDistance : entry + slDistance;
+            }
+          }
           aiSl = Number(aiSl.toFixed(5));
           
           if (aiSl) {
@@ -1398,7 +1418,7 @@ serve(async (req) => {
           // FIX (Error 10016): Broker rejects pending orders too close to the current price. 
           // We require the entry to be at least 20% of ATR away to use a Limit/Stop order.
           let order_type = evaluation.recommended_direction === "LONG" ? "BUY MARKET" : "SELL MARKET";
-          const pendingOrderThreshold = (atr && atr > 0) ? (atr * 0.20) : (currentPrice * 0.001); // 20% of ATR or 0.1% of price
+          const pendingOrderThreshold = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.20) : (currentPrice * 0.001); // 20% of ATR or 0.1% of price
           
           if (Math.abs(entry - currentPrice) >= pendingOrderThreshold) {
             if (evaluation.recommended_direction === "LONG") {
