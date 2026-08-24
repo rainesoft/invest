@@ -809,11 +809,33 @@ serve(async (req) => {
           payload_json: { symbol, timeframe, agent: "agent-swing" }
         }).catch(e => console.warn(`[Audit] Failed to log RESEARCH_RUN for ${symbol}: ${e.message}`));
 
+        // --- FETCH PENDING NEWS (from agent-news) ---
+        let pendingNewsSide: string | null = null;
+        let pendingNewsId: string | null = null;
+        try {
+          const { data: pendingSentiment } = await supabase
+            .from("trade_opportunities")
+            .select("id, side, risk_summary")
+            .eq("symbol", symbol)
+            .eq("status", "PUBLISHED")
+            .order("created_at", { ascending: false })
+            .limit(1);
+          
+          if (pendingSentiment && pendingSentiment.length > 0) {
+             const pending = pendingSentiment[0];
+             pendingNewsSide = pending.side;
+             pendingNewsId = pending.id;
+          }
+        } catch (pendingErr: any) {
+           console.warn(`[${symbol}] Error checking PUBLISHED: ${pendingErr.message}`);
+        }
+
         // --- LAYER -1: MARKET HOURS CHECK ---
         if (!isMarketOpen(symbol)) {
           console.log(`[Market Hours] Skipping ${symbol} as market is currently closed.`);
           sendEvent({ type: 'progress', message: `[Market Hours] Skipping ${symbol}: Market Closed.` });
           rejections.push({ symbol, reason: "Market is currently closed", layer: "Market Hours" });
+          if (pendingNewsId) await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: "Rejected: Market is currently closed." }).eq("id", pendingNewsId);
           return;
         }
 
@@ -837,6 +859,7 @@ serve(async (req) => {
                reason: `Macro Blackout Window: Halting origination due to High-Impact USD event within ±30m (${evNames})`,
                layer: "Layer 0"
              });
+             if (pendingNewsId) await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: `Rejected: Macro Blackout Window (${evNames}).` }).eq("id", pendingNewsId);
              return; // Skip this symbol completely
           }
         }
@@ -850,12 +873,14 @@ serve(async (req) => {
           } catch (err: any) {
             console.error(`[Data Error] [Trace: ${traceId}] ${symbol}: ${err.message}`);
             rejections.push({ symbol, reason: `Data fetch failed: ${err.message}`, layer: "Data" });
+            if (pendingNewsId) await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: `Rejected: Data fetch failed.` }).eq("id", pendingNewsId);
             return;
           }
 
           if (bars.length < 100) {
             rejections.push({ symbol, reason: `Insufficient data (${bars.length} bars, need 100+)`, layer: "Data" });
             sendEvent({ type: "progress", message: `[${symbol}] Skipped: insufficient data` });
+            if (pendingNewsId) await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: `Rejected: Insufficient data.` }).eq("id", pendingNewsId);
             return;
           }
 
@@ -893,6 +918,7 @@ serve(async (req) => {
               payload_json: { symbol, reason: riskValidation.reason },
             });
             rejections.push({ symbol, reason: riskValidation.reason, layer: "Pre-AI Guard" });
+            if (pendingNewsId) await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: `Rejected (Pre-AI Guard): ${riskValidation.reason}` }).eq("id", pendingNewsId);
             return;
           }
 
@@ -1023,27 +1049,18 @@ serve(async (req) => {
           let macroContext = generateMacroContext(symbol, allEvents, headlines);
           macroContext += `\n\nMACRO SENTIMENT SCORE: ${sentimentScore} / 10`;
 
-          // Check for PUBLISHED from agent-news
-          let pendingNewsSide: string | null = null;
-          let pendingNewsId: string | null = null;
-          try {
-            const { data: pendingSentiment } = await supabase
-              .from("trade_opportunities")
-              .select("id, side, risk_summary")
-              .eq("symbol", symbol)
-              .eq("status", "PUBLISHED")
-              .order("created_at", { ascending: false })
-              .limit(1);
-            
-            if (pendingSentiment && pendingSentiment.length > 0) {
-               const pending = pendingSentiment[0];
-               pendingNewsSide = pending.side;
-               pendingNewsId = pending.id;
-               macroContext += `\n\n[URGENT SENTIMENT OVERRIDE]\nA live Tier-1 macro sentiment event has just fired for this asset, requesting a ${pending.side} position. Details: ${pending.risk_summary}. YOU MUST STRONGLY CONSIDER ALIGNING YOUR TECHNICAL SETUP WITH THIS FUNDAMENTAL DIRECTION.`;
-               sendEvent({ type: "progress", message: `[${symbol}] Detected PUBLISHED signal (${pending.side}) from agent-news. Injecting as urgent confluence.` });
-            }
-          } catch (pendingErr: any) {
-             console.warn(`[${symbol}] Error checking PUBLISHED: ${pendingErr.message}`);
+          if (pendingNewsSide && pendingNewsId) {
+             // Retrieve the original pending details if needed to inject into macroContext
+             // (We fetched pendingNewsId/Side at the top of the loop)
+             try {
+               const { data: pendingSentiment } = await supabase.from("trade_opportunities").select("risk_summary").eq("id", pendingNewsId).single();
+               if (pendingSentiment) {
+                 macroContext += `\n\n[URGENT SENTIMENT OVERRIDE]\nA live Tier-1 macro sentiment event has just fired for this asset, requesting a ${pendingNewsSide} position. Details: ${pendingSentiment.risk_summary}. YOU MUST STRONGLY CONSIDER ALIGNING YOUR TECHNICAL SETUP WITH THIS FUNDAMENTAL DIRECTION.`;
+                 sendEvent({ type: "progress", message: `[${symbol}] Detected PUBLISHED signal (${pendingNewsSide}) from agent-news. Injecting as urgent confluence.` });
+               }
+             } catch (err: any) {
+                 // Ignore
+             }
           }
 
           // === HISTORICAL MEMORY ===
@@ -1143,6 +1160,7 @@ serve(async (req) => {
             console.error(`[AI Error] [Trace: ${traceId}] ${symbol}: ${err.message}`);
             rejections.push({ symbol, reason: `AI evaluation failed: ${err.message}`, layer: "AI" });
             sendEvent({ type: "progress", message: `[${symbol}] AI evaluation failed: ${err.message}` });
+            if (pendingNewsId) await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: `Rejected (AI Error): ${err.message}` }).eq("id", pendingNewsId);
             return;
           }
 
@@ -1187,11 +1205,6 @@ serve(async (req) => {
              adjustedConfidence = Math.min(100, adjustedConfidence + 20);
              confidenceAdjustments.push(`+20 agent-news Fundamental Confluence (${pendingNewsSide})`);
              sendEvent({ type: 'progress', message: `[${symbol}] MASSIVE BOOST: Technicals align perfectly with pending agent-news sentiment (${pendingNewsSide})` });
-             
-             // Mark the pending signal as merged/approved
-             if (pendingNewsId) {
-                await supabase.from("trade_opportunities").update({ status: "APPROVED", risk_summary: "Merged with technical confluence." }).eq("id", pendingNewsId).catch(() => {});
-             }
           } else if (pendingNewsSide && evaluation.recommended_direction !== "NONE") {
              // Technicals conflict with news
              adjustedConfidence = Math.max(0, adjustedConfidence - 30);
@@ -1200,12 +1213,12 @@ serve(async (req) => {
              
              // Reject the pending news signal due to conflict
              if (pendingNewsId) {
-                await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: "Rejected: Technicals contradicted fundamental sentiment." }).eq("id", pendingNewsId).catch(() => {});
+                await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: "Rejected: Technicals contradicted fundamental sentiment." }).eq("id", pendingNewsId);
              }
           } else if (pendingNewsId && evaluation.recommended_direction === "NONE") {
              // Technical setup was too weak to trade
              // Reject the pending news signal due to lack of technical confluence
-             await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: "Rejected: Failed to find technical confluence." }).eq("id", pendingNewsId).catch(() => {});
+             await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: "Rejected: Failed to find technical confluence." }).eq("id", pendingNewsId);
           }
 
           // === FEATURE 5: KELLY CRITERION PROBABILITY CALIBRATION ===
@@ -1368,6 +1381,7 @@ serve(async (req) => {
 
           if (!entry || !sl || !tp2) {
             rejections.push({ symbol, reason: "Missing entry, SL, or TP2", layer: "Execution Desk" });
+            if (pendingNewsId) await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: "Rejected: Incomplete trade parameters." }).eq("id", pendingNewsId);
             return;
           }
 
