@@ -130,6 +130,15 @@ FROM trade_opportunities
 WHERE status = 'APPROVED'
   AND created_at < NOW() - INTERVAL '1 hour';
 
+-- 13B. Stale ACTIVE Signals Check (> 24 hours without outcome resolution)
+SELECT '\n--- Stale ACTIVE Signals (> 24h) ---' AS section;
+SELECT id, symbol, side, timeframe, status, created_at,
+       ROUND(EXTRACT(EPOCH FROM (NOW() - created_at)) / 3600, 1) as hours_active
+FROM trade_opportunities
+WHERE status = 'ACTIVE'
+  AND created_at < NOW() - INTERVAL '24 hours'
+ORDER BY created_at ASC;
+
 -- 14. Edge Function Agent Crashes
 SELECT '\n--- Edge Function Agent Crashes ---' AS section;
 SELECT payload_json->>'agent' AS agent, payload_json->>'error' AS error_message, created_at
@@ -137,3 +146,19 @@ FROM audit_log
 WHERE action = 'AGENT_CRASH'
 ORDER BY created_at DESC
 LIMIT 10;
+
+-- 15. Database Webhook Trigger Network Errors (net._http_response)
+SELECT '\n--- Database Webhook Trigger Network Errors ---' AS section;
+SELECT id, status_code, error_msg, created
+FROM net._http_response
+WHERE error_msg IS NOT NULL OR status_code >= 400
+ORDER BY created DESC
+LIMIT 10;
+
+-- 16. Treasury Snapshots & Solvency
+SELECT '\n--- Treasury Solvency Snapshots ---' AS section;
+SELECT id, snapshot_timestamp, total_customer_liability, total_assets, solvency_ratio, notes
+FROM treasury_snapshots
+ORDER BY snapshot_timestamp DESC
+LIMIT 5;
+
