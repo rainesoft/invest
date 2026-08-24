@@ -229,6 +229,20 @@ serve(async (req) => {
            const allOrders = await allOrdRes.json();
            for (const ord of allOrders) {
               pendingOrdersMap.set(ord.id, ord);
+
+              // Auto-clean any broker pending order not recognized in active DB trades AND > 24h old
+              if (!knownMap.has(ord.id)) {
+                 const orderTime = ord.time ? new Date(ord.time).getTime() : 0;
+                 const ageHours = (Date.now() - orderTime) / (1000 * 60 * 60);
+                 if (ageHours >= 24) {
+                    console.log(`[Position Manager] Garbage Collection: Cancelling orphaned broker pending order ${ord.id} (${ord.symbol}, ${ageHours.toFixed(1)}h old)...`);
+                    await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                      method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                      body: JSON.stringify({ actionType: "ORDER_CANCEL", orderId: ord.id })
+                    });
+                    await supabase.from("user_trades").update({ status: "CLOSED", error_message: "Order cancelled (orphaned stale limit order > 24h)" }).eq("meta_api_order_id", ord.id);
+                 }
+              }
            }
         }
       } catch (e) {
