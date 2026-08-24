@@ -140,6 +140,10 @@ CRITICAL RULES:
 9. MEAN REVERSION STRICT GUARD: You are ONLY authorized to use a MEAN_REVERSION strategy if ADX < 25 (Choppy/Ranging). If ADX > 25, the market has strong momentum—DO NOT attempt mean reversion against strong momentum, as you will be run over.
 10. PROXIMITY RULES: Do not reject a trade for being 'too close' to resistance/support unless the distance is < 0.1% for Forex pairs, or < 0.015% for Indices (US30, NAS100) and Metals.
 11. NO COUNTER-TREND HEROICS: Do not attempt to catch "short-term retracements" against the dominant macro trend. If the HTF Trend is BEARISH, you may ONLY look for SHORT setups. If BULLISH, ONLY look for LONG setups.
+12. SMART MONEY ORDER FLOW & VWAP VALUE DISCIPLINE:
+    - VWAP PULLBACKS: In a BULLISH regime, optimal long entries occur when price is testing Session VWAP, POC, or bouncing off the lower VWAP band (lower1). Do NOT chase breakout longs if price is already at EXTREME_OVERBOUGHT (> upper2).
+    - BREAKOUT VOLUME REQUIREMENT: For MOMENTUM_BREAKOUT or Stop orders (Buy Stop / Sell Stop), you MUST verify that volume_surge is true or volume_ratio >= 1.4. If volume is LOW or ANEMIC, reject the breakout as a false trap or place a LIMIT order pullback at the POC (poc_price) / HVN (nearest_hvn).
+    - VALUE AREA ACCEPTANCE: When price is within the Value Area (in_value_area: true), expect mean reversion toward POC. Trend continuations require acceptance outside VAH/VAL on expanding volume.
 
 Historical Memory:
 ${historicalMemory || "None"}
@@ -483,9 +487,12 @@ serve(async (req) => {
               const result = await fetchPaperBars(signal.symbol, signal.timeframe, 300, supabase);
               const snapshot = getContextSnapshot(
                 result.map((b: any) => b.t),
+                result.map((b: any) => b.o),
                 result.map((b: any) => b.h),
                 result.map((b: any) => b.l),
-                result.map((b: any) => b.c)
+                result.map((b: any) => b.c),
+                result.map((b: any) => b.v),
+                signal.symbol
               );
 
               // 3. Math Validation (Stop Loss & Take Profit Hit)
@@ -700,7 +707,9 @@ serve(async (req) => {
                   result.map((b: any) => b.o),
                   result.map((b: any) => b.h),
                   result.map((b: any) => b.l),
-                  result.map((b: any) => b.c)
+                  result.map((b: any) => b.c),
+                  result.map((b: any) => b.v),
+                  symbol
                 );
                 if (dailySnapshot.trend_alignment.startsWith('BULLISH')) htf_trend = 'BULLISH';
                 else if (dailySnapshot.trend_alignment.startsWith('BEARISH')) htf_trend = 'BEARISH';
@@ -721,7 +730,9 @@ serve(async (req) => {
                   mtfaResult.map((b: any) => b.o),
                   mtfaResult.map((b: any) => b.h),
                   mtfaResult.map((b: any) => b.l),
-                  mtfaResult.map((b: any) => b.c)
+                  mtfaResult.map((b: any) => b.c),
+                  mtfaResult.map((b: any) => b.v),
+                  symbol
                 );
                 if (mtfaSnapshot.trend_alignment.startsWith('BULLISH')) mtfa_trend = 'BULLISH';
                 else if (mtfaSnapshot.trend_alignment.startsWith('BEARISH')) mtfa_trend = 'BEARISH';
@@ -739,7 +750,9 @@ serve(async (req) => {
               bars.map((b) => b.o),
               bars.map((b) => b.h),
               bars.map((b) => b.l),
-              bars.map((b) => b.c)
+              bars.map((b) => b.c),
+              bars.map((b) => b.v),
+              symbol
             );
             if (htf_pivot) rawSnapshot.htf_pivot = htf_pivot;
             rawSnapshot.htf_trend = htf_trend;
