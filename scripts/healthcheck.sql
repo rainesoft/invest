@@ -71,7 +71,7 @@ FROM user_trades
 WHERE status = 'PENDING' 
   AND created_at < NOW() - INTERVAL '1 hour';
 
--- 7. FAILED Trades (Execution blocks)
+-- 7. FAILED Trades (Execution blocks & MT5 Error Codes: 10014, 10015, 10016, 10019)
 SELECT '\n--- FAILED Trades ---' AS section;
 SELECT id, symbol, volume, error_message, created_at 
 FROM user_trades 
@@ -130,14 +130,33 @@ FROM trade_opportunities
 WHERE status = 'APPROVED'
   AND created_at < NOW() - INTERVAL '1 hour';
 
--- 13B. Stale ACTIVE Signals Check (> 24 hours without outcome resolution)
-SELECT '\n--- Stale ACTIVE Signals (> 24h) ---' AS section;
-SELECT id, symbol, side, timeframe, status, created_at,
-       ROUND(EXTRACT(EPOCH FROM (NOW() - created_at)) / 3600, 1) as hours_active
-FROM trade_opportunities
-WHERE status = 'ACTIVE'
-  AND created_at < NOW() - INTERVAL '24 hours'
-ORDER BY created_at ASC;
+-- 13B. Stale ACTIVE Signals Check (> 24 hours without active OPEN positions)
+SELECT '\n--- Stale ACTIVE Signals (> 24h, No Open Trades) ---' AS section;
+SELECT t.id, t.symbol, t.side, t.timeframe, t.status, t.created_at,
+       ROUND(EXTRACT(EPOCH FROM (NOW() - t.created_at)) / 3600, 1) as hours_active
+FROM trade_opportunities t
+WHERE t.status = 'ACTIVE'
+  AND t.created_at < NOW() - INTERVAL '24 hours'
+  AND NOT EXISTS (
+    SELECT 1 FROM user_trades u
+    WHERE u.opportunity_id = t.id AND u.status = 'OPEN'
+  )
+ORDER BY t.created_at ASC;
+
+-- 13C. Unreconciled Opportunities (Completed User Trades but Opportunity still ACTIVE/APPROVED)
+SELECT '\n--- Unreconciled Opportunities (Trades Done but Opp Active) ---' AS section;
+SELECT t.id, t.symbol, t.side, t.status, t.created_at
+FROM trade_opportunities t
+WHERE t.status IN ('ACTIVE', 'APPROVED')
+  AND EXISTS (
+    SELECT 1 FROM user_trades u
+    WHERE u.opportunity_id = t.id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM user_trades u
+    WHERE u.opportunity_id = t.id AND u.status IN ('OPEN', 'PENDING', 'VPS_PENDING')
+  )
+ORDER BY t.created_at DESC;
 
 -- 14. Edge Function Agent Crashes
 SELECT '\n--- Edge Function Agent Crashes ---' AS section;
@@ -156,9 +175,12 @@ ORDER BY created DESC
 LIMIT 10;
 
 -- 16. Treasury Snapshots & Solvency
-SELECT '\n--- Treasury Solvency Snapshots ---' AS section;
+SELECT '\n--- Treasury Solvency Snapshots & Status ---' AS section;
 SELECT id, snapshot_timestamp, total_customer_liability, total_assets, solvency_ratio, notes
 FROM treasury_snapshots
 ORDER BY snapshot_timestamp DESC
 LIMIT 5;
 
+SELECT key, value
+FROM system_settings
+WHERE key = 'treasury_status';

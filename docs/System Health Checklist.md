@@ -419,10 +419,12 @@ If this query returns rows, investigate a routing failure or a hardcoded status 
 
 ---
 
-## ⚠️ 3B. Trade Execution — MT5 Execution Errors (10014, 10016, 10019)
+## ⚠️ 3B. Trade Execution — MT5 Execution Errors (10014, 10015, 10016, 10019)
 
 > [!WARNING]
-> **Incident (2026-08-04 & 2026-08-10):** The strategy logic split the minimum lot size (0.01) into two legs (0.005 lots each) and also incorrectly sent `0.01` lots for indices like `US30` which actually require a minimum of `0.1` lots on some brokers. MetaTrader 5 strictly enforces minimum lot sizes and increments, and instantly rejected the trades with `TRADE_RETCODE_INVALID_VOLUME` (Code 10014).
+> **Incident (2026-08-04, 2026-08-10, 2026-08-24):** 
+> - The strategy logic split the minimum lot size (0.01) into two legs (0.005 lots each) and also incorrectly sent `0.01` lots for indices like `US30` which actually require a minimum of `0.1` lots on some brokers. MetaTrader 5 strictly enforces minimum lot sizes and increments, and instantly rejected the trades with `TRADE_RETCODE_INVALID_VOLUME` (Code 10014).
+> - On 2026-08-24, an S-Tier `BUY STOP` order on `BTCUSD` was rejected with `TRADE_RETCODE_INVALID_PRICE` (Code 10015) because live market price had already moved past the breakout entry level before order placement.
 
 Monitor for execution blocks on the broker side:
 
@@ -435,6 +437,7 @@ ORDER BY created_at DESC;
 
 If this query returns rows, investigate the error code:
 - **Code 10014 (Invalid Volume):** Ensure that the volume algorithms in `agent-trade` and `agent-news` enforce a strict mathematical floor against a dynamic `volumeStep` mapping (e.g. `US30 = 0.1`, `BTCUSD = 0.01`), rather than hardcoding `0.01` universally.
+- **Code 10015 (Invalid Price / Stale Breakout Entry):** A pending stop/limit order (e.g., `BUY STOP` or `SELL STOP`) had an entry price that was invalid relative to current market Ask/Bid (e.g., placing a BUY STOP below or at the current Ask price because price already broke out before the order was submitted). **Diagnostic Action:** When this occurs, ensure the parent `trade_opportunities` status is updated to `REJECTED` rather than remaining stuck in `APPROVED`, and check that `agent-trade` validates live price against order type prior to placing pending orders.
 - **Code 10016 (Invalid Stops):** The Stop Loss or Take Profit was placed too close to the entry price or on the wrong side (e.g., placing a TP below the entry on a LONG trade). **Diagnostic Action:** If this error occurs frequently for a specific symbol (e.g., `NZDUSD`), check `agent-trade`'s `minDistances` configuration. If the symbol is missing from the dictionary, the AI's ultra-tight stops bypass the widening guard and are instantly rejected by the broker.
 - **Code 10019 (No Money):** The user's account had insufficient free margin to open the required volume. This is working as intended to protect against margin calls if the account is overleveraged.
 
@@ -558,26 +561,52 @@ Any signal with `hours_open > 10` should be reviewed manually. If the limit orde
 ## ⚠️ 3G. Stale ACTIVE Signals & Broker Pending Order Reconciliations
 
 > [!CAUTION]
-> **Incident (2026-08-24):** 12 stale broker limit/stop orders from previous trading sessions (Aug 19–21) remained open on MetaTrader because their corresponding database records were closed or not tracked in the active `user_trades` set. Concurrently, 88 older trade opportunities in `trade_opportunities` remained in `ACTIVE` state without being expired. 
+> **Incident (2026-08-24):** 12 stale broker limit/stop orders from previous trading sessions (Aug 19–21) remained open on MetaTrader because their corresponding database records were closed or not tracked in the active `user_trades` set. Concurrently, older trade opportunities in `trade_opportunities` remained in `ACTIVE` state without being expired or reconciled with completed trades.
 
-### Step 1 — Check for Stale ACTIVE Signals (> 24h)
-Signals that were generated more than 24 hours ago and never resolved or expired must be marked `EXPIRED`:
+### Step 1 — Check for Stale ACTIVE Signals (> 24h) Without Open Positions
+Signals that were generated more than 24 hours ago and never resolved or expired must be marked `EXPIRED` **only if there are no active OPEN trades running on the broker**:
 
 ```sql
-SELECT id, symbol, side, timeframe, status, created_at,
-       ROUND(EXTRACT(EPOCH FROM (NOW() - created_at)) / 3600, 1) as hours_active
-FROM trade_opportunities
-WHERE status = 'ACTIVE'
-  AND created_at < NOW() - INTERVAL '24 hours'
-ORDER BY created_at ASC;
+SELECT t.id, t.symbol, t.side, t.timeframe, t.status, t.created_at,
+       ROUND(EXTRACT(EPOCH FROM (NOW() - t.created_at)) / 3600, 1) as hours_active
+FROM trade_opportunities t
+WHERE t.status = 'ACTIVE'
+  AND t.created_at < NOW() - INTERVAL '24 hours'
+  AND NOT EXISTS (
+    SELECT 1 FROM user_trades u
+    WHERE u.opportunity_id = t.id AND u.status = 'OPEN'
+  )
+ORDER BY t.created_at ASC;
 ```
 
-If rows are returned, run:
+If rows are returned (and confirmed to have no open positions), run:
 ```sql
-UPDATE trade_opportunities
+UPDATE trade_opportunities t
 SET status = 'EXPIRED'
-WHERE status = 'ACTIVE'
-  AND created_at < NOW() - INTERVAL '24 hours';
+WHERE t.status = 'ACTIVE'
+  AND t.created_at < NOW() - INTERVAL '24 hours'
+  AND NOT EXISTS (
+    SELECT 1 FROM user_trades u
+    WHERE u.opportunity_id = t.id AND u.status = 'OPEN'
+  );
+```
+
+### Step 1b — Reconcile Opportunities whose Trades Have Completed
+If all `user_trades` for an opportunity have closed (e.g. `WON`, `LOST`, `CLOSED`), the parent `trade_opportunities` row should reflect `WON` or `LOST`:
+
+```sql
+SELECT t.id, t.symbol, t.side, t.status, t.created_at
+FROM trade_opportunities t
+WHERE t.status IN ('ACTIVE', 'APPROVED')
+  AND EXISTS (
+    SELECT 1 FROM user_trades u
+    WHERE u.opportunity_id = t.id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM user_trades u
+    WHERE u.opportunity_id = t.id AND u.status IN ('OPEN', 'PENDING', 'VPS_PENDING')
+  )
+ORDER BY t.created_at DESC;
 ```
 
 ### Step 2 — Reconcile Broker Pending Orders vs user_trades
@@ -677,8 +706,10 @@ WHERE status = 'APPROVED'
 Check the edge function logs for `agent-swing` and `agent-day` and look for the keyword `[Validation] WON`. 
 If you only see `[Validation] LOST` and never `WON`, the Take Profit sweep logic may have been reverted or omitted. Ensure the live loop always contains the validation checks for both `stopLoss` and `takeProfit`.
 
-## 7. Treasury Management & Solvency (`cron-treasury-snapshot`)
-The system calculates a monthly Solvency Ratio (Assets / Liability) and syncs master account balances with Exness.
+## 7. Treasury Management & Solvency (`agent-treasury`)
+The system calculates the aggregate Solvency Ratio (Assets / Liability) and syncs master account balances with Exness.
+
+- [ ] **Treasury Accounts & Balance Verification:** Ensure `treasury_accounts` contains active broker (`account_type = 'BROKER'`) and bank (`account_type = 'BANK'`) balances so `get_total_assets` calculates assets correctly.
 - [ ] **Snapshot Generation:** Verify the `treasury_snapshots` table is generating rows correctly:
 ```sql
 SELECT id, snapshot_timestamp, total_customer_liability, total_assets, solvency_ratio, notes
@@ -686,7 +717,12 @@ FROM treasury_snapshots
 ORDER BY snapshot_timestamp DESC
 LIMIT 5;
 ```
-- [ ] **Solvency Safety:** Ensure the `solvency_ratio` in `treasury_snapshots` remains ≥ 1.0. A ratio below 1.0 means customer liabilities exceed current broker and bank assets.
+- [ ] **Solvency Safety & Execution Flag:** Ensure the `solvency_ratio` in `treasury_snapshots` and `system_settings` (`treasury_status`) remains ≥ 1.0. A ratio below 1.0 triggers an autonomous `Treasury Insolvency Lockout` inside `agent-trade`.
+```sql
+SELECT key, value
+FROM system_settings
+WHERE key = 'treasury_status';
+```
 - [ ] **Autonomous De-Leveraging (Emergency Trimming):** If Treasury Solvency falls below 1.0, verify the Position Manager is actively intervening to protect capital. Check the edge function logs for `agent-trade` for `DE-LEVERAGING: Moving SL to Breakeven` or `DE-LEVERAGING: Partially closing 50%`.
 - [ ] **Exness Sync:** Check the edge function logs for `sync-exness-treasury` to ensure it is authenticating properly with the broker and updating balances.
 
