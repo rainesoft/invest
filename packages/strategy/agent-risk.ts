@@ -116,6 +116,36 @@ export async function validateGlobalSignal(
     }
   }
 
+  // --- ORDER FLOW & VOLUME SURGE GUARD ---
+  if (currentSnapshot && currentSnapshot.volume_regime === 'ANEMIC' && currentSnapshot.volume_ratio && currentSnapshot.volume_ratio < 0.6) {
+    console.warn(`[Risk Manager] Low Liquidity Warning: ${symbol} volume is ANEMIC (Ratio: ${currentSnapshot.volume_ratio}x).`);
+  }
+
+  return { valid: true };
+}
+
+// Validates whether a momentum breakout strategy has sufficient institutional volume backing
+export function validateOrderFlowBreakout(
+  strategyApplied: string,
+  snapshot?: LogicContext
+): RiskValidationResult {
+  if (!snapshot) return { valid: true };
+
+  const isBreakout = strategyApplied === 'MOMENTUM_BREAKOUT' || 
+                     strategyApplied === 'MACRO_MOMENTUM_BREAKOUT' || 
+                     strategyApplied === 'BREAKOUT';
+
+  if (isBreakout) {
+    const volRatio = snapshot.volume_ratio ?? 1.0;
+    // Breakout requires at least normal volume (>= 0.85x) and preferably a surge
+    if (snapshot.volume_regime === 'ANEMIC' || volRatio < 0.80) {
+      return {
+        valid: false,
+        reason: `REJECTED (Order Flow Guard): Breakout rejected due to anemic volume (${volRatio.toFixed(2)}x < 0.80x baseline). False breakout trap detected.`
+      };
+    }
+  }
+
   return { valid: true };
 }
 
