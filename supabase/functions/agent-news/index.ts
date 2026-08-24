@@ -204,9 +204,11 @@ function calcLots(symbol: string, entryPx: number, slPx: number): number {
   
   let pointValue = 1; // Default
   if (symbol.includes("JPY")) {
-    pointValue = 1000 / entryPx; // rough approximation for JPY pairs
+    pointValue = 1000 / entryPx; // standard lot 100k JPY converted to USD
   } else if (symbol.includes("USD") && symbol.length === 6) {
     pointValue = 100000; // standard lot 100k
+  } else if (symbol.length === 6) {
+    pointValue = 100000; // standard cross-pair lot 100k
   }
 
   const riskPerLot = slDistance * pointValue;
@@ -410,45 +412,69 @@ serve(async (req) => {
       try {
         let headlinesToProcess: string[] = [];
 
-        // Fetch proactive crypto sentiment from Tavily instead of just relying on RSS
+        // 1. Proactive Tavily Macro & Crypto Queries
         if (TAVILY_API_KEY) {
-           console.log(`[Macro Scout] [Trace: ${traceId}] Proactively querying Tavily for BTCUSD sentiment...`);
-           const tavilyRes = await fetch("https://api.tavily.com/search", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                api_key: TAVILY_API_KEY,
-                query: "BTCUSD crypto market breaking news sentiment",
-                search_depth: "basic",
-                days: 1
-              })
-           });
-           debugInfo.tavily_status = tavilyRes.status;
-           if (tavilyRes.ok) {
-              const tavilyData = await tavilyRes.json();
-              debugInfo.tavily_results = tavilyData.results?.length || 0;
-              if (tavilyData.results && tavilyData.results.length > 0) {
-                 for (let i = 0; i < Math.min(3, tavilyData.results.length); i++) {
-                    headlinesToProcess.push(tavilyData.results[i].title);
-                 }
+          const tavilyQueries = [
+            "BOJ Bank of Japan interest rate policy yen JPY intervention breaking",
+            "ECB European Central Bank interest rate monetary policy EUR",
+            "Federal Reserve rate cuts inflation USD dollar breaking",
+            "BTCUSD crypto breaking news market sentiment"
+          ];
+
+          for (const query of tavilyQueries) {
+            try {
+              console.log(`[Macro Scout] [Trace: ${traceId}] Proactively querying Tavily: "${query}"...`);
+              const tavilyRes = await fetch("https://api.tavily.com/search", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  api_key: TAVILY_API_KEY,
+                  query,
+                  search_depth: "basic",
+                  days: 1
+                })
+              });
+              if (tavilyRes.ok) {
+                const tavilyData = await tavilyRes.json();
+                if (tavilyData.results && tavilyData.results.length > 0) {
+                  for (let i = 0; i < Math.min(2, tavilyData.results.length); i++) {
+                    if (tavilyData.results[i].title) {
+                      headlinesToProcess.push(tavilyData.results[i].title);
+                    }
+                  }
+                }
               }
-           } else {
-              debugInfo.tavily_error = await tavilyRes.text();
-           }
+            } catch (tErr: any) {
+              console.warn(`[Macro Scout] Tavily Query Error for "${query}":`, tErr.message);
+            }
+          }
         }
 
-        // Fallback to RSS if Tavily fails or is disabled
-        if (headlinesToProcess.length === 0) {
-           const rssRes = await fetch("https://cointelegraph.com/rss");
-           const xml = await rssRes.text();
-           const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
-           debugInfo.rss_items = items.length;
-           for (let i = 0; i < Math.min(3, items.length); i++) {
-             const titleMatch = items[i].match(/<title>(.*?)<\/title>/);
-             if (titleMatch) {
-                headlinesToProcess.push(titleMatch[1].replace("<![CDATA[", "").replace("]]>", "").trim());
-             }
-           }
+        // 2. Fallback / Complementary Multi-Source RSS Feeds
+        const rssFeeds = [
+          "https://cointelegraph.com/rss",
+          "https://www.forexlive.com/feed/news"
+        ];
+
+        for (const feedUrl of rssFeeds) {
+          try {
+            const rssRes = await fetch(feedUrl);
+            if (rssRes.ok) {
+              const xml = await rssRes.text();
+              const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
+              for (let i = 0; i < Math.min(3, items.length); i++) {
+                const titleMatch = items[i].match(/<title>(.*?)<\/title>/);
+                if (titleMatch) {
+                  const cleanedTitle = titleMatch[1].replace("<![CDATA[", "").replace("]]>", "").trim();
+                  if (cleanedTitle && !headlinesToProcess.includes(cleanedTitle)) {
+                    headlinesToProcess.push(cleanedTitle);
+                  }
+                }
+              }
+            }
+          } catch (rssErr: any) {
+            console.warn(`[Macro Scout] RSS Fetch Error for ${feedUrl}:`, rssErr.message);
+          }
         }
         
         debugInfo.headlines = headlinesToProcess;
@@ -465,11 +491,19 @@ serve(async (req) => {
           
           console.log(`[Macro Scout] [Trace: ${traceId}] Evaluating Sentiment: ${title}`);
           
-          const prompt = `You are a high-frequency trading Sentiment API. 
+          const prompt = `You are a high-frequency quantitative macro and sentiment API. 
 Analyze this news headline and return ONLY a JSON object.
-Format: { "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL", "confidence": 0-100, "symbol": "BTCUSD" | "NONE", "requires_verification": boolean }
-If the news is ambiguous, a rumor, or confidence is below 85, set requires_verification to true.
-CRITICAL RULE: If the headline is a generic homepage index title (e.g. "Bitcoin News Today", "Latest Updates", "Live News"), you MUST set the sentiment to NEUTRAL, confidence to 0, and symbol to NONE. Only process specific, actionable macroeconomic catalysts.
+Format: { 
+  "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL", 
+  "confidence": 0-100, 
+  "symbol": "EURJPY" | "EURUSD" | "GBPUSD" | "USDJPY" | "AUDUSD" | "NZDUSD" | "AUDJPY" | "CADJPY" | "EURGBP" | "BTCUSD" | "XAUUSD" | "US30" | "NAS100" | "NONE", 
+  "requires_verification": boolean 
+}
+CRITICAL RULES:
+- If news indicates BOJ rate hike or JPY intervention/strength, map symbol to "EURJPY" or "USDJPY" with BEARISH sentiment.
+- If news indicates ECB rate cuts or Euro weakness, map symbol to "EURUSD" or "EURJPY" with BEARISH sentiment.
+- If the news is ambiguous, a rumor, or confidence is below 85, set requires_verification to true.
+- If the headline is a generic homepage index title (e.g. "Bitcoin News Today", "Latest Updates", "Live News"), you MUST set sentiment to NEUTRAL, confidence to 0, and symbol to NONE. Only process specific, actionable macroeconomic catalysts.
 Headline: "${title}"`;
 
           const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -501,12 +535,12 @@ Headline: "${title}"`;
           
           // Mark as processed regardless of execution so we don't spam API
           const { error: insertErr } = await supabase.from("trade_opportunities").insert({
-            symbol: parsed.symbol !== "NONE" ? parsed.symbol : "BTCUSD",
-            side: "LONG", // Dummy
+            symbol: parsed.symbol !== "NONE" ? parsed.symbol : "MACRO",
+            side: parsed.sentiment === "BULLISH" ? "LONG" : "SHORT",
             status: "REJECTED", // silently discard by default to reduce noise
             timeframe: "M1",
             ai_summary: headlineIdentifier,
-            risk_summary: `Sentiment evaluation: ${parsed.sentiment} (${parsed.confidence}%)`,
+            risk_summary: `Sentiment evaluation: ${parsed.sentiment} (${parsed.confidence}%) for ${parsed.symbol}`,
             created_at: new Date().toISOString(),
             trace_id: traceId
           });
@@ -526,14 +560,18 @@ Headline: "${title}"`;
                const tavilyContext = await verifyWithTavily(title);
                
                if (tavilyContext) {
-                 const verifyPrompt = `You are a high-frequency trading Sentiment API.
+                 const verifyPrompt = `You are a high-frequency quantitative macro and sentiment API.
 Original Headline: "${title}"
 Web Search Context:
 ${tavilyContext}
 
 Based on this additional context, provide a final evaluation. Return ONLY a JSON object.
-Format: { "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL", "confidence": 0-100, "symbol": "BTCUSD" | "NONE" }
-CRITICAL RULE: If the headline and context refer to a generic homepage index (e.g. "Bitcoin News Today", "Live Updates") without a specific underlying catalyst, you MUST set the sentiment to NEUTRAL, confidence to 0, and symbol to NONE.`;
+Format: { 
+  "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL", 
+  "confidence": 0-100, 
+  "symbol": "EURJPY" | "EURUSD" | "GBPUSD" | "USDJPY" | "AUDUSD" | "NZDUSD" | "AUDJPY" | "CADJPY" | "EURGBP" | "BTCUSD" | "XAUUSD" | "US30" | "NAS100" | "NONE" 
+}
+CRITICAL RULE: If the headline and context refer to a generic homepage index without a specific underlying catalyst, set sentiment to NEUTRAL, confidence to 0, and symbol to NONE.`;
 
                  const verifyRes = await fetch("https://api.openai.com/v1/chat/completions", {
                     method: "POST",
@@ -560,13 +598,15 @@ CRITICAL RULE: If the headline and context refer to a generic homepage index (e.
                }
             }
 
-            // Execute if threshold met
-            if (finalParsed.confidence >= 85 && (finalParsed.sentiment === "BULLISH" || finalParsed.sentiment === "BEARISH") && finalParsed.symbol === "BTCUSD") {
+            // Execute & Publish if threshold met across valid trading universe
+            const validSymbols = ["EURJPY", "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "AUDJPY", "CADJPY", "EURGBP", "BTCUSD", "XAUUSD", "US30", "NAS100"];
+            if (finalParsed.confidence >= 85 && (finalParsed.sentiment === "BULLISH" || finalParsed.sentiment === "BEARISH") && validSymbols.includes(finalParsed.symbol)) {
               
               const side = finalParsed.sentiment === "BULLISH" ? "LONG" : "SHORT";
               
               // Update opportunity to PUBLISHED to allow agent-swing to evaluate it
               await supabase.from("trade_opportunities").update({
+                symbol: finalParsed.symbol,
                 side,
                 status: "PUBLISHED",
                 risk_summary: `Sentiment evaluation: ${finalParsed.sentiment} (${finalParsed.confidence}%). Context: ${verifiedContext}`
