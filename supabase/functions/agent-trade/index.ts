@@ -273,7 +273,9 @@ serve(async (req) => {
               bars.map((b: any) => b.o),
               bars.map((b: any) => b.h),
               bars.map((b: any) => b.l),
-              bars.map((b: any) => b.c)
+              bars.map((b: any) => b.c),
+              bars.map((b: any) => b.v),
+              symbol
             );
             atrCache.set(symbol, snap.atr_14 || 0);
           }
@@ -720,7 +722,9 @@ serve(async (req) => {
             bars.map((b: any) => b.o),
             bars.map((b: any) => b.h),
             bars.map((b: any) => b.l),
-            bars.map((b: any) => b.c)
+            bars.map((b: any) => b.c),
+            bars.map((b: any) => b.v),
+            signal.symbol
           );
           const atr = snap.atr_14 || 0;
           if (atr > 0) {
@@ -814,6 +818,34 @@ serve(async (req) => {
         };
         await supabase.from("trade_opportunities").update({ stop_plan_json: updatedStopJson }).eq("id", signal.id);
         signal.stop_plan_json = updatedStopJson;
+      }
+    }
+
+    // === EXECUTION GUARD 1D: ORDER FLOW BREAKOUT VOLUME GUARD ===
+    // Prevents entering breakout market orders when tick volume is anemic
+    const orderTypeStr = (signal.entry_plan_json?.order_type || "Market").toUpperCase();
+    if (!isManual && (orderTypeStr.includes("STOP") || signal.ai_summary?.includes("BREAKOUT"))) {
+      try {
+        const bars = await fetchPaperBars(signal.symbol, "30m", 30, supabase);
+        if (bars.length >= 10) {
+          const snap = getContextSnapshot(
+            bars.map((b: any) => b.t),
+            bars.map((b: any) => b.o),
+            bars.map((b: any) => b.h),
+            bars.map((b: any) => b.l),
+            bars.map((b: any) => b.c),
+            bars.map((b: any) => b.v),
+            signal.symbol
+          );
+          if (snap.volume_regime === "ANEMIC" || (snap.volume_ratio !== null && snap.volume_ratio < 0.70)) {
+            const rejectReason = `[Execution Desk] REJECTED: Low-Volume Fakeout Trap. Breakout tick volume ratio is anemic (${snap.volume_ratio}x < 0.70x required).`;
+            await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_summary: (signal.ai_summary || "") + "\n\n" + rejectReason, ai_risks: rejectReason }).eq("id", signal.id);
+            console.log(`[Execution Desk] Rejected ${signal.symbol} due to anemic breakout volume.`);
+            return new Response(JSON.stringify({ success: true, message: "Rejected due to low volume fakeout" }), { status: 200 });
+          }
+        }
+      } catch (err) {
+        console.error(`[Execution Desk] Order Flow Guard check failed:`, err);
       }
     }
 
