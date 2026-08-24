@@ -289,6 +289,71 @@ export interface Bar {
   v: number;
 }
 
+export function resampleBars(bars30m: any[], targetTimeframe: string): Bar[] {
+  const tf = targetTimeframe.toLowerCase();
+  if (tf === '30m') {
+    return bars30m.map((b: any) => ({
+      t: b.ts || b.t,
+      o: Number(b.o),
+      h: Number(b.h),
+      l: Number(b.l),
+      c: Number(b.c),
+      v: Number(b.v || 0)
+    }));
+  }
+
+  const sorted = [...bars30m].sort((a, b) => new Date(a.ts || a.t).getTime() - new Date(b.ts || b.t).getTime());
+  const buckets = new Map<string, any[]>();
+
+  for (const bar of sorted) {
+    const d = new Date(bar.ts || bar.t);
+    let key = '';
+
+    if (tf === '1h') {
+      d.setUTCMinutes(0, 0, 0);
+      key = d.toISOString();
+    } else if (tf === '4h') {
+      const h = Math.floor(d.getUTCHours() / 4) * 4;
+      d.setUTCHours(h, 0, 0, 0);
+      key = d.toISOString();
+    } else if (tf === '1d' || tf === 'd' || tf === '1day') {
+      d.setUTCHours(0, 0, 0, 0);
+      key = d.toISOString();
+    } else if (tf === '1w' || tf === 'w' || tf === '1week') {
+      const day = d.getUTCDay();
+      d.setUTCDate(d.getUTCDate() - day);
+      d.setUTCHours(0, 0, 0, 0);
+      key = d.toISOString();
+    } else {
+      d.setUTCHours(0, 0, 0, 0);
+      key = d.toISOString();
+    }
+
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(bar);
+  }
+
+  const resampled: Bar[] = [];
+  for (const [bucketTime, bList] of buckets.entries()) {
+    const open = Number(bList[0].o);
+    const high = Math.max(...bList.map((b) => Number(b.h)));
+    const low = Math.min(...bList.map((b) => Number(b.l)));
+    const close = Number(bList[bList.length - 1].c);
+    const volume = bList.reduce((sum, b) => sum + Number(b.v || 0), 0);
+
+    resampled.push({
+      t: bucketTime,
+      o: open,
+      h: high,
+      l: low,
+      c: close,
+      v: volume
+    });
+  }
+
+  return resampled;
+}
+
 export async function fetchPaperBars(
   symbol: string,
   timeframe = '1h',
@@ -318,8 +383,15 @@ export async function fetchPaperBars(
         
         const tfLower = timeframe.toLowerCase();
         
-        // Dynamically enforce stricter cache limits
-        let maxAgeMs = 4 * 60 * 60 * 1000; // Default: 4 hours during weekdays
+        // Dynamically enforce timeframe-appropriate cache freshness limits
+        let maxAgeMs = 4 * 60 * 60 * 1000; // Default: 4 hours for intraday (1m, 5m, 15m, 30m, 1h)
+        if (tfLower.includes('d')) {
+          maxAgeMs = 48 * 60 * 60 * 1000; // 48 hours for Daily candles
+        } else if (tfLower.includes('w')) {
+          maxAgeMs = 14 * 24 * 60 * 60 * 1000; // 14 days for Weekly candles
+        } else if (tfLower.includes('4h')) {
+          maxAgeMs = 12 * 60 * 60 * 1000; // 12 hours for 4H candles
+        }
         
         // Check if today is a weekend
         const today = new Date().getUTCDay(); // 0 = Sunday, 6 = Saturday
@@ -327,10 +399,8 @@ export async function fetchPaperBars(
         
         if (isWeekend) {
           const isCrypto = symbol.includes("BTC") || symbol.includes("ETH") || symbol.includes("XRP") || symbol.includes("SOL") || symbol.includes("ADA");
-          if (isCrypto) {
-            maxAgeMs = 4 * 60 * 60 * 1000; // Crypto trades 24/7
-          } else {
-            maxAgeMs = 48 * 60 * 60 * 1000; // Cap weekend gap to 48h (preventing 7-day stale freezes)
+          if (!isCrypto && !tfLower.includes('d') && !tfLower.includes('w')) {
+            maxAgeMs = 72 * 60 * 60 * 1000; // Cap weekend gap to 72h (preventing 7-day stale freezes)
           }
         }
 
@@ -341,6 +411,34 @@ export async function fetchPaperBars(
           }));
         } else {
           console.log(`[Cache Stale] ${symbol} ${timeframe} data is ${Math.round((now - latestTs) / 3600000)}h old. Falling back to MetaApi.`);
+        }
+      }
+
+      // If direct cached bars for the requested timeframe are missing or cold:
+      // Try resampling from 30m candles available in market_data_pti
+      const { data: base30mBars } = await supabase
+        .from('market_data_pti')
+        .select('*')
+        .eq('symbol', symbol)
+        .eq('timeframe', '30m')
+        .order('ts', { ascending: false })
+        .limit(Math.max(limit * 48, 500));
+
+      if (base30mBars && base30mBars.length > 0) {
+        const resampled = resampleBars(base30mBars, timeframe.toLowerCase());
+        if (resampled && resampled.length > 0) {
+          const latestTs = new Date(resampled[resampled.length - 1].t).getTime();
+          const now = new Date().getTime();
+          let maxAgeMs = 4 * 60 * 60 * 1000;
+          const today = new Date().getUTCDay();
+          const isWeekend = today === 0 || today === 6;
+          if (isWeekend) {
+            const isCrypto = symbol.includes("BTC") || symbol.includes("ETH") || symbol.includes("XRP") || symbol.includes("SOL") || symbol.includes("ADA");
+            if (!isCrypto) maxAgeMs = 48 * 60 * 60 * 1000;
+          }
+          if (now - latestTs < maxAgeMs || resampled.length >= 10) {
+            return resampled.slice(-limit);
+          }
         }
       }
     }
