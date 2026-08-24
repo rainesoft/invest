@@ -320,7 +320,12 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
 12. CRYPTO COUNTER-TREND & MOMENTUM SCALPING (CRITICAL):
     - EXPLICIT COUNTER-TREND AUTHORIZATION: For crypto assets (e.g. BTCUSD), you are EXPLICITLY AUTHORIZED to originate "Mean Reversion Shorts" when the RSI exceeds 85 AND strong bearish divergence is present on the MACD. Do not reject simply due to 'bullish macro trend' if these extreme overbought conditions exist.
     - SHORT-TERM PULLBACK LOGIC: When generating a counter-trend short, do NOT wait for a massive macro structural swing. Generate a quick A-Tier short setup targeting a pullback to the nearest Fibonacci retracement level (e.g., the 0.382 or 0.5 level) for TP1/TP2.
-    - DYNAMIC RSI WEIGHTING (MOMENTUM SCALPS): If the news sentiment is overwhelmingly positive (via agent-news), IGNORE the overbought RSI up to 90. Instead of rejecting the setup, look for 'continuation momentum scalps' targeting immediate structural highs.`;
+    - DYNAMIC RSI WEIGHTING (MOMENTUM SCALPS): If the news sentiment is overwhelmingly positive (via agent-news), IGNORE the overbought RSI up to 90. Instead of rejecting the setup, look for 'continuation momentum scalps' targeting immediate structural highs.
+
+13. SMART MONEY ORDER FLOW & VOLUME PROFILE CONFLUENCE:
+    - HIGH-VOLUME NODES (HVN) & POC: An Order Block or Fibonacci level is 2x higher conviction if it aligns with the Point of Control (poc_price) or nearest High-Volume Node (nearest_hvn).
+    - BREAKOUT VOLUME VALIDATION: S-Tier MACRO_MOMENTUM_BREAKOUT setups require expanding volume (volume_surge: true or volume_ratio >= 1.4). If breakout volume is ANEMIC (< 0.8x), reject the setup as a fakeout liquidity trap.
+    - VALUE AREA VALUE: Pullbacks to Value Area Low (val_price) in a Bullish Trend, or Value Area High (vah_price) in a Bearish Trend, provide asymmetric risk entries.`;
 
   console.log(`[Responses API] Submitting ${symbol} analysis...`);
   
@@ -705,6 +710,7 @@ serve(async (req) => {
                 result.map((b: any) => b.h),
                 result.map((b: any) => b.l),
                 result.map((b: any) => b.c),
+                result.map((b: any) => b.v),
                 signal.symbol
               );
 
@@ -891,6 +897,7 @@ serve(async (req) => {
           const high = bars.map((b) => b.h);
           const low = bars.map((b) => b.l);
           const close = bars.map((b) => b.c);
+          const volume = bars.map((b) => b.v);
 
           // === FIBONACCI ENGINE ===
           const fib = calculateFibonacciLevels(high, low, close);
@@ -903,7 +910,7 @@ serve(async (req) => {
           });
 
           // === MARKET SNAPSHOT ===
-          const snapshot = getContextSnapshot(timestamps, open, high, low, close, symbol);
+          const snapshot = getContextSnapshot(timestamps, open, high, low, close, volume, symbol);
 
           // === ASSET ISOLATION (PYRAMIDING) GUARD ===
           sendEvent({ type: "progress", message: `[Pre-AI Guard] Validating global signal constraints for ${symbol}...` });
@@ -932,6 +939,7 @@ serve(async (req) => {
                 weeklyBars.map((b) => b.h),
                 weeklyBars.map((b) => b.l),
                 weeklyBars.map((b) => b.c),
+                weeklyBars.map((b) => b.v),
                 symbol
               );
               (snapshot as any).weekly_trend = weeklySnap.trend_alignment;
@@ -954,6 +962,7 @@ serve(async (req) => {
                 ltfBars.map((b) => b.h),
                 ltfBars.map((b) => b.l),
                 ltfBars.map((b) => b.c),
+                ltfBars.map((b) => b.v),
                 symbol
               );
               (snapshot as any).ltf_timeframe = ltfTimeframe;
