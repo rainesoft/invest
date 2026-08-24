@@ -25,6 +25,8 @@
     "test": "pnpm -r test"
   },
   "devDependencies": {
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.0",
     "supabase": "^2.109.0"
   }
 }
