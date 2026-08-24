@@ -114,11 +114,15 @@ The `created_at` timestamps should fall within the last 4 hours for `agent-swing
 |---|---|---|
 | `agent-day-poll` | `*/30 * * * *` | Fires every 30 minutes to evaluate intraday pivot setups |
 | `agent-news-poll` | `0 * * * *` | Fires at the top of every hour, 7 days a week |
-| `agent-swing-poll` | `0 */4 * * *` | Fires every 4 hours, 7 days a week |
+| `agent-swing-forex` | `0 */4 * * 1-5` | Fires every 4 hours on weekdays for Forex pairs |
+| `agent-swing-crypto` | `2 */4 * * *` | Fires every 4 hours daily for BTCUSD |
+| `agent-swing-indices` | `4 */4 * * 1-5` | Fires every 4 hours on weekdays for Indices & Commodities |
 | `agent-trade-poll` | `3-59/5 * * * *` | Fires every 5 min (offset 3m), 7 days a week |
 | `agent-trade-manage-positions` | `*/30 * * * *` | Fires every 30 min, 7 days a week |
+| `position-manager-poll` | `*/30 * * * *` | Fires every 30 min, 7 days a week to trail stops and evaluate invalidations |
 | `exness-history-sync-poll` | `*/15 * * * *` | Fires every 15 min to reconcile closed trades and update portfolio capital |
-| `system-health-check-poll` | `15 * * * *` | Fires hourly to scan `cron.job_run_details` for silent failures |
+| `resolve-outcomes-poll` | `*/10 * * * *` | Fires every 10 min to reconcile MT5 deals and grade trade opportunities |
+| `system-health-check-poll` | `15 * * * *` | Fires hourly to scan `cron.job_run_details` and trigger agent-kill-switch health check |
 | `invoke_reset_daily_drawdown` | `0 22 * * *` | Fires at 22:00 UTC daily |
 | `weekend-defense-cron` | `30 20 * * 5` | Fires Friday 20:30 UTC |
 
@@ -299,6 +303,26 @@ LIMIT 10;
 ```
 
 - ❌ **FAILED:** If rows are returned, the Edge Function is failing internally. Review the stack trace and the Edge Function logs to resolve the code-level exception.
+
+---
+
+## ⚠️ 1G. Database Webhook Trigger Diagnostic — Broken URLs & Kong Fallbacks
+
+> [!CAUTION]
+> **Incident (2026-08-24):** Database triggers (e.g. `on_signal_rejected_eject` and `trigger_email_onboarding`) repeatedly threw `"Couldn't resolve host name"` errors in `net._http_response`. These triggers relied on `current_setting('app.settings.edge_functions_base_url', true)`, which is not set in cloud Supabase, causing them to fall back to `http://kong:8000/functions/v1` (a local Docker-only domain).
+
+### Step 1 — Check for Webhook Network Errors
+Run this query to inspect failed `pg_net` requests:
+
+```sql
+SELECT id, status_code, error_msg, created
+FROM net._http_response
+WHERE error_msg IS NOT NULL OR status_code >= 400
+ORDER BY created DESC
+LIMIT 10;
+```
+
+- ❌ **FAILED:** If rows show `error_msg = 'Couldn't resolve host name'`, inspect `pg_proc` for functions with hardcoded `http://kong:8000` or unset GUC settings. Ensure all triggers call production Edge Function URLs (`https://<project-ref>.supabase.co/functions/v1/...`).
 
 ---
 
@@ -527,13 +551,72 @@ Any signal with `hours_open > 10` should be reviewed manually. If the limit orde
   - Check `system_settings` for `phm_settings`. Confirm if the master account is currently playing with **House Money**. If active, verify that the escalated risk (e.g. 15%) is correctly overriding standard risk, and that the Drawdown Breaker correctly locks to the PHM Floor to ensure a safe soft-landing if a loss streak occurs.
 - [ ] **10% Account Blowout Protection:** Verify if trades are being rejected due to the 10% hard risk cap. If a user's capital is too small to handle the 0.01 minimum lot size for an asset, `agent-trade` will log `10% Account Blowout Protection hard cap reached`. Ensure users have sufficient capital to safely absorb minimum lot risk.
 - [ ] **Trailing Stop Loss & Position Manager:** Verify `agent-trade-manage-positions` is successfully executing every 30 minutes. Check the edge function logs for `agent-trade` and the `user_trades.stop_loss` column. Profitable trades should log `TRAIL_RUNNER`, `LOCK_IN_1R`, or `BREAK_EVEN` moves. If trades are highly profitable but not trailing, ensure the Position Manager is properly fetching live price data (`market_data_pti.c`) and updating the SL on both the broker and database mock.
-- [ ] **Pending Order Garbage Collection:** Verify `agent-trade-manage-positions` is successfully executing every 30 minutes. Check the edge function logs for `agent-trade` to confirm it is scanning MetaAPI and autonomously cancelling stale pending limit orders (older than 24 hours) to prevent ghost executions.
+- [ ] **Pending Order Garbage Collection:** Verify `position-manager-poll` (`agent-trade` with `action: "MANAGE_POSITIONS"`) is executing every 30 minutes. Check the edge function logs for `agent-trade` to confirm it is cross-referencing live MetaAPI/MT5 broker orders and autonomously cancelling stale pending limit/stop orders (older than 24 hours) as well as orphaned broker orders to prevent ghost executions.
+
+---
+
+## ⚠️ 3G. Stale ACTIVE Signals & Broker Pending Order Reconciliations
+
+> [!CAUTION]
+> **Incident (2026-08-24):** 12 stale broker limit/stop orders from previous trading sessions (Aug 19–21) remained open on MetaTrader because their corresponding database records were closed or not tracked in the active `user_trades` set. Concurrently, 88 older trade opportunities in `trade_opportunities` remained in `ACTIVE` state without being expired. 
+
+### Step 1 — Check for Stale ACTIVE Signals (> 24h)
+Signals that were generated more than 24 hours ago and never resolved or expired must be marked `EXPIRED`:
+
+```sql
+SELECT id, symbol, side, timeframe, status, created_at,
+       ROUND(EXTRACT(EPOCH FROM (NOW() - created_at)) / 3600, 1) as hours_active
+FROM trade_opportunities
+WHERE status = 'ACTIVE'
+  AND created_at < NOW() - INTERVAL '24 hours'
+ORDER BY created_at ASC;
+```
+
+If rows are returned, run:
+```sql
+UPDATE trade_opportunities
+SET status = 'EXPIRED'
+WHERE status = 'ACTIVE'
+  AND created_at < NOW() - INTERVAL '24 hours';
+```
+
+### Step 2 — Reconcile Broker Pending Orders vs user_trades
+Cross-reference live pending orders from the broker against open trades in `user_trades`:
+- Any broker pending order older than 24 hours whose limit price was never reached must be cancelled via `ORDER_CANCEL`.
+- Any broker pending order whose `user_trades` status is already `CLOSED` must be cancelled immediately.
+- The `agent-trade` Position Manager (`position-manager-poll`) performs this cleanup autonomously every 30 minutes. Verify the function is deployed and running.
+
+---
+
 - [ ] **AI-Driven Invalidation (Trend Reversals):** Verify that the Position Manager is actively closing positions or cancelling pending orders if an opposing S/A-Tier setup or a C-Tier momentum shift is detected. Check `user_trades` for `error_message` containing `Closed by Position Manager: AI Trend Reversal`.
 - [ ] **EOD Scalp Liquidation:** Ensure that all active `30m` timeframe Scalp trades are forcefully liquidated by the Position Manager at exactly 16:00 (4 PM NY time). Check for `error_message` containing `EOD Liquidation`.
 - [ ] **Dynamic Correlation Limits:** Review the `ai_risks` field in `trade_opportunities` for `Rejected due to correlation contradiction` or `0.5x Risk Modifier Applied: Heavy Correlation Detected`. Ensure the PAMM router is actively blocking trades that oppose highly correlated existing open positions.
 - [ ] **Dynamic ATR Stop Loss Floor:** Check the edge function logs for `agent-trade` for `Widen Stop Loss: Risk... Adjusted to...` to confirm ultra-tight AI-generated stops are being safely widened to at least `1.0x ATR`.
 - [ ] **Take Profit Direction Validation:** Check the edge function logs for `agent-trade` for `TP direction mismatch... Corrected to`. Ensure this circuit breaker catches TPs placed on the wrong side of the entry price.
 - [ ] **Database & Broker Reconciliation (Ghost Trades & Syncing):** Ensure that `exness-history-sync-poll` is successfully running every 15 minutes. Query `user_trades` for `status = 'OPEN'` and cross-reference with MetaAPI. If a trade is closed on the broker but stuck as `OPEN` in the database, the sync engine is failing, preventing `portfolio_capital` from updating with the realized profit/loss.
+
+---
+
+## ⚠️ 3E. Trade Execution — Premature Approval Race Condition (Missing user_trades)
+
+> [!CAUTION]
+> **Incident (2026-08-24):** An S-Tier `BTCUSD` signal generated via fundamental news confluence was marked `APPROVED` in `trade_opportunities`, but no corresponding `user_trades` were ever created. `agent-swing` had prematurely executed `update({ status: 'APPROVED' })` upon finding sentiment alignment, prior to calculating entry/SL/TP levels. When the full setup was saved later, `agent-trade`'s duplicate protection filter (`old_record.status === 'APPROVED'`) silently discarded the final trade plan.
+
+### Step 1 — Check for Orphaned Approved Signals
+Run this query to detect approved opportunities missing execution:
+
+```sql
+SELECT t.id, t.symbol, t.side, t.status, t.confidence, t.created_at
+FROM trade_opportunities t
+LEFT JOIN user_trades u ON u.opportunity_id = t.id
+WHERE t.status = 'APPROVED'
+  AND u.id IS NULL
+ORDER BY t.created_at DESC;
+```
+
+- ❌ **FAILED:** If any opportunity has been in `APPROVED` for > 5 minutes without a matching `user_trades` entry, investigate a premature `APPROVED` status transition in the generating agent. Agents must maintain `status = 'PUBLISHED'` during evaluation and execute a single atomic transition to `APPROVED` only when the complete trade plan is constructed.
+
+---
 
 ## 4. External Integrations
 Verify that external data pipelines and notification systems are alive.
@@ -596,7 +679,13 @@ If you only see `[Validation] LOST` and never `WON`, the Take Profit sweep logic
 
 ## 7. Treasury Management & Solvency (`cron-treasury-snapshot`)
 The system calculates a monthly Solvency Ratio (Assets / Liability) and syncs master account balances with Exness.
-- [ ] **Snapshot Generation:** Verify the `treasury_snapshots` table is generating rows correctly.
+- [ ] **Snapshot Generation:** Verify the `treasury_snapshots` table is generating rows correctly:
+```sql
+SELECT id, snapshot_timestamp, total_customer_liability, total_assets, solvency_ratio, notes
+FROM treasury_snapshots
+ORDER BY snapshot_timestamp DESC
+LIMIT 5;
+```
 - [ ] **Solvency Safety:** Ensure the `solvency_ratio` in `treasury_snapshots` remains ≥ 1.0. A ratio below 1.0 means customer liabilities exceed current broker and bank assets.
 - [ ] **Autonomous De-Leveraging (Emergency Trimming):** If Treasury Solvency falls below 1.0, verify the Position Manager is actively intervening to protect capital. Check the edge function logs for `agent-trade` for `DE-LEVERAGING: Moving SL to Breakeven` or `DE-LEVERAGING: Partially closing 50%`.
 - [ ] **Exness Sync:** Check the edge function logs for `sync-exness-treasury` to ensure it is authenticating properly with the broker and updating balances.
@@ -614,3 +703,4 @@ The backend manages recurring billing and onboarding emails automatically.
 
 > [!NOTE]
 > **Post-Event Consolidation (Normal Behaviour):** After a major central bank event (e.g., FOMC, ECB rate decision), it is normal for all signals on Gold, Silver, Oil, and Crypto to show `INFLECTION_POINT_WAIT` rejections for 2–6 hours while the market finds direction. This is the system working correctly. Do not override unless a clear breakout or sweep pattern has formed on the 1H or 4H chart.
+
