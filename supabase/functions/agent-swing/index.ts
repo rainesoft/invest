@@ -1090,6 +1090,40 @@ serve(async (req) => {
             }).join("\n");
           }
 
+          // === INTRADAY CROSS-AGENT CONFLUENCE CHECK ===
+          // Query recent intraday rejections from agent-day on this symbol (last 4 hours)
+          let intradayHasOpposingRejection = false;
+          let intradayRejectionDetail = "";
+          try {
+            const fourHoursAgoIso = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+            const { data: recentIntraday } = await supabase
+              .from("trade_opportunities")
+              .select("id, side, status, ai_summary, ai_risks, timeframe, source")
+              .eq("symbol", symbol)
+              .in("timeframe", ["30m", "15m", "1h", "5m"])
+              .gte("created_at", fourHoursAgoIso)
+              .order("created_at", { ascending: false })
+              .limit(5);
+
+            if (recentIntraday && recentIntraday.length > 0) {
+              for (const r of recentIntraday) {
+                const summary = (r.ai_summary || "").toUpperCase();
+                const risks = (r.ai_risks || "").toUpperCase();
+                if (r.status === "REJECTED" && (
+                  summary.includes("BEARISH") || summary.includes("DOWNTREND") || summary.includes("BELOW") ||
+                  summary.includes("PIVOT") || summary.includes("CHOP") || summary.includes("ANEMIC") ||
+                  risks.includes("BEARISH") || risks.includes("DOWNTREND") || summary.includes("VALUE AREA REJECTION")
+                )) {
+                  intradayHasOpposingRejection = true;
+                  intradayRejectionDetail = r.ai_summary?.slice(0, 140) || "Intraday breakdown detected";
+                  break;
+                }
+              }
+            }
+          } catch (intraErr: any) {
+            console.warn(`[${symbol}] [Trace: ${traceId}] Failed to check intraday confluence: ${intraErr.message}`);
+          }
+
           // === PUBLISH TO MARKET CONTEXT (Shared Intelligence Layer) ===
           // Write Fibonacci levels and macro structure to the shared context table
           // so the Scalper (and future agents) can use them regardless of AI outcome.
@@ -1336,6 +1370,7 @@ serve(async (req) => {
               side: "LONG", // placeholder — no trade
               timeframe: timeframe.toLowerCase(),
               status: "REJECTED",
+              source: "agent-swing",
               ai_summary: `[SWING][${tier}] ${evaluation.recommended_direction === "NONE" ? "No setup" : "Low confidence"}: ${evaluation.thought_process?.slice(0, 400)}`,
               ai_risks: `Rejected by Swing AI: ${reason.slice(0, 200)}`,
               confidence,
@@ -1397,12 +1432,22 @@ serve(async (req) => {
               });
           }
 
-          // === LAYER C: STRUCTURAL RISK VALIDATION ===
+          // === LAYER C: STRUCTURAL RISK VALIDATION & SWING ATR FLOOR ===
           let sl = aiSl;
 
-          // --- TRUST AI STRUCTURAL STOPS (No Dynamic ATR Override) ---
-          // We explicitly do NOT mechanically widen the stop loss here, as doing so artificially inflates risk
-          // and corrupts the mathematical R:R calculation, causing valid asymmetric setups to be rejected.
+          // Swing ATR Floor: Daily swing trades must maintain an SL distance of >= 1.25x Daily ATR
+          // to prevent being flushed out by standard intraday commodity/forex noise.
+          const minSwingSlDist = Number((dailyAtr * 1.25).toFixed(5));
+          const currentSlDist = Math.abs(entry - sl);
+          if (currentSlDist < minSwingSlDist) {
+            const widenedSl = isLong
+              ? Number((entry - minSwingSlDist).toFixed(5))
+              : Number((entry + minSwingSlDist).toFixed(5));
+            console.log(`[${symbol}] [Swing Volatility Guard] SL distance (${currentSlDist.toFixed(4)}) was tighter than 1.25x Daily ATR (${minSwingSlDist.toFixed(4)}). Widening SL: ${sl} → ${widenedSl}`);
+            sl = widenedSl;
+            evaluation.execution_parameters.suggested_stop_loss = sl;
+          }
+
           evaluation.execution_parameters.suggested_stop_loss = sl;
           let tp1 = evaluation.execution_parameters.take_profit_1;
           let tp2 = evaluation.execution_parameters.take_profit_2;
@@ -1410,25 +1455,34 @@ serve(async (req) => {
 
           if (!entry || !sl || !tp2) {
             rejections.push({ symbol, reason: "Missing entry, SL, or TP2", layer: "Execution Desk" });
-            if (pendingNewsId) await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: "Rejected: Incomplete trade parameters." }).eq("id", pendingNewsId);
+            if (pendingNewsId) await supabase.from("trade_opportunities").update({ status: "REJECTED", source: "agent-swing", risk_summary: "Rejected: Incomplete trade parameters." }).eq("id", pendingNewsId);
             return;
           }
 
-          // Determine if we should use Market or Pending orders
-          // FIX (Error 10016): Broker rejects pending orders too close to the current price. 
-          // We require the entry to be at least 20% of ATR away to use a Limit/Stop order.
-          let order_type = evaluation.recommended_direction === "LONG" ? "BUY MARKET" : "SELL MARKET";
-          const pendingOrderThreshold = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.20) : (currentPrice * 0.001); // 20% of ATR or 0.1% of price
-          
-          if (Math.abs(entry - currentPrice) >= pendingOrderThreshold) {
-            if (evaluation.recommended_direction === "LONG") {
+          // === CROSS-AGENT CONFLUENCE & ORDER TYPE ROUTING ===
+          let order_type = isLong ? "BUY MARKET" : "SELL MARKET";
+          const pendingOrderThreshold = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.20) : (currentPrice * 0.001);
+
+          if (intradayHasOpposingRejection) {
+            // Intraday agent detected active breakdown or opposing momentum.
+            // Block blind Market order to prevent buying into a falling knife.
+            console.log(`[${symbol}] [Cross-Agent Confluence] Intraday agent rejected ${symbol} (${intradayRejectionDetail}). Converting to deep LIMIT order entry.`);
+            const deepFib = nearestFibs.find(f => isLong ? f.price < currentPrice : f.price > currentPrice);
+            const targetLimit = deepFib ? deepFib.price : (isLong ? currentPrice - (dailyAtr * 0.5) : currentPrice + (dailyAtr * 0.5));
+            entry = Number(targetLimit.toFixed(5));
+            order_type = isLong ? "BUY LIMIT" : "SELL LIMIT";
+            sl = isLong ? Number((entry - minSwingSlDist).toFixed(5)) : Number((entry + minSwingSlDist).toFixed(5));
+            evaluation.execution_parameters.suggested_entry_price = entry;
+            evaluation.execution_parameters.suggested_stop_loss = sl;
+            safeRationale += ` [Cross-Agent Gate: Intraday counter-momentum (${intradayRejectionDetail}) — Market entry converted to deep Limit @ $${entry} with 1.25x ATR SL]`;
+          } else if (Math.abs(entry - currentPrice) >= pendingOrderThreshold) {
+            if (isLong) {
               order_type = entry < currentPrice ? "BUY LIMIT" : "BUY STOP";
             } else {
               order_type = entry > currentPrice ? "SELL LIMIT" : "SELL STOP";
             }
           } else {
-            // Force exact entry to currentPrice for MARKET execution to ensure RR math stays somewhat intact, 
-            // though the Execution Desk will recalculate it at live fill price anyway.
+            // Convert to market order and adjust SL/TP proportionally
             const entryShift = currentPrice - entry;
             entry = currentPrice;
             sl = Number((sl + entryShift).toFixed(5));
@@ -1450,6 +1504,7 @@ serve(async (req) => {
               side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
               timeframe: timeframe.toLowerCase(),
               status: "REJECTED",
+              source: "agent-swing",
               entry_plan_json: { price: entry, order_type, scaled_entries: null },
               stop_plan_json: { stop: sl, initial: sl, atr: snapshot.atr_14 },
               take_profit_json: { tp: tp2, tp1, tp2, tp3 },
@@ -1487,6 +1542,7 @@ serve(async (req) => {
               side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
               timeframe: timeframe.toLowerCase(),
               status: "REJECTED",
+              source: "agent-swing",
               entry_plan_json: { price: entry, order_type, scaled_entries: null },
               stop_plan_json: { stop: sl, initial: sl, atr: snapshot.atr_14 },
               take_profit_json: { tp: tp2, tp1, tp2, tp3 },
@@ -1523,6 +1579,7 @@ serve(async (req) => {
               side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
               timeframe: timeframe.toLowerCase(),
               status: isManual ? "PENDING_APPROVAL" : "APPROVED",
+              source: "agent-swing",
               entry_plan_json: {
                 price: entry,
                 order_type,
