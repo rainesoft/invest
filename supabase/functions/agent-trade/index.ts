@@ -747,28 +747,67 @@ serve(async (req) => {
       }
     }
 
-    // === EXECUTION GUARD 1: TP DIRECTION VALIDATION ===
-    // Prevents placing orders where TP is on the wrong side of entry.
-    // Root cause of USDJPY LONG having TP at 145.44 while entry was 163.7.
-    if (defaultEntryPrice && takeProfit && stopLoss) {
+    // === EXECUTION GUARD 1: TP DIRECTION & MULTI-LEG SANITIZATION ===
+    // Prevents placing orders where TP (or any TP leg) is on the wrong side of entry.
+    // Protects against MT5 Error 10016 (Invalid Stops) across SWING, QUICK_EXIT, and RUNNER legs.
+    if (defaultEntryPrice && stopLoss) {
       const isLong = signal.side === "LONG" || signal.side === "BUY";
-      const tpOnWrongSide = isLong ? takeProfit < defaultEntryPrice : takeProfit > defaultEntryPrice;
-      if (tpOnWrongSide) {
-        const riskDist = Math.abs(defaultEntryPrice - stopLoss);
-        const correctedTp = isLong
-          ? Number((defaultEntryPrice + riskDist * 2).toFixed(5))
-          : Number((defaultEntryPrice - riskDist * 2).toFixed(5));
-        console.warn(`[Execution Guard] TP direction mismatch on ${signal.symbol} ${signal.side}! Entry=${defaultEntryPrice}, TP=${takeProfit}. Corrected to ${correctedTp} (2R).`);
-        takeProfit = correctedTp;
-        
-        // Persist corrected TP to the DB so the VPS EA can execute it
-        const updatedTpJson = { 
-          ...signal.take_profit_json, 
-          tp: correctedTp, 
-          tp_price: correctedTp,
-          tp1: correctedTp,
-          tp2: correctedTp,
-          tp3: correctedTp 
+      const riskDist = Math.abs(defaultEntryPrice - stopLoss);
+      let tpUpdated = false;
+
+      let currentTp = takeProfit;
+      let tp1 = signal.take_profit_json?.tp1;
+      let tp2 = signal.take_profit_json?.tp2;
+      let tp3 = signal.take_profit_json?.tp3;
+
+      if (riskDist > 0) {
+        if (isLong) {
+          if (currentTp && currentTp <= defaultEntryPrice) {
+            currentTp = Number((defaultEntryPrice + riskDist * 2.0).toFixed(5));
+            tpUpdated = true;
+          }
+          if (tp1 && tp1 <= defaultEntryPrice) {
+            tp1 = Number((defaultEntryPrice + riskDist * 1.0).toFixed(5));
+            tpUpdated = true;
+          }
+          if (tp2 && tp2 <= defaultEntryPrice) {
+            tp2 = Number((defaultEntryPrice + riskDist * 2.0).toFixed(5));
+            tpUpdated = true;
+          }
+          if (tp3 && tp3 <= defaultEntryPrice) {
+            tp3 = Number((defaultEntryPrice + riskDist * 3.0).toFixed(5));
+            tpUpdated = true;
+          }
+        } else {
+          if (currentTp && currentTp >= defaultEntryPrice) {
+            currentTp = Number((defaultEntryPrice - riskDist * 2.0).toFixed(5));
+            tpUpdated = true;
+          }
+          if (tp1 && tp1 >= defaultEntryPrice) {
+            tp1 = Number((defaultEntryPrice - riskDist * 1.0).toFixed(5));
+            tpUpdated = true;
+          }
+          if (tp2 && tp2 >= defaultEntryPrice) {
+            tp2 = Number((defaultEntryPrice - riskDist * 2.0).toFixed(5));
+            tpUpdated = true;
+          }
+          if (tp3 && tp3 >= defaultEntryPrice) {
+            tp3 = Number((defaultEntryPrice - riskDist * 3.0).toFixed(5));
+            tpUpdated = true;
+          }
+        }
+      }
+
+      if (tpUpdated) {
+        console.warn(`[Execution Guard] TP direction mismatch corrected on ${signal.symbol} ${signal.side}! Entry=${defaultEntryPrice}. Corrected TP=${currentTp}, TP1=${tp1}, TP2=${tp2}, TP3=${tp3}.`);
+        takeProfit = currentTp;
+        const updatedTpJson = {
+          ...signal.take_profit_json,
+          tp: currentTp,
+          tp_price: currentTp,
+          tp1,
+          tp2,
+          tp3
         };
         await supabase.from("trade_opportunities").update({ take_profit_json: updatedTpJson }).eq("id", signal.id);
         signal.take_profit_json = updatedTpJson;
