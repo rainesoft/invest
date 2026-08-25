@@ -81,6 +81,18 @@ serve(async (req) => {
          }
       }
       
+      // === STRICT DIRECTION VALIDATION FOR TARGET TP (Error 10016 Prevention) ===
+      const isLong = trade.side === "LONG" || trade.side === "BUY";
+      if (entryPrice > 0) {
+        const tpInvalid = isLong ? (targetTP <= entryPrice) : (targetTP >= entryPrice);
+        if (tpInvalid && riskDistance > 0) {
+          const mult = trade.trade_type === "RUNNER" ? 3.0 : (trade.trade_type === "SWING" ? 2.0 : 1.0);
+          targetTP = isLong
+            ? Number((entryPrice + (riskDistance * mult)).toFixed(5))
+            : Number((entryPrice - (riskDistance * mult)).toFixed(5));
+        }
+      }
+      
       const orderType = opp?.entry_plan_json?.order_type || (trade.side === "LONG" ? "BUY MARKET" : "SELL MARKET");
       let action = "MODIFY";
       if (trade.status === "VPS_PENDING") action = "EXECUTE";
