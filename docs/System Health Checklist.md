@@ -3,7 +3,7 @@
 This checklist is designed for App Support Engineers to verify the overall health, execution integrity, and safety limits of the autonomous agentic trading system at the start of each trading day.
 
 > [!TIP]
-> **Automated Diagnostics:** You can run all the SQL diagnostic queries listed in this document at once by executing `scripts/healthcheck.sql` against the database.
+> **Automated Diagnostics:** You can run all the SQL diagnostic queries listed in this document at once by executing `scripts/healthcheck.sql` against the database. Alternatively, you can run `python3 scripts/comprehensive_healthcheck.py` to fetch a complete real-time diagnostics dump via the REST API.
 
 > [!IMPORTANT]
 > **Primary Architecture:** Raine Bank prioritizes the zero-latency **MT5 VPS Execution Architecture** as the primary source of truth for market data and trade execution. MetaAPI is strictly maintained as an autonomous failover layer. If the VPS stream fails, it must be investigated and restarted immediately to avoid long-term reliance on MetaAPI polling.
@@ -422,9 +422,10 @@ If this query returns rows, investigate a routing failure or a hardcoded status 
 ## ⚠️ 3B. Trade Execution — MT5 Execution Errors (10014, 10015, 10016, 10019)
 
 > [!WARNING]
-> **Incident (2026-08-04, 2026-08-10, 2026-08-24):** 
+> **Incident (2026-08-04, 2026-08-10, 2026-08-24, 2026-08-25):** 
 > - The strategy logic split the minimum lot size (0.01) into two legs (0.005 lots each) and also incorrectly sent `0.01` lots for indices like `US30` which actually require a minimum of `0.1` lots on some brokers. MetaTrader 5 strictly enforces minimum lot sizes and increments, and instantly rejected the trades with `TRADE_RETCODE_INVALID_VOLUME` (Code 10014).
 > - On 2026-08-24, an S-Tier `BUY STOP` order on `BTCUSD` was rejected with `TRADE_RETCODE_INVALID_PRICE` (Code 10015) because live market price had already moved past the breakout entry level before order placement.
+> - On 2026-08-25, an A-Tier EURUSD LONG trade's companion RUNNER leg was rejected with `TRADE_RETCODE_INVALID_STOPS` (Code 10016) because `tp3` was set to `1.13` (below the entry price of `1.16` on a BUY order). The primary SWING leg succeeded using `tp2 = 1.17`, but the RUNNER leg failed.
 
 Monitor for execution blocks on the broker side:
 
@@ -438,7 +439,9 @@ ORDER BY created_at DESC;
 If this query returns rows, investigate the error code:
 - **Code 10014 (Invalid Volume):** Ensure that the volume algorithms in `agent-trade` and `agent-news` enforce a strict mathematical floor against a dynamic `volumeStep` mapping (e.g. `US30 = 0.1`, `BTCUSD = 0.01`), rather than hardcoding `0.01` universally.
 - **Code 10015 (Invalid Price / Stale Breakout Entry):** A pending stop/limit order (e.g., `BUY STOP` or `SELL STOP`) had an entry price that was invalid relative to current market Ask/Bid (e.g., placing a BUY STOP below or at the current Ask price because price already broke out before the order was submitted). **Diagnostic Action:** When this occurs, ensure the parent `trade_opportunities` status is updated to `REJECTED` rather than remaining stuck in `APPROVED`, and check that `agent-trade` validates live price against order type prior to placing pending orders.
-- **Code 10016 (Invalid Stops):** The Stop Loss or Take Profit was placed too close to the entry price or on the wrong side (e.g., placing a TP below the entry on a LONG trade). **Diagnostic Action:** If this error occurs frequently for a specific symbol (e.g., `NZDUSD`), check `agent-trade`'s `minDistances` configuration. If the symbol is missing from the dictionary, the AI's ultra-tight stops bypass the widening guard and are instantly rejected by the broker.
+- **Code 10016 (Invalid Stops / Wrong TP Direction on Multi-Leg Trades):** The Stop Loss or Take Profit was placed too close to the entry price or on the wrong side (e.g., placing a TP below the entry on a LONG trade, or an inverted `tp3` on a RUNNER leg). **Diagnostic Action:**
+  1. Verify the **3-Layer TP Direction Validation**: Ensure `agent-swing`, `agent-trade` (Execution Guard 1), and `vps-poll` validate that for LONG trades, all TP targets (`tp`, `tp1`, `tp2`, `tp3`) satisfy `tp > entry`, and for SHORT trades `tp < entry`. If inverted, fallback to standard R-multiples ($1\text{R}, 2\text{R}, 3\text{R}$).
+  2. If this error occurs for a specific symbol (e.g., `NZDUSD`), check `agent-trade`'s `minDistances` configuration. If the symbol is missing from the dictionary, the AI's ultra-tight stops bypass the widening guard and are instantly rejected by the broker.
 - **Code 10019 (No Money):** The user's account had insufficient free margin to open the required volume. This is working as intended to protect against margin calls if the account is overleveraged.
 
 ---
