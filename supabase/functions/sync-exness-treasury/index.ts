@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
+import { insertAuditLog } from "../../../packages/core/audit.ts";
 
 serve(async (req) => {
   if (req.method !== 'POST') {
@@ -36,7 +37,7 @@ serve(async (req) => {
       const transferId = `EXN-TRF-${Math.floor(Math.random() * 1000000)}`;
 
       // Audit the broker-side transfer
-      await supabase.from('audit_logs').insert({
+      await insertAuditLog(supabase, {
         action: "EXNESS_INTERNAL_TRANSFER_EXECUTED",
         actor_type: "SYSTEM",
         entity_type: "users",
