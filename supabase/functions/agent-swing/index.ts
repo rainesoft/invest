@@ -1493,6 +1493,23 @@ serve(async (req) => {
             console.log(`[${symbol}] Entry too close to live price (Dist: ${Math.abs(entryShift).toFixed(5)}). Converted to ${order_type} to prevent Error 10016. SL/TP adjusted.`);
           }
 
+          // === TAKE PROFIT DIRECTION & R-MULTIPLE SANITIZATION ===
+          const swingRiskDist = Math.abs(entry - sl);
+          if (swingRiskDist > 0) {
+            if (isLong) {
+              if (!tp1 || tp1 <= entry) tp1 = Number((entry + swingRiskDist * 1.0).toFixed(5));
+              if (!tp2 || tp2 <= entry) tp2 = Number((entry + swingRiskDist * 2.0).toFixed(5));
+              if (!tp3 || tp3 <= entry) tp3 = Number((entry + swingRiskDist * 3.0).toFixed(5));
+            } else {
+              if (!tp1 || tp1 >= entry) tp1 = Number((entry - swingRiskDist * 1.0).toFixed(5));
+              if (!tp2 || tp2 >= entry) tp2 = Number((entry - swingRiskDist * 2.0).toFixed(5));
+              if (!tp3 || tp3 >= entry) tp3 = Number((entry - swingRiskDist * 3.0).toFixed(5));
+            }
+          }
+          evaluation.execution_parameters.take_profit_1 = tp1;
+          evaluation.execution_parameters.take_profit_2 = tp2;
+          evaluation.execution_parameters.take_profit_3 = tp3;
+
           const riskPct = Math.abs(entry - sl) / entry;
           const maxRiskPct = ["XAUUSD", "XAGUSD", "BTCUSD", "UKOIL"].includes(symbol) ? 0.15 : 0.10;
 
