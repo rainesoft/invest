@@ -674,7 +674,7 @@ serve(async (req) => {
 
     // === EXECUTION GUARD: TIME OF DAY KILL ZONE ===
     // Prevent automated execution during Asian session (22:00 - 06:00 UTC) to avoid low volume chop
-    const isSwingTrade = signal.source_agent === "agent-swing" || ["4h", "1d"].includes(signal.timeframe?.toLowerCase());
+    const isSwingTrade = signal.source === "agent-swing" || signal.source_agent === "agent-swing" || ["4h", "1d", "1w"].includes(signal.timeframe?.toLowerCase()) || signal.ai_summary?.includes("[SWING]");
     if (!isManual && !isSwingTrade) {
       const currentHourUTC = new Date().getUTCHours();
       if (currentHourUTC >= 22 || currentHourUTC < 6) {
@@ -712,10 +712,13 @@ serve(async (req) => {
     let takeProfit = signal.take_profit_json?.tp || signal.take_profit_json?.tp_price;
 
     // === EXECUTION GUARD: DYNAMIC ATR STOP LOSS FLOOR ===
-    // Prevent stop losses that are too tight to survive market noise
+    // Prevent stop losses that are too tight to survive market noise.
+    // For Swing Trades, enforce floor against 1.25x Daily ATR rather than 30m ATR.
     if (!isManual && defaultEntryPrice && stopLoss) {
       try {
-        const bars = await fetchPaperBars(signal.symbol, "30m", 50, supabase);
+        const tfForAtr = isSwingTrade ? "1D" : "30m";
+        const minAtrMultiplier = isSwingTrade ? 1.25 : 1.0;
+        const bars = await fetchPaperBars(signal.symbol, tfForAtr, 50, supabase);
         if (bars.length >= 14) {
           const snap = getContextSnapshot(
             bars.map((b: any) => b.t),
@@ -726,15 +729,16 @@ serve(async (req) => {
             bars.map((b: any) => b.v),
             signal.symbol
           );
-          const atr = snap.atr_14 || 0;
-          if (atr > 0) {
+          const rawAtr = snap.atr_14 || 0;
+          const minRequiredRisk = rawAtr * minAtrMultiplier;
+          if (minRequiredRisk > 0) {
             const currentRisk = Math.abs(defaultEntryPrice - stopLoss);
-            if (currentRisk < atr) {
+            if (currentRisk < minRequiredRisk) {
               const isLong = signal.side === "LONG" || signal.side === "BUY";
-              stopLoss = isLong ? defaultEntryPrice - atr : defaultEntryPrice + atr;
+              stopLoss = isLong ? defaultEntryPrice - minRequiredRisk : defaultEntryPrice + minRequiredRisk;
               // Format to 5 decimal places safely
               stopLoss = Number(stopLoss.toFixed(5));
-              console.log(`[PAMM Router] Widen Stop Loss: Risk ${currentRisk.toFixed(4)} was less than 1.0x ATR (${atr.toFixed(4)}). Adjusted to ${stopLoss}.`);
+              console.log(`[PAMM Router] Widen Stop Loss: Risk ${currentRisk.toFixed(4)} was less than ${minAtrMultiplier}x ATR (${minRequiredRisk.toFixed(4)} on ${tfForAtr}). Adjusted SL to ${stopLoss}.`);
             }
           }
         }
@@ -1052,6 +1056,36 @@ serve(async (req) => {
 
     let blockedByRiskManager = false;
 
+    // --- PROBABILITY & KELLY CALIBRATION SIZING ---
+    let probabilityModifier = 1.0;
+    let allowRunnerLeg = true;
+    let probNote = "";
+
+    try {
+      const { data: auditEntries } = await supabase
+        .from("audit_log")
+        .select("payload_json")
+        .eq("entity_id", signal.id)
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      const calProb = auditEntries?.[0]?.payload_json?.calibrated_probability;
+      if (typeof calProb === "number") {
+        if (calProb < 45) {
+          probabilityModifier = 0.5;
+          allowRunnerLeg = false; // Disable secondary runner leg to prevent compounding drawdown
+          probNote = `Kelly Sizing: 0.5x risk modifier applied (Calibrated P(win) ${calProb}% < 45%). RUNNER leg disabled.`;
+          console.log(`[PAMM Router] [${signal.symbol}] ${probNote}`);
+        } else if (calProb < 50) {
+          probabilityModifier = 0.75;
+          probNote = `Kelly Sizing: 0.75x risk modifier applied (Calibrated P(win) ${calProb}% < 50%).`;
+          console.log(`[PAMM Router] [${signal.symbol}] ${probNote}`);
+        }
+      }
+    } catch (probErr: any) {
+      console.warn(`[PAMM Router] Failed to check calibrated probability:`, probErr.message);
+    }
+
     for (const scaledEntry of scaledEntries) {
       const entryPrice = scaledEntry.price;
       const entryWeight = scaledEntry.weight || 1.0;
@@ -1104,7 +1138,7 @@ serve(async (req) => {
             }
         }
         
-        const riskPerTrade = Number(user.portfolio_capital) * effectiveRiskPct * entryWeight * tierRiskModifier * confluenceMultiplier * drawdownModifier * fomcSizeMultiplier;
+        const riskPerTrade = Number(user.portfolio_capital) * effectiveRiskPct * entryWeight * tierRiskModifier * confluenceMultiplier * drawdownModifier * fomcSizeMultiplier * probabilityModifier;
         let volume = pointsAtRisk > 0 ? riskPerTrade / (pointsAtRisk * pointValueUsd) : volumeStep;
         
         // --- HARD LOT CAP CIRCUIT BREAKER ---
@@ -1155,9 +1189,12 @@ serve(async (req) => {
       ? Number((defaultEntryPrice + (riskDistance * 1.0)).toFixed(5))
       : Number((defaultEntryPrice - (riskDistance * 1.0)).toFixed(5));
 
-    // Inject quickExitTP into tp1 so MT5 EA executes the cashout
+    // Inject quickExitTP into tp1 if not already set, so MT5 EA executes the cashout
     if (signal.take_profit_json) {
-      const updatedTpJsonWithQuickExit = { ...signal.take_profit_json, tp1: quickExitTP };
+      const updatedTpJsonWithQuickExit = {
+        ...signal.take_profit_json,
+        tp1: signal.take_profit_json.tp1 || quickExitTP,
+      };
       await supabase.from("trade_opportunities").update({ take_profit_json: updatedTpJsonWithQuickExit }).eq("id", signal.id);
       signal.take_profit_json = updatedTpJsonWithQuickExit;
     }
@@ -1171,12 +1208,16 @@ serve(async (req) => {
 
     // --- DISTRIBUTE VIRTUAL LEDGER ENTRIES TO USERS (QUEUED FOR VPS) ---
     for (const alloc of userAllocations) {
-        let legAVolume = Math.floor((alloc.volume / 2) / volumeStep) * volumeStep;
-        if (legAVolume < volumeStep) legAVolume = alloc.volume; // Default to full volume on single leg if too small
-        
-        let legBVolume = Math.floor((alloc.volume - legAVolume) / volumeStep) * volumeStep;
+        let legAVolume = alloc.volume;
+        let legBVolume = 0;
 
-        // Leg A (Quick Exit)
+        if (allowRunnerLeg && alloc.volume >= volumeStep * 2) {
+          legAVolume = Math.floor((alloc.volume / 2) / volumeStep) * volumeStep;
+          if (legAVolume < volumeStep) legAVolume = alloc.volume; // Default to full volume on single leg if too small
+          legBVolume = Math.floor((alloc.volume - legAVolume) / volumeStep) * volumeStep;
+        }
+
+        // Leg A (Quick Exit / Swing)
         await supabase.from("user_trades").insert({
           id: crypto.randomUUID(),
           user_id: alloc.user_id,
@@ -1184,14 +1225,14 @@ serve(async (req) => {
           symbol: signal.symbol,
           side: signal.side,
           volume: legAVolume,
-          risk_amount: alloc.risk_amount / (alloc.volume > 0 ? (alloc.volume / legAVolume) : 2),
+          risk_amount: alloc.risk_amount / (alloc.volume > 0 ? (alloc.volume / legAVolume) : 1),
           status: "VPS_PENDING",
-          trade_type: (signal.source_agent === "agent-swing" || ["4h", "1d"].includes(signal.timeframe?.toLowerCase())) ? "SWING" : "QUICK_EXIT",
+          trade_type: (signal.source === "agent-swing" || signal.source_agent === "agent-swing" || ["4h", "1d"].includes(signal.timeframe?.toLowerCase())) ? "SWING" : "QUICK_EXIT",
         });
         
         // Leg B (Runner)
         // Note: Trailing stop logic for RUNNER will be managed by position manager once OPEN.
-        if (legBVolume >= volumeStep) {
+        if (allowRunnerLeg && legBVolume >= volumeStep) {
           await supabase.from("user_trades").insert({
             id: crypto.randomUUID(),
             user_id: alloc.user_id,
@@ -1206,9 +1247,10 @@ serve(async (req) => {
         }
     }
 
+    const summaryAddition = probNote ? `\n\n[Execution Desk] ${probNote}` : "";
     await supabase.from("trade_opportunities").update({
       status: "QUEUED",
-      ai_summary: signal.ai_summary + `\n\n[Execution Desk] Trade allocations generated and queued for VPS execution. Waiting for MT5 EA pickup...`
+      ai_summary: signal.ai_summary + summaryAddition + `\n\n[Execution Desk] Trade allocations generated and queued for VPS execution. Waiting for MT5 EA pickup...`
     }).eq("id", signal.id);
 
     return new Response(JSON.stringify({ success: true, message: "Queued for VPS" }), { status: 200, headers: { "Content-Type": "application/json" } });
