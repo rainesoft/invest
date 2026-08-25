@@ -45,6 +45,21 @@ serve(async (req) => {
         status: "ACTIVE",
         ai_summary: `${existingSummary}\n\n[VPS Engine] Trade executed successfully. Ticket: ${ticket}`
       }).eq("id", tradeData.opportunity_id);
+    } else if (status === "FAILED" && tradeData?.opportunity_id) {
+      // Check if ALL sibling trades for this opportunity failed
+      const { data: siblings } = await supabase.from("user_trades").select("status").eq("opportunity_id", tradeData.opportunity_id);
+      const hasWorkingTrades = siblings?.some(s => ["OPEN", "VPS_PENDING", "VPS_PROCESSING", "PENDING"].includes(s.status));
+      if (!hasWorkingTrades) {
+        const { data: oppData } = await supabase.from("trade_opportunities").select("ai_summary").eq("id", tradeData.opportunity_id).single();
+        const existingSummary = oppData?.ai_summary || "";
+        const failReason = errorMsg ? `Execution Failed: ${errorMsg}` : "Execution Failed on Broker";
+        await supabase.from("trade_opportunities").update({
+          status: "REJECTED",
+          ai_risks: failReason,
+          ai_summary: `${existingSummary}\n\n[VPS Engine] ${failReason}`
+        }).eq("id", tradeData.opportunity_id);
+        console.log(`[VPS Callback] All trades failed for opportunity ${tradeData.opportunity_id}. Marked REJECTED.`);
+      }
     }
 
     if (error) throw error;

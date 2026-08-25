@@ -196,6 +196,36 @@ serve(async (req) => {
               console.log(`[History Sync] No open RUNNER found for opportunity ${trade.opportunity_id}. May have already closed.`);
             }
           }
+
+          // --- OPPORTUNITY RECONCILIATION ---
+          if (trade.opportunity_id) {
+            const { data: siblingTrades } = await supabase
+              .from("user_trades")
+              .select("id, status, profit_usd, risk_amount")
+              .eq("opportunity_id", trade.opportunity_id);
+
+            if (siblingTrades && siblingTrades.length > 0) {
+              const hasActiveLegs = siblingTrades.some(st => ["OPEN", "PENDING", "VPS_PENDING", "VPS_PROCESSING"].includes(st.status));
+              if (!hasActiveLegs) {
+                const totalNetProfit = siblingTrades.reduce((acc, st) => acc + (Number(st.profit_usd) || 0), 0);
+                const totalRisk = siblingTrades.reduce((acc, st) => acc + (Number(st.risk_amount) || 0), 0);
+                const oppOutcome = totalNetProfit > 0 ? "WON" : (totalNetProfit < 0 ? "LOST" : "CLOSED");
+                const rMultiple = totalRisk > 0 ? Number((totalNetProfit / totalRisk).toFixed(2)) : (totalNetProfit > 0 ? 1.0 : -1.0);
+
+                await supabase
+                  .from("trade_opportunities")
+                  .update({
+                    status: oppOutcome,
+                    r_multiple: rMultiple,
+                    closed_at: closedAt || new Date().toISOString()
+                  })
+                  .eq("id", trade.opportunity_id)
+                  .in("status", ["ACTIVE", "APPROVED", "QUEUED"]);
+
+                console.log(`[History Sync] Reconciled parent opportunity ${trade.opportunity_id} -> ${oppOutcome} (Net: $${totalNetProfit.toFixed(2)}, R: ${rMultiple}R)`);
+              }
+            }
+          }
         }
       }
       
