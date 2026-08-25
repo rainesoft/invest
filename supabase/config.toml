@@ -445,7 +445,7 @@ entrypoint = "./functions/telegram-webhook/index.ts"
 [functions.clear-deposit]
 enabled = true
 verify_jwt = true
-import_map = "./functions/clear-deposit/deno.json"
+import_map = "./functions/import_map.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
 entrypoint = "./functions/clear-deposit/index.ts"
