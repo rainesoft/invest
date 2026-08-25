@@ -55,13 +55,30 @@ serve(async (req) => {
       const entryPrice = opp?.entry_plan_json?.price || opp?.entry_plan_json?.entry_price || opp?.entry_plan_json?.limit_price || 0;
       const stopLossRaw = opp?.stop_plan_json?.stop || 0;
       const tpRaw = opp?.take_profit_json?.tp || 0;
+      const tp1Raw = opp?.take_profit_json?.tp1;
+      const tp2Raw = opp?.take_profit_json?.tp2;
+      const tp3Raw = opp?.take_profit_json?.tp3;
+      const riskDistance = (entryPrice > 0 && stopLossRaw > 0) ? Math.abs(entryPrice - stopLossRaw) : 0;
       
       let targetTP = tpRaw;
-      if (trade.trade_type === "QUICK_EXIT" && stopLossRaw > 0 && entryPrice > 0) {
-         const riskDistance = Math.abs(entryPrice - stopLossRaw);
-         targetTP = trade.side === "LONG" 
-           ? Number((entryPrice + riskDistance).toFixed(5))
-           : Number((entryPrice - riskDistance).toFixed(5));
+      if (trade.trade_type === "QUICK_EXIT") {
+         if (tp1Raw) {
+           targetTP = tp1Raw;
+         } else if (riskDistance > 0) {
+           targetTP = trade.side === "LONG" 
+             ? Number((entryPrice + riskDistance).toFixed(5))
+             : Number((entryPrice - riskDistance).toFixed(5));
+         }
+      } else if (trade.trade_type === "SWING") {
+         targetTP = tp2Raw || tpRaw;
+      } else if (trade.trade_type === "RUNNER") {
+         if (tp3Raw) {
+           targetTP = tp3Raw;
+         } else if (riskDistance > 0) {
+           targetTP = trade.side === "LONG"
+             ? Number((entryPrice + (riskDistance * 3.0)).toFixed(5))
+             : Number((entryPrice - (riskDistance * 3.0)).toFixed(5));
+         }
       }
       
       const orderType = opp?.entry_plan_json?.order_type || (trade.side === "LONG" ? "BUY MARKET" : "SELL MARKET");
