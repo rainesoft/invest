@@ -159,7 +159,7 @@ export default function SettingsPage() {
       });
       const data = await res.json();
       if (data.success && data.token) {
-        const botUsername = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || 'RaineBankBot';
+        const botUsername = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || 'RaineInvestBot';
         window.open(`https://t.me/${botUsername}?start=${data.token}`, '_blank');
         toast.success('Connection link opened in Telegram!');
       } else {

@@ -58,7 +58,7 @@ export default function FundHistoryPage() {
             Master Fund History
           </h1>
           <p style={{ color: '#9ca3af', fontSize: '15px', marginTop: '8px' }}>
-            Complete transparency into the execution performance of the RaineBank Master Node.
+            Complete transparency into the execution performance of the RaineInvest Master Node.
           </p>
         </div>
         <div style={{

@@ -2,7 +2,7 @@ import './globals.css';
 import { Toaster } from 'react-hot-toast';
 
 export const metadata = {
-  title: 'RaineBank',
+  title: 'RaineInvest',
   description: 'Financial Intelligence'
 };
 

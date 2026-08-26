@@ -257,7 +257,7 @@ export default function VaultDashboard() {
             <h3 style={{ fontSize: '20px', fontWeight: 700, color: '#fff', marginBottom: '8px' }}>Public Access Mode</h3>
             <p style={{ color: '#9ca3af', fontSize: '15px', maxWidth: '600px', margin: 0 }}>
               Signals are intentionally delayed by 4+ hours and proprietary execution rationale is redacted.
-              Upgrade to <strong>RaineBank Alpha</strong> for real-time institutional market intelligence.
+              Upgrade to <strong>RaineInvest Alpha</strong> for real-time institutional market intelligence.
             </p>
           </div>
           <div style={{ minWidth: '200px' }}>

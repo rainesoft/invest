@@ -88,7 +88,8 @@ export default function OnboardingPage() {
       }
 
       setWaitingForBot(true);
-      window.open(`https://t.me/rainebank_bot?start=${token}`, '_blank');
+      const botUsername = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || 'raineinvest_bot';
+      window.open(`https://t.me/${botUsername}?start=${token}`, '_blank');
 
     } catch (err: any) {
       setError(err.message || 'An error occurred during onboarding.');
@@ -100,7 +101,7 @@ export default function OnboardingPage() {
     <div style={{ minHeight: '100vh', background: '#050505', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui, sans-serif' }}>
       <div style={{ maxWidth: '500px', width: '100%', padding: '40px', background: '#111', borderRadius: '24px', border: '1px solid rgba(255,255,255,0.05)' }}>
         
-        <h1 style={{ fontSize: '28px', fontWeight: 800, marginBottom: '16px', letterSpacing: '-1px' }}>Welcome to Raine Bank</h1>
+        <h1 style={{ fontSize: '28px', fontWeight: 800, marginBottom: '16px', letterSpacing: '-1px' }}>Welcome to RaineInvest</h1>
         <p style={{ color: '#9ca3af', marginBottom: '32px', lineHeight: 1.5 }}>
           As a member of our Platform PAMM, your capital is securely traded by our AI Master Account alongside institutional funds. 
           To finalize your account setup, please connect your Telegram for real-time trade alerts.
@@ -117,7 +118,7 @@ export default function OnboardingPage() {
           <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', background: 'rgba(56,189,248,0.05)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(56,189,248,0.2)' }}>
             <input type="checkbox" required style={{ marginTop: '4px' }} />
             <p style={{ fontSize: '13px', color: '#9ca3af', margin: 0, lineHeight: 1.5 }}>
-              I acknowledge that trading involves risk. I understand that I am depositing funds into the Raine Bank PAMM ecosystem and that the AI will autonomously manage capital on my behalf.
+              I acknowledge that trading involves risk. I understand that I am depositing funds into the RaineInvest PAMM ecosystem and that the AI will autonomously manage capital on my behalf.
             </p>
           </div>
 

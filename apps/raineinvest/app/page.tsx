@@ -287,7 +287,7 @@ export default async function LandingPage() {
           <a href="#" className="hover:text-white transition-colors">Terms of Service</a>
         </div>
         <div className="text-gray-600 text-sm mt-4">
-          © {new Date().getFullYear()} RaineBank. Developed by Rainesoft Solutions.
+          © {new Date().getFullYear()} RaineInvest. Developed by Rainesoft Solutions.
         </div>
       </footer>
     </div>

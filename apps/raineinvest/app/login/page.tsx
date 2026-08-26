@@ -145,7 +145,7 @@ export default function LoginPage() {
           >
             {isLogin
               ? 'Authenticate to view the immutable ledger.'
-              : 'Join RaineBank for real-time alpha signals.'}
+              : 'Join RaineInvest for real-time alpha signals.'}
           </p>
 
           {error && (

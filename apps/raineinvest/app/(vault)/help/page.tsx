@@ -60,7 +60,7 @@ export default function HelpPage() {
             <ol style={{ lineHeight: '1.8', color: 'var(--text-secondary)' }}>
               <li>Navigate to your Raine <strong>Settings</strong> page.</li>
               <li>Scroll down to the <strong>Telegram Alerts</strong> section.</li>
-              <li>Click the <strong>Connect Telegram</strong> button. This will automatically open the official Raine Bank Bot in your Telegram app.</li>
+              <li>Click the <strong>Connect Telegram</strong> button. This will automatically open the official RaineInvest Bot in your Telegram app.</li>
               <li>Once Telegram opens, simply tap <strong>Start</strong> at the bottom of the screen. The bot will instantly link to your account and send you a confirmation message!</li>
             </ol>
             <div style={{ marginTop: '16px', padding: '12px 16px', background: 'rgba(239, 68, 68, 0.1)', borderLeft: '4px solid #ef4444', borderRadius: '4px', display: 'flex', gap: '12px' }}>

@@ -4,7 +4,7 @@ import VaultNavbar from '@components/VaultNavbar';
 import AcademyClient from './AcademyClient';
 
 export const metadata = {
-  title: 'Alpha Academy | Rainebank',
+  title: 'Alpha Academy | RaineInvest',
   description: 'Master capital markets. Explore step-by-step setup guides and institutional strategies.',
 };
 
