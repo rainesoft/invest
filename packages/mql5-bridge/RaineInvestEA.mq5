@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
-//|                                                   RaineBankEA.mq5|
-//|                                                        RaineBank |
-//|                                       https://www.rainebank.com/ |
+//|                                                 RaineInvestEA.mq5|
+//|                                                      RaineInvest |
+//|                                     https://www.raineinvest.com/ |
 //+------------------------------------------------------------------+
-#property copyright "RaineBank"
-#property link      "https://www.rainebank.com/"
+#property copyright "RaineInvest"
+#property link      "https://www.raineinvest.com/"
 #property version   "1.00"
 
 // --- HARDCODED MASTER NODE CONFIGURATION ---
@@ -40,7 +40,7 @@ int OnInit()
      
    RecoverActiveTickets();
    EventSetTimer(15);
-   Print("RaineBank VPS Bridge initialized. Polling every 15 seconds.");
+   Print("RaineInvest VPS Bridge initialized. Polling every 15 seconds.");
    return(INIT_SUCCEEDED);
   }
 
@@ -53,7 +53,7 @@ void RecoverActiveTickets()
    for(int i=0; i<PositionsTotal(); i++)
      {
       ulong ticket = PositionGetTicket(i);
-      if(PositionGetString(POSITION_COMMENT) == "RaineBank AI" || PositionGetInteger(POSITION_MAGIC) == 410673)
+      if(PositionGetString(POSITION_COMMENT) == "RaineInvest AI" || PositionGetString(POSITION_COMMENT) == "RaineBank AI" || PositionGetInteger(POSITION_MAGIC) == 410673)
         {
          int size = ArraySize(activeTickets);
          ArrayResize(activeTickets, size+1);
@@ -63,7 +63,7 @@ void RecoverActiveTickets()
    for(int i=0; i<OrdersTotal(); i++)
      {
       ulong ticket = OrderGetTicket(i);
-      if(OrderGetString(ORDER_COMMENT) == "RaineBank AI" || OrderGetInteger(ORDER_MAGIC) == 410673)
+      if(OrderGetString(ORDER_COMMENT) == "RaineInvest AI" || OrderGetString(ORDER_COMMENT) == "RaineBank AI" || OrderGetInteger(ORDER_MAGIC) == 410673)
         {
          int size = ArraySize(activeTickets);
          ArrayResize(activeTickets, size+1);
@@ -79,7 +79,7 @@ void RecoverActiveTickets()
 void OnDeinit(const int reason)
   {
    EventKillTimer();
-   Print("RaineBank VPS Bridge stopped.");
+   Print("RaineInvest VPS Bridge stopped.");
   }
 
 string TrackedSymbols[] = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "EURJPY", "GBPJPY", "XAUUSD", "XAGUSD", "BTCUSD", "UKOIL", "NAS100"};
@@ -492,8 +492,8 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
    
    request.symbol = symbol;
    request.volume = normVolume;
-   request.magic = 410673; // RaineBank Magic
-   request.comment = "RaineBank AI";
+   request.magic = 410673; // RaineInvest Magic
+   request.comment = "RaineInvest AI";
    request.deviation = 30;
    
    // Adaptive Order Type & Price Routing (Prevents Error 10015 on slipped pending orders)
