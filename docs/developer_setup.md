@@ -1,60 +1,11 @@
-# Raine Bank Developer Setup
+# RaineInvest Developer Setup
 
-This guide outlines the steps required to set up your local environment for developing and running the Raine Bank system.
+This guide outlines the steps required to set up your local environment for developing and running the RaineInvest system.
+
+---
 
 ## 1. Prerequisites
 
-Ensure you have a terminal open and `curl` installed (which is included by default on macOS).
-
-## 2. Install Node.js & pnpm
-
-### Option A: Homebrew (macOS Recommended)
-If you are on a Mac, you can quickly install both Node.js and pnpm via Homebrew. This is the fastest way to get started:
-```bash
-brew install node
-brew install pnpm
-```
-
-### Option B: Node Version Manager (NVM)
-Alternatively, you can use Node Version Manager (NVM) to manage your Node.js installations.
-
-1. Install NVM:
-   ```bash
-   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
-   ```
-2. Restart your terminal, or load NVM manually:
-   ```bash
-   export NVM_DIR="$HOME/.nvm"
-   [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-   ```
-3. Install and use Node.js (v20+ recommended):
-   ```bash
-   nvm install 20
-   nvm use 20
-   ```
-
-## 3. Install pnpm
-
-`pnpm` is the package manager used in this workspace.
-
-Once Node.js is installed, you can install pnpm globally via npm:
-```bash
-npm install -g pnpm
-```
-
-## 4. Install Deno
-
-Deno is used to run the Supabase Edge Functions in this project.
-
-Install Deno using the official script:
-```bash
-curl -fsSL https://deno.land/install.sh | sh
-```
-
-Make sure to add Deno to your PATH if the installer prompts you to (usually by adding it to your `~/.zshrc` or `~/.bashrc`):
-```bash
-export DENO_INSTALL="$HOME/.deno"
-export PATH="$DENO_INSTALL/bin:$PATH"
 ```
 
 ## 5. Install the Supabase CLI
@@ -110,12 +61,12 @@ node scripts/call_agents.mjs
 
 ## 8. Running the Web App Locally
 
-The frontend web application is a Next.js app located in `apps/rainebank`.
+The frontend web application is a Next.js app located in `apps/raineinvest`.
 
-### 1. Configure Frontend Environment Variables
-Before running the app, you need to create an `.env.local` file inside the `apps/rainebank` directory. The app requires access to Supabase and Paystack keys.
+### Environment Variables Setup
+Before running the app, you need to create an `.env.local` file inside the `apps/raineinvest` directory. The app requires access to Supabase and Paystack keys.
 
-Copy your keys from the root `.env` or your Supabase dashboard into `apps/rainebank/.env.local`:
+Copy your keys from the root `.env` or your Supabase dashboard into `apps/raineinvest/.env.local`:
 ```env
 NEXT_PUBLIC_SUPABASE_URL="https://<your-project-id>.supabase.co"
 NEXT_PUBLIC_SUPABASE_ANON_KEY="your-anon-key"

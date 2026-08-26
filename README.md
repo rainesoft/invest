@@ -1,9 +1,9 @@
-# RaineBank
+# RaineInvest
 
 An institutional-grade, fully autonomous algorithmic trading SaaS platform and
 autonomous PAMM fund manager.
 
-The RaineBank Engine is designed to identify structural macro setups,
+The RaineInvest Engine is designed to identify structural macro setups,
 mathematically evaluate risk via an AI Risk Officer, autonomously execute trades
 on live brokerages, manage global treasury solvency, and automatically market
 its performance to scale a retail and institutional subscriber base.
@@ -56,7 +56,7 @@ its performance to scale a retail and institutional subscriber base.
 
 ## 💰 Monetization Pipeline
 
-RaineBank operates two distinct revenue models for its PAMM fund:
+RaineInvest operates two distinct revenue models for its PAMM fund:
 
 1. **Performance Plan (Free to Start)**
    - **30% Profit Split:** We only win when the user wins. A 30% performance fee
@@ -85,7 +85,7 @@ The system is engineered to run completely hands-off, managing its own
 execution, monitoring, and marketing.
 
 - **Telegram Broadcast:** A `pg_net` database trigger pushes new `APPROVED`
-  S-Tier and A-Tier signals directly to the RaineBank retail Telegram channel
+  S-Tier and A-Tier signals directly to the RaineInvest retail Telegram channel
   instantly via MarkdownV2 formatting, explicitly ignoring rejected trades.
 - **The Retail Lifecycle (Email Drip):** Using the **Resend API**, an automated
   cron job nurtures Performance Plan users:

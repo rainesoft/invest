@@ -1,11 +1,11 @@
 # PAMM Risk Management & Capital Calibration Guide
-## Raine Bank — Institutional Sizing & Gating Architecture
+## RaineInvest — Institutional Sizing & Gating Architecture
 
 ---
 
 ## 1. Overview: The Dual-Layer Risk Architecture
 
-Raine Bank operates a **hybrid multi-tenant PAMM (Percent Allocation Management Module)**. To balance institutional pooling efficiency with individualized investor safety, risk is partitioned into two distinct control layers:
+RaineInvest operates a **hybrid multi-tenant PAMM (Percent Allocation Management Module)**. To balance institutional pooling efficiency with individualized investor safety, risk is partitioned into two distinct control layers:
 
 ```mermaid
 flowchart TD

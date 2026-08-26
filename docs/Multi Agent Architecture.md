@@ -1,17 +1,17 @@
 # Multi-Agent AI Trading Architecture
-## Raine Bank — Optimum Agent Council Design
+## RaineInvest — Optimum Agent Council Design
 
 ---
 
 ## The Core Architecture
 
-The Raine Bank automated trading system operates via a highly decoupled, multi-agent council. Rather than one monolithic AI making impulsive decisions, we employ specialized agents that handle distinct layers of the trade lifecycle (Macro Sentiment, Technical Confluence, Risk & Execution, and Position Management). 
+The RaineInvest automated trading system operates via a highly decoupled, multi-agent council. Rather than one monolithic AI making impulsive decisions, we employ specialized agents that handle distinct layers of the trade lifecycle (Macro Sentiment, Technical Confluence, Risk & Execution, and Position Management). 
 
 The agents communicate exclusively through a shared intelligence layer (the `trade_opportunities` and `user_trades` tables). No agent places a trade directly in the broker without the consensus of the council.
 
 ### Zero-Latency MT5 VPS Execution
 The actual trade execution and data pushing is handled by the **Zero-Latency MT5 VPS Execution Architecture**, which serves as the primary source of truth (with MetaAPI acting as a failover). 
-- **Master EA Setup:** The `RaineBankEA` is designed as a "Master" Expert Advisor. Even though it is attached to only 1 chart (e.g. `XAUUSD`), it autonomously loops through the entire MT5 Market Watch list. It pushes real-time data to `market_data_pti` and executes pending signals for all symbols. Having it on just 1 chart is the correct and most efficient setup to prevent duplicate executions and minimize CPU load.
+- **Master EA Setup:** The `RaineInvestEA` is designed as a "Master" Expert Advisor. Even though it is attached to only 1 chart (e.g. `XAUUSD`), it autonomously loops through the entire MT5 Market Watch list. It pushes real-time data to `market_data_pti` and executes pending signals for all symbols. Having it on just 1 chart is the correct and most efficient setup to prevent duplicate executions and minimize CPU load.
 
 ---
 
