@@ -50,8 +50,8 @@ The actual trade execution and data pushing is handled by the **Zero-Latency MT5
 - **Action:** 
   - **Multi-Agent Confluence:** Scans the last 4 hours of intelligence from all agents. If multiple agents (e.g., `agent-day` and `agent-swing`) signal the same direction, it applies a **3.0x conviction multiplier** to the trade size. If they contradict, it applies a **0.5x penalty**.
   - **Correlation Check:** Prevents opening trades that conflict with existing open positions (e.g., longing EURUSD while already short GBPUSD).
-  - **Portfolio Sizing:** Calculates dynamic lot sizes based on the user's current portfolio capital, daily drawdown limits, and Global House Money (PHM) rules.
-  - **Execution:** Dispatches the final, risk-adjusted `mtPost` order to the broker via MetaAPI.
+  - **Portfolio Sizing & PAMM Allocation:** Calculates dynamic per-user lot sizes based on `user_risk_settings` (Portfolio Capital, Risk %, Daily Drawdown limits, Blowout protections, and PHM rules) and aggregates them into a consolidated master order (`totalMasterVolume`). See [PAMM Risk Management & Calibration Guide](PAMM%20Risk%20Management.md) for full mathematical specifications.
+  - **Execution:** Dispatches the final, risk-adjusted `mtPost` order to the broker via MT5 VPS EA (or MetaAPI failover).
 
 ### 5. `position-manager` (Risk & Trade Management)
 *The Trade Guardian.*

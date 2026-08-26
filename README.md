@@ -41,7 +41,7 @@ its performance to scale a retail and institutional subscriber base.
 ### 4. Execution Layer (PAMM Routing & Trade Resolution)
 
 - **The Execution Router (`agent-trade`):** A multi-tenant execution engine that
-  iterates through subscribed users upon an approved S-Tier or A-Tier AI signal.
+  iterates through subscribed users upon an approved S-Tier or A-Tier AI signal, calculating individualized lot allocations based on user-level parameters (`user_risk_settings`) while enforcing global safety gates (`system_settings`). For full mathematical sizing and calibration specifications, see the [PAMM Risk Management Guide](docs/PAMM%20Risk%20Management.md).
 - **Master Execution:** Trades are exclusively executed on the Master Account,
   and distributed automatically to PAMM followers at the broker level.
 - **Post-Mortem Engine (`resolve-outcomes`):** Autonomously tracks live trades
