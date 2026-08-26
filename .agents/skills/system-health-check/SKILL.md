@@ -20,8 +20,10 @@ Whenever the user requests a "system health check", you should:
    - `pg_cron` jobs (all 13 active jobs) are firing successfully with `status = 'succeeded'` and have no missing `timeout_milliseconds` or `x-cron-secret` configurations (the proactive sweep in Section 1B will flag this).
    - No silent agent crashes are occurring (query `audit_log` for `AGENT_CRASH`).
    - Autonomous agents (`agent-news`, `agent-day`, `agent-swing` split crons) are generating signals and heartbeats.
-   - Database Webhook & Cron HTTP responses in `net._http_response` have zero network failures (`Couldn't resolve host name`) and no unhandled 500 server errors (e.g. MetaAPI `"Failed to fetch Master history"` in `exness-history-sync`).
+   - Database Webhook & Cron HTTP responses in `net._http_response` have zero network failures (`Couldn't resolve host name`) and no unhandled 500 server errors (e.g. MetaAPI transient failures in `exness-history-sync` are caught gracefully).
    - Orphaned signals (stuck in `PUBLISHED`, `APPROVED` without `user_trades`, or `PENDING`) are zero.
+   - Closed trades with calculated `profit_usd` are not desynced in `status = 'OPEN'` (reconcile to `WON` or `LOST` via Section 3G, Step 1c).
+   - Database triggers (e.g. `allocate_virtual_pnl()`) are idempotent and skip duplicate reference codes without throwing `23505 duplicate key` errors.
    - Broker execution errors in `user_trades` (MT5 error codes 10014 Invalid Volume, 10015 Invalid Price, 10016 Invalid Stops / Multi-Leg TP Direction, 10019 Margin) are caught and parent opportunities updated to `REJECTED`.
    - All TP targets (`tp1`, `tp2`, `tp3`) enforce the 3-Layer Direction Validation against entry prices.
    - Stale `ACTIVE` trade opportunities older than 24 hours without live `OPEN` positions are safely expired to `status = 'EXPIRED'` (complying with `trade_opportunities_status_check` constraint).

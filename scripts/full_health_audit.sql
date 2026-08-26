@@ -119,6 +119,14 @@ SELECT jsonb_pretty(jsonb_build_object(
       WHERE t.status IN ('ACTIVE', 'APPROVED')
         AND EXISTS (SELECT 1 FROM user_trades u WHERE u.opportunity_id = t.id)
         AND NOT EXISTS (SELECT 1 FROM user_trades u WHERE u.opportunity_id = t.id AND u.status IN ('OPEN', 'PENDING', 'VPS_PENDING'))
+      UNION ALL
+      SELECT 'Desynced Closed Trades' as issue_type, u.id, u.symbol, u.side, u.status, u.created_at
+      FROM user_trades u
+      WHERE u.status = 'OPEN' AND u.profit_usd IS NOT NULL
+      UNION ALL
+      SELECT 'Stale Unfilled Orders (>48h)' as issue_type, u.id, u.symbol, u.side, u.status, u.created_at
+      FROM user_trades u
+      WHERE u.status IN ('OPEN', 'PENDING', 'VPS_PENDING') AND u.open_price IS NULL AND u.created_at < NOW() - INTERVAL '48 hours'
     ) sub
   ),
 

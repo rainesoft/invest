@@ -1,12 +1,9 @@
-# Raine Bank: Daily System Health Checklist
+# RaineInvest: Daily System Health Checklist
 
-This checklist is designed for App Support Engineers to verify the overall health, execution integrity, and safety limits of the autonomous agentic trading system at the start of each trading day.
-
-> [!TIP]
-> **Automated Diagnostics:** You can run a single-command complete JSON health audit by executing `npx supabase db query --linked --file scripts/full_health_audit.sql`. Alternatively, you can run all diagnostic SQL queries listed in this document using `scripts/healthcheck.sql`, or run `python3 scripts/comprehensive_healthcheck.py` to fetch real-time diagnostics via the REST API.
+A rapid, structured checklist to verify that all autonomous subsystems (VPS ingestion, Edge Function agents, PAMM execution, database health, risk controls) are fully operational.
 
 > [!IMPORTANT]
-> **Primary Architecture:** Raine Bank prioritizes the zero-latency **MT5 VPS Execution Architecture** as the primary source of truth for market data and trade execution. MetaAPI is strictly maintained as an autonomous failover layer. If the VPS stream fails, it must be investigated and restarted immediately to avoid long-term reliance on MetaAPI polling.
+> **Primary Architecture:** RaineInvest prioritizes the zero-latency **MT5 VPS Execution Architecture** as the primary source of truth for market data and trade execution. MetaAPI is strictly maintained as an autonomous failover layer. If the VPS stream fails, it must be investigated and restarted immediately to avoid long-term reliance on MetaAPI polling.
 
 ## 1. Edge Infrastructure & Core DB Health
 Verify that the underlying Supabase infrastructure is responsive and background scheduling is active.
@@ -644,6 +641,24 @@ WHERE t.status IN ('ACTIVE', 'APPROVED')
     WHERE u.opportunity_id = t.id AND u.status IN ('OPEN', 'PENDING', 'VPS_PENDING', 'VPS_PROCESSING', 'WON', 'LOST')
   );
 ```
+
+### Step 1c — Reconcile Desynced Closed Trades (status = 'OPEN' with Profit)
+If a trade was closed and had `profit_usd` calculated by Position Manager or Exness history sync, but its `status` is desynced as `'OPEN'`, run the following reconciliation:
+
+```sql
+-- 1. Identify desynced closed trades
+SELECT id, symbol, side, status, profit_usd, close_price, closed_at
+FROM user_trades
+WHERE status = 'OPEN' AND profit_usd IS NOT NULL;
+
+-- 2. Update status to reflect real outcome (WON / LOST)
+UPDATE user_trades
+SET status = CASE WHEN profit_usd > 0 THEN 'WON' ELSE 'LOST' END
+WHERE status = 'OPEN' AND profit_usd IS NOT NULL;
+```
+
+> [!NOTE]
+> **Ledger Idempotency Guard:** The `allocate_virtual_pnl()` database trigger verifies whether a ledger transaction with `reference_code = 'TRADE-' || NEW.id` already exists in `ledger_transactions`. If already posted, it skips re-allocation to prevent duplicate wallet balance adjustments and avoid `23505 duplicate key value` constraint violations.
 
 ### Step 2 — Reconcile Broker Pending Orders vs user_trades
 Cross-reference live pending orders from the broker against open trades in `user_trades`:

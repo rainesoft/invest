@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Raine Bank - Comprehensive System Health Check Diagnostic Script
+Raine Invest - Comprehensive System Health Check Diagnostic Script
 Fetches real-time diagnostics via the Supabase REST API.
 """
 
@@ -61,7 +61,7 @@ def query_table(table: str, params: str = "") -> list:
 
 now_utc = datetime.now(timezone.utc)
 print(f"================================================================================")
-print(f"=== RAINE BANK SYSTEM HEALTH CHECK — {now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')} ===")
+print(f"=== RAINE INVEST SYSTEM HEALTH CHECK — {now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')} ===")
 print(f"================================================================================")
 
 # 1. Edge Function Agent Crashes
@@ -137,13 +137,20 @@ else:
     print("  No user trades found.")
 
 # 8. Stuck or Failed Trades
-print("\n--- 8. FAILED / STUCK TRADES (Last 7 Days) ---")
+print("\n--- 8. FAILED / STUCK / DESYNCED TRADES (Last 7 Days) ---")
 failed_trades = query_table("user_trades", "status=in.(FAILED,PENDING,VPS_PENDING)&order=created_at.desc&limit=10")
 if failed_trades:
     for ft in failed_trades:
         print(f"  FAILED/STUCK: {ft.get('id')} | {ft.get('symbol')} | Status: {ft.get('status')} | Err: {ft.get('error_message')} | Created: {ft.get('created_at')}")
 else:
     print("  None found. No trades stuck in PENDING, VPS_PENDING, or FAILED.")
+
+desynced_trades = query_table("user_trades", "status=eq.OPEN&profit_usd=not.is.null&limit=10")
+if desynced_trades:
+    for dt in desynced_trades:
+        print(f"  ⚠️ DESYNCED CLOSED TRADE (Status OPEN but has Profit): {dt.get('id')} | {dt.get('symbol')} | Profit: ${dt.get('profit_usd')} | ClosedAt: {dt.get('closed_at')}")
+else:
+    print("  Zero desynced trades found. (All OPEN trades have profit_usd = null). Clean!")
 
 def parse_iso(dt_str: str):
     """Safely parse ISO timestamp across various formats and Python versions."""
