@@ -58,20 +58,35 @@ serve(async (req) => {
     
     let historyDeals = [];
     try {
-      const historyResponse = await fetch(historyUrl, {
+      let historyResponse = await fetch(historyUrl, {
         headers: { "auth-token": masterToken },
       });
 
+      // 1 retry with backoff if rate-limited or transient failure
+      if (!historyResponse.ok && (historyResponse.status === 429 || historyResponse.status >= 500)) {
+        console.warn(`[History Sync] MetaAPI responded with ${historyResponse.status}. Retrying in 1.5s...`);
+        await new Promise((r) => setTimeout(r, 1500));
+        historyResponse = await fetch(historyUrl, {
+          headers: { "auth-token": masterToken },
+        });
+      }
+
       if (!historyResponse.ok) {
         const err = await historyResponse.text();
-        console.error(`[History Sync] Master failed to fetch history: ${err}`);
-        return new Response("Failed to fetch Master history", { status: 500 });
+        console.warn(`[History Sync] Master failed to fetch history (${historyResponse.status}): ${err}`);
+        return new Response(JSON.stringify({ success: false, reason: "MetaAPI temporary unavailable", error: err }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
       }
 
       historyDeals = await historyResponse.json();
-    } catch (e) {
-      console.error(`[History Sync] Master fetch exception: ${e}`);
-      return new Response("Exception fetching Master history", { status: 500 });
+    } catch (e: any) {
+      console.warn(`[History Sync] Master fetch exception: ${e?.message || e}`);
+      return new Response(JSON.stringify({ success: false, reason: "MetaAPI connection error", error: e?.message || String(e) }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
     }
 
     // Filter for closing deals (where entryType is DEAL_ENTRY_OUT)

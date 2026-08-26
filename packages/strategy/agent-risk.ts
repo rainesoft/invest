@@ -53,6 +53,24 @@ export async function validateGlobalSignal(
   if (openTrades && openTrades.length > 0) {
     return { valid: false, reason: `REJECTED: Strict 1-trade-per-symbol isolation. A live trade for ${symbol} is already OPEN or PENDING execution.` };
   }
+
+  // --- CONSECUTIVE STOP-LOSS COOLDOWN (Cascade & Knife-Catching Guard) ---
+  const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+  const { data: recentLosses } = await supabase
+    .from("user_trades")
+    .select("id, symbol, side, closed_at, status")
+    .eq("symbol", symbol)
+    .eq("status", "LOST")
+    .gte("closed_at", fourHoursAgo)
+    .limit(1);
+
+  if (recentLosses && recentLosses.length > 0) {
+    const lastLoss = recentLosses[0];
+    return {
+      valid: false,
+      reason: `REJECTED: Stop-loss cooldown active for ${symbol}. Trade stopped out within the last 4 hours (${lastLoss.closed_at}). Cooling down to prevent knife-catching.`,
+    };
+  }
   // --------------------------------------------------------
 
   // Guardrail: Asset Isolation (Don't spam multiple signals for the same asset)

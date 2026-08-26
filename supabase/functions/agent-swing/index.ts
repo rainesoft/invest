@@ -1461,17 +1461,15 @@ serve(async (req) => {
               const risks = (r.ai_risks || "").toUpperCase();
               
               if (isLong) {
-                if (summary.includes("BEARISH") || summary.includes("DOWNTREND") || summary.includes("DOWNWARD") ||
-                    summary.includes("BELOW") || summary.includes("BREAKDOWN") || summary.includes("VALUE AREA REJECTION") ||
-                    risks.includes("BEARISH") || risks.includes("DOWNTREND") || summary.includes("CHOP") || summary.includes("ANEMIC")) {
+                if (summary.includes("BEARISH_TREND") || summary.includes("BEARISH BREAKDOWN") || summary.includes("STRONG DOWNWARD") ||
+                    risks.includes("BEARISH BREAKDOWN") || risks.includes("STRONG DOWNWARD")) {
                   intradayHasOpposingRejection = true;
                   intradayRejectionDetail = r.ai_summary?.slice(0, 140) || "Intraday bearish breakdown detected";
                   break;
                 }
               } else {
-                if (summary.includes("BULLISH") || summary.includes("UPTREND") || summary.includes("UPWARD") ||
-                    summary.includes("ABOVE") || summary.includes("BREAKOUT") || summary.includes("VALUE AREA REJECTION") ||
-                    risks.includes("BULLISH") || risks.includes("UPTREND") || summary.includes("CHOP") || summary.includes("ANEMIC")) {
+                if (summary.includes("BULLISH_TREND") || summary.includes("BULLISH BREAKOUT") || summary.includes("STRONG UPWARD") ||
+                    risks.includes("BULLISH BREAKOUT") || risks.includes("STRONG UPWARD")) {
                   intradayHasOpposingRejection = true;
                   intradayRejectionDetail = r.ai_summary?.slice(0, 140) || "Intraday bullish breakout detected";
                   break;
@@ -1486,21 +1484,27 @@ serve(async (req) => {
           if (intradayHasOpposingRejection) {
             // Intraday agent detected active breakdown or opposing momentum.
             // Strictly block blind Market order to prevent buying/selling into a falling knife.
-            console.log(`[${symbol}] [Cross-Agent Confluence] Intraday agent rejected ${symbol} (${intradayRejectionDetail}). Converting to deep LIMIT order entry.`);
+            console.log(`[${symbol}] [Cross-Agent Confluence] Intraday agent rejected ${symbol} (${intradayRejectionDetail}). Converting to pullback LIMIT order entry.`);
+            const maxLimitOffset = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.30) : (currentPrice * 0.005);
             const deepFib = nearestFibs.find(f => isLong ? f.price < currentPrice : f.price > currentPrice);
-            const targetLimit = deepFib ? deepFib.price : (isLong ? currentPrice - (dailyAtr * 0.50) : currentPrice + (dailyAtr * 0.50));
+            let targetLimit = deepFib ? deepFib.price : (isLong ? currentPrice - maxLimitOffset : currentPrice + maxLimitOffset);
+            
+            // Clamp target limit within reachable 0.35x ATR
+            if (isLong && currentPrice - targetLimit > maxLimitOffset) targetLimit = currentPrice - maxLimitOffset;
+            if (!isLong && targetLimit - currentPrice > maxLimitOffset) targetLimit = currentPrice + maxLimitOffset;
+
             entry = Number(targetLimit.toFixed(5));
             order_type = isLong ? "BUY LIMIT" : "SELL LIMIT";
             
-            // Expand SL to 1.5x Daily ATR to withstand intraday momentum
-            const wideSlDist = Number((dailyAtr * 1.50).toFixed(5));
+            // Expand SL to 1.35x Daily ATR to withstand intraday momentum
+            const wideSlDist = Number((dailyAtr * 1.35).toFixed(5));
             sl = isLong ? Number((entry - wideSlDist).toFixed(5)) : Number((entry + wideSlDist).toFixed(5));
             evaluation.execution_parameters.suggested_entry_price = entry;
             evaluation.execution_parameters.suggested_stop_loss = sl;
-            safeRationale += ` [Multi-Timeframe Protection: Intraday counter-momentum (${intradayRejectionDetail}) — Market entry converted to deep Limit @ $${entry} with 1.5x ATR SL]`;
+            safeRationale += ` [Multi-Timeframe Protection: Intraday counter-momentum (${intradayRejectionDetail}) — Market entry converted to pullback Limit @ $${entry} with 1.35x ATR SL]`;
           } else if (Math.abs(entry - currentPrice) >= pendingOrderThreshold) {
             // Dynamic limit clamping: prevent placing limit orders excessively far (>0.35x ATR) which causes missed fills
-            const maxLimitDist = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.35) : (currentPrice * 0.01);
+            const maxLimitDist = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.30) : (currentPrice * 0.005);
             const rawLimitDist = Math.abs(entry - currentPrice);
             if (rawLimitDist > maxLimitDist) {
               const clampedEntry = isLong ? (currentPrice - maxLimitDist) : (currentPrice + maxLimitDist);

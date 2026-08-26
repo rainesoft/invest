@@ -124,22 +124,24 @@ async function evaluateOpportunity(symbol: string, snapshot: LogicContext & { ag
     
 CRITICAL RULES:
 
-0. ORDER OF OPERATIONS (CRITICAL PRIORITY):
-   - STEP 1: Determine the Intraday Pivot Regime. If Current Price > htf_pivot, your regime is BULLISH. If Current Price < htf_pivot, your regime is BEARISH.
-   - STEP 2: Consult the Indicators. Check MACD (macd_line, macd_signal, macd_histogram) and moving averages (ema_20 and ema_50, or ema_50 and ema_200). 
-   - STEP 3: Ensure Indicator Confluence. If Regime is BEARISH, ensure MACD is negative and price is below MA 50 before shorting. If Regime is BULLISH, ensure MACD is positive and price is above MA 50 before longing.
+0. TOP-DOWN MACRO TIDE & ORDER OF OPERATIONS (CRITICAL PRIORITY):
+   - STEP 1 (HTF Macro Tide): Inspect snapshot.htf_trend, snapshot.htf_pivot, and snapshot.agent_context (Swing Trader context). If the Daily 1D trend is strongly BEARISH (e.g., Bearish Engulfing candle or price below Daily Pivot), you MUST NOT seek counter-trend Longs on 30m. Look strictly for Short continuation or Pullback Sell Limits at resistance. If Daily 1D trend is strongly BULLISH, look strictly for Longs or Pullback Buy Limits at support.
+   - STEP 2 (Intraday Pivot Regime): If Current Price > htf_pivot, your regime is BULLISH. If Current Price < htf_pivot, your regime is BEARISH.
+   - STEP 3 (Indicator Confluence): Check MACD (macd_line, macd_signal, macd_histogram) and moving averages (ema_20 and ema_50). If Regime is BEARISH, ensure MACD is negative and price is below MA 50 before shorting. If Regime is BULLISH, ensure MACD is positive and price is above MA 50 before longing.
 
 1. PIVOT DIRECTIONAL BIAS: You are trading the 30-minute Intraday timeframe. You MUST align your direction with the Pivot Regime. Do NOT force a LONG trade if the price is below the Daily Pivot (htf_pivot), regardless of the 1D macro trend. If price breaks below the Pivot, it is a SHORT setup.
-2. TARGETS (ASYMMETRIC RISK): If originating a LONG trade, you MUST target the second liquidity pool (Resistance 2) as your primary suggested_take_profit to ensure high R:R. If originating a SHORT trade, target Support 2 as your primary take_profit.
-3. INVALIDATION (SAFE STOPS): Your stop loss MUST be placed safely outside the ATR buffer and behind major HTF structural pivots. Do NOT place overly tight stops just to maximize R:R. A safe stop with a 1.5 R:R is far superior to a tight stop that gets hunted.
-4. If indicators are completely conflicting (e.g., Price > Pivot but MACD deeply negative and price < MA200), invoke 'reject_trade' to stay flat.
+2. TARGETS (ASYMMETRIC RISK): If originating a LONG trade, target the second liquidity pool (Resistance 2 or VWAP Upper 2) as your primary suggested_take_profit to ensure high R:R. If originating a SHORT trade, target Support 2 or VWAP Lower 2 as your primary take_profit.
+3. INVALIDATION (SAFE STOPS): Your stop loss MUST be placed safely outside the ATR buffer and behind major HTF structural pivots. Do NOT place overly tight stops just to maximize R:R. A safe stop with a 1.5+ R:R is far superior to a tight stop that gets hunted.
+4. CONFLICT RESOLUTION: If indicators are completely conflicting (e.g., Price > Pivot but MACD deeply negative and price < MA200), invoke 'reject_trade' to stay flat.
 5. NO MEAN REVERSION AGAINST PIVOT: Do not buy a dip if it breaks below the pivot. A break below the pivot is a trend reversal, not a pullback.
 6. REQUIRED PARAMETERS: You MUST provide a numeric suggested_entry_price, suggested_stop_loss, and suggested_take_profit for ANY trade setup. Do not return nulls for these fields.
-7. LIMIT ORDERS FOR BETTER ENTRIES: If the price is hovering mid-range between the Pivot and Support/Resistance, do not reject the setup. Instead, issue a BUY LIMIT or SELL LIMIT at the Pivot to catch the wick.
-8. HIGH-LEVERAGE ASSETS (VOLATILITY): Indices (US30, NAS100) and Metals (XAGUSD) have massive volatility wicks. You MUST use wider structural stops for these assets to survive normal market noise. Do not use tight stops.
-9. MEAN REVERSION & RANGE BOUNDARY DISCIPLINE: If ADX < 20 or trend_alignment is 'CHOP', you are EXPLICITLY AUTHORIZED to originate a MEAN_REVERSION or RANGE_BOUNDARY trade. Buy near Value Area Low (val_price) or Support with target at POC (poc_price) / mean_reversion_target. Sell near Value Area High (vah_price) or Resistance with target at POC. Do NOT reject simply for being choppy if clear boundaries exist.
+7. ASYMMETRIC R:R & ADAPTIVE LIMIT ORDERS (NEVER REJECT SOLELY FOR LOW R:R AT MARKET): If the market structure and directional bias are strong (A-Tier/S-Tier) but current market price is hovering near resistance/support (yielding R:R < 1.5 at market), DO NOT REJECT. Instead, calculate and issue a BUY LIMIT or SELL LIMIT at the nearest value area (50 EMA, Session VWAP, or Daily Pivot) to guarantee an institutional R:R >= 1.75.
+8. HIGH-LEVERAGE ASSETS (VOLATILITY): Indices (US30, NAS100, GER30) and Metals (XAGUSD) have massive volatility wicks. You MUST use wider structural stops for these assets to survive normal market noise.
+9. REGIME-ADAPTIVE STRATEGY ROUTING:
+   - When volume_regime === 'ANEMIC' or volume_ratio < 0.8: MOMENTUM_BREAKOUT is strictly forbidden. You MUST evaluate MEAN_REVERSION, ASIAN_RANGE_SWEEP, BOUNDARY_REJECTION_SCALP, or limit orders at POC (poc_price) / VWAP.
+   - When ADX < 20 or trend_alignment is 'CHOP', you are EXPLICITLY AUTHORIZED to originate a MEAN_REVERSION or RANGE_BOUNDARY trade. Buy near Value Area Low (val_price) / Support with target at POC. Sell near Value Area High (vah_price) / Resistance with target at POC.
 10. PROXIMITY & BOUNDARY REJECTION SCALPS: Do not reject a trade for being close to resistance/support if a clear candlestick rejection pinbar or engulfing pattern is present. Originate a 'BOUNDARY_REJECTION_SCALP' with tight SL behind the boundary wick and target at Pivot / VWAP.
-11. NO COUNTER-TREND HEROICS: Do not attempt to catch "short-term retracements" against the dominant macro trend unless a valid Mean Reversion or Boundary Rejection setup is present with strict SL.
+11. ASSET-CLASS NORMALIZATION FOR DISTANCE CHECKS: For high-nominal Indices (US30, NAS100, GER30) and Crypto (BTCUSD), a distance of >= 0.02% (or >= 0.25x ATR) represents substantial structural breathing room. Do not apply the Forex 0.10% rule to indices or crypto.
 12. SMART MONEY ORDER FLOW & VWAP VALUE DISCIPLINE:
     - VWAP PULLBACKS: In a BULLISH regime, optimal long entries occur when price is testing Session VWAP, POC, or bouncing off the lower VWAP band (lower1). Do NOT chase breakout longs if price is already at EXTREME_OVERBOUGHT (> upper2).
     - BREAKOUT VOLUME REQUIREMENT: For MOMENTUM_BREAKOUT or Stop orders (Buy Stop / Sell Stop), you MUST verify that volume_surge is true or volume_ratio >= 1.4. If volume is LOW or ANEMIC, reject the breakout as a false trap or place a LIMIT order pullback at the POC (poc_price) / HVN (nearest_hvn).
@@ -193,7 +195,7 @@ ${JSON.stringify(snapshot, null, 2)}`,
           type: "object",
           properties: {
             thought_process: { type: "string", description: "Step-by-step reasoning for the rejection. You MUST explicitly state why the MACRO SENSITIVITY (Rule 4) override did not apply before rejecting." },
-            rejection_math_proof: { type: "string", description: "You MUST calculate the boundary percentage distance step-by-step here BEFORE outputting the reason. Do NOT output a lazy INFLECTION_POINT_WAIT without proving the math first." },
+            rejection_math_proof: { type: "string", description: "You MUST calculate the boundary percentage distance step-by-step here BEFORE outputting the reason. For Indices (US30/NAS100), >= 0.02% or 0.25x ATR is valid room. Do NOT output a lazy INFLECTION_POINT_WAIT without proving the math first." },
             distance_to_level_percent: { type: "number", description: "The calculated percentage distance from the current price to the nearest Fib/Structural level. Must be calculated BEFORE invoking INFLECTION_POINT_WAIT." },
             reason: { type: "string" }
           },
@@ -300,14 +302,20 @@ serve(async (req) => {
     (reqBody as any).symbols?.join(",") || searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "XAUUSD,XAGUSD,BTCUSD,UKOIL,EURUSD,GBPUSD,USDJPY,EURJPY,GBPJPY,AUDUSD,NZDUSD,AUDJPY,CADJPY,EURGBP,US30,NAS100";
   const symbols = symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean);
 
+  // Institutional Opportunity-Ranked Asset Sorting:
+  // Priority: 1) Open high-liquidity / high-volatility assets, 2) Other open markets, 3) Closed markets
+  const priorityList = ['BTCUSD', 'XAUUSD', 'US30', 'NAS100', 'EURUSD', 'GBPUSD', 'AUDUSD', 'UKOIL', 'XAGUSD', 'USDJPY', 'GBPJPY', 'EURJPY', 'NZDUSD'];
   symbols.sort((a, b) => {
-    if (a === 'BTCUSD' && b !== 'BTCUSD') return -1;
-    if (b === 'BTCUSD' && a !== 'BTCUSD') return 1;
     const aOpen = isMarketOpen(a);
     const bOpen = isMarketOpen(b);
     if (aOpen && !bOpen) return -1;
     if (!aOpen && bOpen) return 1;
-    return 0;
+
+    const aIdx = priorityList.indexOf(a);
+    const bIdx = priorityList.indexOf(b);
+    const aRank = aIdx !== -1 ? aIdx : 999;
+    const bRank = bIdx !== -1 ? bIdx : 999;
+    return aRank - bRank;
   });
 
   const url = Deno.env.get("SUPABASE_URL");
@@ -1217,42 +1225,68 @@ serve(async (req) => {
               if (deskRequiredRR > 1.2) deskRequiredRR = 1.2;
             }
 
-            if (riskRewardRatio < deskRequiredRR - 0.05) {
-              console.log(`[Layer C: Execution Desk] REJECTED ${symbol}: Risk:Reward ratio (${riskRewardRatio.toFixed(2)}) is below the institutional minimum of ${deskRequiredRR} for Tier score ${confidence_score}.`);
-              sendEvent({ type: 'progress', message: `[Layer C: Execution Desk] REJECTED: Structural mismatch. R:R ratio (${riskRewardRatio.toFixed(2)}) is below minimum of ${deskRequiredRR}.` });
-              rejections.push({
-                symbol,
-                reason: `Structural R:R mismatch: Risk:Reward ratio is ${riskRewardRatio.toFixed(2)}, which is below the required 1:${deskRequiredRR} threshold for a ${confidence_score} confidence score.`,
-                layer: "Execution Desk"
-              });
-              await supabase.from("trade_opportunities").insert({
-                symbol,
-                side: dbSide,
-                timeframe: timeframe.toLowerCase(),
-                status: "REJECTED",
-                source: "agent-day",
-                ai_summary: institutional_rationale,
-                ai_risks: `Rejected by Execution Desk: R:R ratio ${riskRewardRatio.toFixed(2)} < ${deskRequiredRR}`,
-                model_id: modelId,
-                model_version: modelVersion,
-                risk_summary: `RSI ${snapshot.rsi_14}`
-              });
-              
-              // Hive Mind: Reset HFT bias on Execution Desk structural rejection
-              await pingHFTDirector(symbol, "NEUTRAL");
-              return;
-            }
-
-            console.log(`[Layer C: Execution Desk] APPROVED ${symbol}: Generating pending opportunity...`);
-            sendEvent({ type: 'progress', message: `[Execution] Creating opportunity for ${symbol}...` });
-            
             let order_type = dbSide === 'LONG' ? 'BUY MARKET' : 'SELL MARKET';
-            if (Math.abs(entry_price - snapshot.current_price) / snapshot.current_price > 0.0005) {
+
+            if (riskRewardRatio < deskRequiredRR - 0.05) {
+              // --- ADAPTIVE LIMIT SOLVER (Institutional Execution Desk) ---
+              // If the setup has high conviction (confidence >= 80) and structural target & stop are sound,
+              // do NOT discard the trade. Instead, solve for the required pullback limit entry to achieve >= 1.75 R:R.
+              const targetRR = Math.max(deskRequiredRR, 1.75);
+              const currentPrice = snapshot.current_price;
+              
+              // Formula: entry = (take_profit + targetRR * stop_loss) / (1 + targetRR)
+              const solvedEntry = (take_profit + (targetRR * stop_loss)) / (1 + targetRR);
+              const isIndexOrCrypto = ['US30', 'NAS100', 'GER30', 'SPX500', 'BTCUSD'].includes(symbol);
+              const decimals = isIndexOrCrypto ? 2 : 5;
+              const formattedEntry = Number(solvedEntry.toFixed(decimals));
+              
+              const isLong = dbSide === 'LONG';
+              const isEntryValidLong = isLong && formattedEntry < currentPrice && formattedEntry > stop_loss;
+              const isEntryValidShort = !isLong && formattedEntry > currentPrice && formattedEntry < stop_loss;
+              
+              const atr = snapshot.atr_14 || Math.abs(currentPrice - stop_loss);
+              const isWithinReach = Math.abs(formattedEntry - currentPrice) <= (atr * 2.0);
+              
+              if (confidence_score >= 80 && (isEntryValidLong || isEntryValidShort) && isWithinReach) {
+                console.log(`[Layer C: Execution Desk] ADAPTIVE LIMIT: Converted ${symbol} ${dbSide} market entry from ${entry_price} (R:R ${riskRewardRatio.toFixed(2)}) to Pullback Limit @ ${formattedEntry} (R:R 1:${targetRR.toFixed(1)}).`);
+                sendEvent({ type: 'progress', message: `[Execution Desk] Adaptive Limit: Adjusted entry on ${symbol} to ${formattedEntry} for 1:${targetRR.toFixed(1)} R:R.` });
+                
+                entry_price = formattedEntry;
+                order_type = isLong ? 'BUY LIMIT' : 'SELL LIMIT';
+                institutional_rationale += ` [Adaptive Limit Solver: Converted overextended market entry into a pullback ${order_type} @ ${entry_price} to lock in institutional 1:${targetRR.toFixed(1)} R:R].`;
+              } else {
+                console.log(`[Layer C: Execution Desk] REJECTED ${symbol}: Risk:Reward ratio (${riskRewardRatio.toFixed(2)}) is below the institutional minimum of ${deskRequiredRR} for Tier score ${confidence_score}.`);
+                sendEvent({ type: 'progress', message: `[Layer C: Execution Desk] REJECTED: Structural mismatch. R:R ratio (${riskRewardRatio.toFixed(2)}) is below minimum of ${deskRequiredRR}.` });
+                rejections.push({
+                  symbol,
+                  reason: `Structural R:R mismatch: Risk:Reward ratio is ${riskRewardRatio.toFixed(2)}, which is below the required 1:${deskRequiredRR} threshold for a ${confidence_score} confidence score.`,
+                  layer: "Execution Desk"
+                });
+                await supabase.from("trade_opportunities").insert({
+                  symbol,
+                  side: dbSide,
+                  timeframe: timeframe.toLowerCase(),
+                  status: "REJECTED",
+                  source: "agent-day",
+                  ai_summary: institutional_rationale,
+                  ai_risks: `Rejected by Execution Desk: R:R ratio ${riskRewardRatio.toFixed(2)} < ${deskRequiredRR}`,
+                  model_id: modelId,
+                  model_version: modelVersion,
+                  risk_summary: `RSI ${snapshot.rsi_14}`
+                });
+                
+                // Hive Mind: Reset HFT bias on Execution Desk structural rejection
+                await pingHFTDirector(symbol, "NEUTRAL");
+                return;
+              }
+            } else {
+              if (Math.abs(entry_price - snapshot.current_price) / snapshot.current_price > 0.0005) {
                 if (dbSide === 'LONG') {
-                    order_type = entry_price < snapshot.current_price ? 'BUY LIMIT' : 'BUY STOP';
+                  order_type = entry_price < snapshot.current_price ? 'BUY LIMIT' : 'BUY STOP';
                 } else {
-                    order_type = entry_price > snapshot.current_price ? 'SELL LIMIT' : 'SELL STOP';
+                  order_type = entry_price > snapshot.current_price ? 'SELL LIMIT' : 'SELL STOP';
                 }
+              }
             }
 
             const { data, error } = await supabase

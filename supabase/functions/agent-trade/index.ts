@@ -286,8 +286,9 @@ serve(async (req) => {
       const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
       const { data: latestOpps, error: latestOppsError } = await supabase
         .from("trade_opportunities")
-        .select("symbol, side, ai_summary, status")
+        .select("id, symbol, side, ai_summary, status, source, timeframe")
         .in("symbol", uniqueSymbols)
+        .in("status", ["APPROVED", "ACTIVE"])
         .gte("created_at", fourHoursAgo)
         .order("created_at", { ascending: false });
         
@@ -297,7 +298,7 @@ serve(async (req) => {
       if (latestOpps) {
          for (const opp of latestOpps) {
             if (!latestOppMap.has(opp.symbol)) {
-               latestOppMap.set(opp.symbol, opp); // Only keeps the most recent one
+               latestOppMap.set(opp.symbol, opp); // Only keeps the most recent approved/active one
             }
          }
       }
@@ -407,21 +408,25 @@ serve(async (req) => {
           // --- AI-DRIVEN INVALIDATION CHECK ---
           const latestSignal = latestOppMap.get(trade.symbol);
           if (latestSignal) {
-             const isOpposite = latestSignal.side !== trade.side && latestSignal.status !== "C-Tier"; 
-             const isCTier = latestSignal.ai_summary?.includes("C-Tier") || latestSignal.ai_summary?.includes("No setup");
-             const isOppositeMacro = isOpposite && (latestSignal.ai_summary?.includes("S-Tier") || latestSignal.ai_summary?.includes("A-Tier"));
+             const isOpposite = latestSignal.side !== trade.side;
+             const isHighConviction = latestSignal.ai_summary?.includes("S-Tier") || latestSignal.ai_summary?.includes("A-Tier");
              
              // Swing Protection: Ignore lower-timeframe noise if this is part of the Swing trade family (SWING or RUNNER).
              let shouldInvalidate = false;
              let reason = "";
              const isSwingFamily = trade.trade_type === "SWING" || trade.trade_type === "RUNNER" || opp?.source === "agent-swing" || ["4h", "1d", "1w"].includes(opp?.timeframe?.toLowerCase());
               
-             if (isOpposite && !isSwingFamily) {
-                 shouldInvalidate = true;
-                 reason = "AI Trend Reversal Invalidation (Opposing Setup Detected)";
-             } else if (isOppositeMacro && isSwingFamily) {
-                 shouldInvalidate = true;
-                 reason = "AI Macro Trend Reversal (Opposing Macro S-Tier/A-Tier Setup Detected)";
+             if (isOpposite && isHighConviction) {
+                 if (isSwingFamily) {
+                     // Only invalidate if the opposing signal is also from a Swing agent or macro 1D/4H timeframe
+                     if (latestSignal.source === "agent-swing" || latestSignal.timeframe === "1d" || latestSignal.timeframe === "4h") {
+                         shouldInvalidate = true;
+                         reason = "AI Macro Trend Reversal (Confirmed Opposing S/A-Tier Swing Setup)";
+                     }
+                 } else {
+                     shouldInvalidate = true;
+                     reason = "AI Trend Reversal Invalidation (Confirmed Opposing S/A-Tier Setup)";
+                 }
              }
              
              if (shouldInvalidate) {
@@ -1182,18 +1187,38 @@ serve(async (req) => {
         const riskPerTrade = Number(user.portfolio_capital) * effectiveRiskPct * entryWeight * tierRiskModifier * confluenceMultiplier * drawdownModifier * fomcSizeMultiplier * probabilityModifier;
         let volume = pointsAtRisk > 0 ? riskPerTrade / (pointsAtRisk * pointValueUsd) : volumeStep;
         
-        // --- HARD LOT CAP CIRCUIT BREAKER ---
-        const MAX_LOT_CAP = 0.50;
-        volume = Math.min(MAX_LOT_CAP, volume);
+        // --- ASSET-CLASS HARD VOLUME CAPS (Commodity Multiplier & Volatility Governors) ---
+        const assetLotCaps: Record<string, number> = {
+          UKOIL: 0.02,
+          XAUUSD: 0.02,
+          XAGUSD: 0.02,
+          US30: 0.10,
+          NAS100: 0.10,
+          SPX500: 0.10,
+          GER30: 0.10,
+          BTCUSD: 0.02,
+          EURUSD: 0.20,
+          GBPUSD: 0.20,
+          USDJPY: 0.20,
+          AUDUSD: 0.20,
+          NZDUSD: 0.20,
+          EURJPY: 0.20,
+          GBPJPY: 0.20,
+        };
+        const maxAssetCap = assetLotCaps[signal.symbol] || 0.20;
+        const userMaxCap = Number(user.max_volume_per_trade) || maxAssetCap;
+        const hardLotCeiling = Math.min(maxAssetCap, userMaxCap);
+
+        volume = Math.min(hardLotCeiling, volume);
         volume = Math.max(volumeStep, Math.floor(volume / volumeStep) * volumeStep);
         
         const riskAmount = pointsAtRisk * volume * pointValueUsd;
         
         // --- ACCOUNT BLOWOUT PROTECTION ---
-        // If the 0.01 lot minimum creates a risk that exceeds 10% of their capital, reject it to prevent a margin call.
+        // If the minimum lot creates a risk that exceeds 10% of capital, reject it to prevent margin distress.
         const maxPermissibleRisk = Number(user.portfolio_capital) * 0.10;
         if (riskAmount > maxPermissibleRisk) {
-            console.log(`[Risk Manager] Blocking User ${user.user_id}: 0.01 min lot creates $${riskAmount.toFixed(2)} risk, violating 10% hard cap.`);
+            console.log(`[Risk Manager] Blocking User ${user.user_id}: allocated volume (${volume}) creates $${riskAmount.toFixed(2)} risk, violating 10% hard cap ($${maxPermissibleRisk.toFixed(2)}).`);
             blockedByRiskManager = true;
             continue;
         }
@@ -1258,6 +1283,9 @@ serve(async (req) => {
           legBVolume = Math.floor((alloc.volume - legAVolume) / volumeStep) * volumeStep;
         }
 
+        const legARisk = alloc.volume > 0 ? Number(((alloc.risk_amount * legAVolume) / alloc.volume).toFixed(2)) : alloc.risk_amount;
+        const legBRisk = alloc.volume > 0 && legBVolume > 0 ? Number(((alloc.risk_amount * legBVolume) / alloc.volume).toFixed(2)) : 0;
+
         // Leg A (Quick Exit / Swing)
         await supabase.from("user_trades").insert({
           id: crypto.randomUUID(),
@@ -1266,7 +1294,7 @@ serve(async (req) => {
           symbol: signal.symbol,
           side: signal.side,
           volume: legAVolume,
-          risk_amount: alloc.risk_amount / (alloc.volume > 0 ? (alloc.volume / legAVolume) : 1),
+          risk_amount: legARisk,
           status: "VPS_PENDING",
           trade_type: (signal.source === "agent-swing" || signal.source_agent === "agent-swing" || ["4h", "1d"].includes(signal.timeframe?.toLowerCase())) ? "SWING" : "QUICK_EXIT",
         });
@@ -1281,7 +1309,7 @@ serve(async (req) => {
             symbol: signal.symbol,
             side: signal.side,
             volume: legBVolume,
-            risk_amount: alloc.risk_amount / (alloc.volume > 0 ? (alloc.volume / legBVolume) : 2),
+            risk_amount: legBRisk,
             status: "VPS_PENDING",
             trade_type: "RUNNER",
           });

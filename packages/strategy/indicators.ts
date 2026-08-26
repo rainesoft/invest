@@ -577,6 +577,27 @@ export function computeAsianRange(timestamps: string[], high: number[], low: num
   };
 }
 
+export function computeNormalizedLevelDistance(currentPrice: number, targetLevel: number, atr: number | null, symbol?: string): {
+  pctDistance: number;
+  atrDistance: number | null;
+  isSafeForTrade: boolean;
+} {
+  const diff = Math.abs(currentPrice - targetLevel);
+  const pctDistance = (diff / currentPrice) * 100;
+  const atrDistance = atr && atr > 0 ? diff / atr : null;
+
+  // Indices & Crypto have wide swings, so 0.02% or 0.25x ATR is adequate room.
+  const isIndexOrCrypto = symbol && ['US30', 'NAS100', 'GER30', 'SPX500', 'BTCUSD'].includes(symbol);
+  const minThresholdPct = isIndexOrCrypto ? 0.02 : 0.08;
+  const isSafeForTrade = pctDistance >= minThresholdPct || (atrDistance !== null && atrDistance >= 0.25);
+
+  return {
+    pctDistance: Number(pctDistance.toFixed(4)),
+    atrDistance: atrDistance !== null ? Number(atrDistance.toFixed(2)) : null,
+    isSafeForTrade
+  };
+}
+
 export function getContextSnapshot(
   timestamps: string[],
   open: number[],
