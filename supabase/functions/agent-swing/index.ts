@@ -1345,6 +1345,8 @@ serve(async (req) => {
                 context: snapshot,
                 expires_at: expiresAt
               });
+            }
+
             const thoughtSnippet = evaluation.thought_process || (evaluation as any).rationale || (evaluation as any).reasoning || (typeof evaluation === "object" ? JSON.stringify(evaluation) : "No setup identified");
             if (evaluation.recommended_direction === "REQUIRE_LTF_DRILLDOWN") {
               reason = "REQUIRE_LTF_DRILLDOWN: Price at HTF boundary. Sending to Sniper for 5m precision entry.";
@@ -1710,13 +1712,14 @@ serve(async (req) => {
             },
           });
 
-          // Note: Telegram broadcasting is handled universally via DB trigger by the telegram-broadcast Edge Function.          results.push({ symbol, id: dbData.id, tier, entry, sl, tp1, tp2, tp3, rr_to_tp2: rrToTp2 });
+          // Note: Telegram broadcasting is handled universally via DB trigger by the telegram-broadcast Edge Function.
+          results.push({ symbol, id: dbData.id, tier, entry, sl, tp1, tp2, tp3, rr_to_tp2: rrToTp2 });
         } catch (symbolErr: any) {
           console.error(`[Global Error] [Trace: ${traceId}] ${symbol}: ${symbolErr.message}`);
           rejections.push({ symbol, reason: symbolErr.message, layer: "System" });
         }
-        }));
-      }
+      }));
+    }
 
       // Note: pendingNewsId resolution is handled per-symbol inside the for-loop above.
 
