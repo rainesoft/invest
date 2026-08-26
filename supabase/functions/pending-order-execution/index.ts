@@ -27,8 +27,6 @@ serve(async (req) => {
           take_profit_json
         ),
         user_risk_settings!inner (
-          meta_api_token,
-          meta_api_account_id,
           sync_trailing_stops,
           is_live_execution_enabled,
           vps_last_heartbeat,
@@ -163,11 +161,13 @@ serve(async (req) => {
                executedCount++;
             } else {
               try {
-                const metaApiUrl = `${baseUrl}/users/current/accounts/${trade.user_risk_settings.meta_api_account_id}/trade`;
+                const metaToken = Deno.env.get("META_API_TOKEN") || "";
+                const metaAccountId = Deno.env.get("META_API_ACCOUNT_ID") || "";
+                const metaApiUrl = `${baseUrl}/users/current/accounts/${metaAccountId}/trade`;
                 const res = await fetch(metaApiUrl, {
                   method: "POST",
                   headers: { 
-                    "auth-token": trade.user_risk_settings.meta_api_token, 
+                    "auth-token": metaToken, 
                     "Content-Type": "application/json" 
                   },
                   body: JSON.stringify(payload),
