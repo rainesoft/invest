@@ -28,16 +28,16 @@ serve(async (req) => {
 
     const htmlContent = `
       <div style="font-family: sans-serif; font-size: 15px; color: #111; line-height: 1.6;">
-        <p>Welcome to the RaineBank Vault.</p>
+        <p>Welcome to the RaineInvest Vault.</p>
         <p>You now have access to the public ledger. Because you are on the free tier, the signals you see on the dashboard are delayed by 4+ hours to protect the edge of our institutional and Alpha clients.</p>
-        <p>RaineBank is built on three core tenets:</p>
+        <p>RaineInvest is built on three core tenets:</p>
         <ol>
           <li><strong>Deterministic Math:</strong> We don't guess. The engine processes raw market structure and momentum oscillators to mathematically define the regime.</li>
           <li><strong>AI Guardrails:</strong> A specialized LLM evaluates structural alignment and rejects subpar setups.</li>
           <li><strong>Strict Risk Isolation:</strong> We mandate strict 1:2 R/R minimums to protect capital.</li>
         </ol>
         <p>Watch the ledger this week. The math speaks for itself.</p>
-        <p>Best,<br>RaineBank Systems</p>
+        <p>Best,<br>RaineInvest Systems</p>
       </div>
     `;
 
@@ -48,9 +48,9 @@ serve(async (req) => {
         Authorization: `Bearer ${RESEND_API_KEY}`,
       },
       body: JSON.stringify({
-        from: "RaineBank <system@rainebank.com>",
+        from: "RaineInvest <system@raineinvest.com>",
         to: email,
-        subject: "Welcome to the RaineBank Vault",
+        subject: "Welcome to the RaineInvest Vault",
         html: htmlContent,
       }),
     });

@@ -50,12 +50,12 @@ serve(async (req) => {
           const email = u.users.email;
           const htmlContent = `
             <div style="font-family: sans-serif; font-size: 15px; color: #111; line-height: 1.6;">
-              <p>You've been monitoring the RaineBank delayed feed for a few days now.</p>
+              <p>You've been monitoring the RaineInvest delayed feed for a few days now.</p>
               <p>Because you are on the public tier, you missed the execution window for our recent ${bestSignal.symbol} ${bestSignal.side} setup. It closed for a +${bestSignal.r_multiple}R gain.</p>
               <p><strong>The Institutional Rationale you missed:</strong><br/>
               <em>"${bestSignal.ai_summary || "Mathematical structural alignment."}"</em></p>
               <p>In this business, data latency is the cost of admission. When you are ready for real-time institutional intelligence, the Vault is waiting.</p>
-              <p>Best,<br>RaineBank Systems</p>
+              <p>Best,<br>RaineInvest Systems</p>
             </div>
           `;
 
@@ -63,7 +63,7 @@ serve(async (req) => {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${RESEND_API_KEY}` },
             body: JSON.stringify({
-              from: "RaineBank <system@rainebank.com>",
+              from: "RaineInvest <system@raineinvest.com>",
               to: email,
               subject: "The Cost of the Delay",
               html: htmlContent,
@@ -98,10 +98,10 @@ serve(async (req) => {
           <div style="font-family: sans-serif; font-size: 15px; color: #111; line-height: 1.6;">
             <p>You have seen the system. You have watched the ledger. You know the math works.</p>
             <p>It's time to take off the training wheels.</p>
-            <p>Upgrade to <strong>RaineBank Alpha</strong> to unlock real-time execution signals, exact institutional TP/SL parameters, and full AI logic rationale.</p>
+            <p>Upgrade to <strong>RaineInvest Alpha</strong> to unlock real-time execution signals, exact institutional TP/SL parameters, and full AI logic rationale.</p>
             <p>One successful 1:2 R setup covers the $99 monthly subscription cost.</p>
-            <p><a href="https://rainebank.com/dashboard">Upgrade to Alpha Intelligence here.</a></p>
-            <p>Best,<br>RaineBank Systems</p>
+            <p><a href="https://raineinvest.com/dashboard">Upgrade to Alpha Intelligence here.</a></p>
+            <p>Best,<br>RaineInvest Systems</p>
           </div>
         `;
 
@@ -109,7 +109,7 @@ serve(async (req) => {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${RESEND_API_KEY}` },
           body: JSON.stringify({
-            from: "RaineBank <system@rainebank.com>",
+            from: "RaineInvest <system@raineinvest.com>",
             to: email,
             subject: "Take the limits off.",
             html: htmlContent,

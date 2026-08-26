@@ -42,9 +42,9 @@ serve(async (req) => {
             Authorization: `Bearer ${RESEND_API_KEY}`,
           },
           body: JSON.stringify({
-            from: "Watchdog <system@rainebank.com>", // Replace with your verified Resend domain
+            from: "Watchdog <system@raineinvest.com>", // Replace with your verified Resend domain
             to: ADMIN_EMAIL,
-            subject: "🚨 RAINEBANK CRITICAL: Data ingestion pipeline stalled",
+            subject: "🚨 RAINEINVEST CRITICAL: Data ingestion pipeline stalled",
             html: `
               <div style="font-family: sans-serif; padding: 24px; max-width: 600px;">
                 <h2 style="color: #dc2626;">System Failure Detected</h2>

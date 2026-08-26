@@ -49,7 +49,7 @@ serve(async (req) => {
             .single();
 
           if (error || !userSettings) {
-            await sendMessage(chatId, "❌ Invalid or expired connection link. Please generate a new one from your Raine Bank Settings.");
+            await sendMessage(chatId, "❌ Invalid or expired connection link. Please generate a new one from your RaineInvest Settings.");
           } else {
             // Update the user's chat ID and clear the token
             const { error: updateError } = await supabase
@@ -66,13 +66,13 @@ serve(async (req) => {
             } else {
               await sendMessage(
                 chatId,
-                "✅ Successfully connected your Raine Bank account! You will now receive instant, automated AI trade alerts in this chat."
+                "✅ Successfully connected your RaineInvest account! You will now receive instant, automated AI trade alerts in this chat."
               );
             }
           }
         }
       } else if (text.startsWith("/start")) {
-        await sendMessage(chatId, "Welcome to Raine Bank! To link your account, please click the 'Connect Telegram' button inside your Raine Bank Settings page.");
+        await sendMessage(chatId, "Welcome to RaineInvest! To link your account, please click the 'Connect Telegram' button inside your RaineInvest Settings page.");
       }
     }
 

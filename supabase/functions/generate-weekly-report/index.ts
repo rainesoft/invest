@@ -46,7 +46,7 @@ serve(async (req) => {
 
     // Format the social media copy
     const message = `
-RaineBank Alpha Engine: Weekly Audit 📊
+RaineInvest Alpha Engine: Weekly Audit 📊
 
 Another week of autonomous, mathematically verified execution.
 
@@ -56,7 +56,7 @@ Another week of autonomous, mathematically verified execution.
 
 The agent-risk enforced strict 1:2 R/R and asset isolation rules perfectly. No emotional drift. No backtest inflation. Just transparent edge.
 
-Live ledger and delayed feed are open to the public at https://rainebank.com. B2B API access is currently available for institutional partners.
+Live ledger and delayed feed are open to the public at https://raineinvest.com. B2B API access is currently available for institutional partners.
     `.trim();
 
     if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
