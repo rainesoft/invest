@@ -41,6 +41,17 @@ SELECT jsonb_pretty(jsonb_build_object(
       AND (command NOT LIKE '%x-cron-secret%' OR command NOT LIKE '%timeout_milliseconds%')
   ),
 
+  'cron_duplicates', (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'duplicate_jobs', array_agg(jobname),
+      'schedule', schedule,
+      'count', count(*)
+    )), '[]'::jsonb)
+    FROM cron.job
+    GROUP BY command, schedule
+    HAVING count(*) > 1
+  ),
+
   'database_webhook_http_errors', (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
       'id', sub.id,

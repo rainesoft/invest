@@ -25,6 +25,14 @@ FROM cron.job
 WHERE command LIKE '%net.http_post%' 
   AND (command NOT LIKE '%x-cron-secret%' OR command NOT LIKE '%timeout_milliseconds%');
 
+-- 1C. Check for duplicate or conflicting cron jobs
+SELECT '\n--- pg_cron Duplicate or Overlapping Jobs ---' AS section;
+SELECT command, schedule, count(*), array_agg(jobname) as duplicate_jobs
+FROM cron.job
+GROUP BY command, schedule
+HAVING count(*) > 1;
+
+
 -- 2. Autonomous Agent Activity
 SELECT '\n--- Recent RESEARCH_RUN (agent-news & agent-swing) ---' AS section;
 SELECT action, payload_json->>'symbol' AS symbol, created_at
