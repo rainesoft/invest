@@ -104,7 +104,7 @@ BEGIN
   -- We only allocate when the status changes to WON or LOST
   IF NEW.status IN ('WON', 'LOST') AND OLD.status NOT IN ('WON', 'LOST') THEN
     
-    -- Assuming Rainebank trading pool operates in USD
+    -- Assuming RaineInvest trading pool operates in USD
     SELECT id INTO v_user_wallet_id FROM public.wallets 
     WHERE user_id = NEW.user_id AND currency = 'USD' AND is_platform = false;
     

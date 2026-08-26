@@ -1,5 +1,5 @@
 {
-  "name": "ai-trading",
+  "name": "raine-invest",
   "private": true,
   "version": "0.1.0",
   "packageManager": "pnpm@10.14.0",
@@ -16,9 +16,9 @@
   },
   "scripts": {
     "build": "pnpm -r build",
-    "dev": "pnpm --filter @raine/bank dev",
+    "dev": "pnpm --filter @raine/invest dev",
     "dev:backend": "supabase start && supabase functions serve --no-verify-jwt --env-file .env",
-    "dev:all": "docker-compose down && supabase start && (supabase functions serve --no-verify-jwt --env-file .env & pnpm --filter @raine/bank dev)",
+    "dev:all": "docker-compose down && supabase start && (supabase functions serve --no-verify-jwt --env-file .env & pnpm --filter @raine/invest dev)",
     "start:docker": "supabase start && (supabase functions serve --no-verify-jwt --env-file .env & docker compose up --build)",
     "deploy:prod": "supabase db push && supabase functions deploy",
     "lint": "pnpm -r lint",

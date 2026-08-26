@@ -1,4 +1,4 @@
-# Rainebank Content Strategy
+# RaineInvest Content Strategy
 
 - **High School Reading Level**: All blog posts, academy articles, tutorials,
   and user-facing educational copy MUST be written at a level that a high

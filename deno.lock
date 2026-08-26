@@ -113,7 +113,7 @@
       ]
     },
     "members": {
-      "apps/rainebank": {
+      "apps/raineinvest": {
         "packageJson": {
           "dependencies": [
             "npm:@azure/identity@^3.4.2",

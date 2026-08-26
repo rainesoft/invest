@@ -1,6 +1,6 @@
 ---
 name: deploy-to-production
-description: Use this skill when the user asks to deploy to production, ship changes, release, or go live. Covers both Vercel (frontend) and Supabase Edge Functions (backend) for the Rainebank project.
+description: Use this skill when the user asks to deploy to production, ship changes, release, or go live. Covers both Vercel (frontend) and Supabase Edge Functions (backend) for the RaineInvest project.
 version: 1.0.0
 ---
 
@@ -15,7 +15,7 @@ version: 1.0.0
 
 ## Step 1: Identify What Changed
 Before deploying, determine which layers have changed:
-- **Frontend changed** (`apps/rainebank/` files) → Vercel deploy needed
+- **Frontend changed** (`apps/raineinvest/` files) → Vercel deploy needed
 - **Edge functions changed** (`supabase/functions/` files) → Supabase deploy needed
 - Both can be needed at the same time.
 
