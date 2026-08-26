@@ -64,15 +64,12 @@ export async function POST(request: Request) {
     if ('max_spread_points' in body) updates.max_spread_points = Math.min(1000, Math.max(0, Number(body.max_spread_points)));
     if ('max_volume_per_trade' in body) updates.max_volume_per_trade = Math.max(0.01, Number(body.max_volume_per_trade));
     if ('active_broker' in body) updates.active_broker = body.active_broker;
-    if ('meta_api_token' in body) updates.meta_api_token = body.meta_api_token;
-    if ('meta_api_account_id' in body) updates.meta_api_account_id = body.meta_api_account_id;
     if ('alpaca_key' in body) updates.alpaca_key = body.alpaca_key;
     if ('alpaca_secret' in body) updates.alpaca_secret = body.alpaca_secret;
     if ('is_live_execution_enabled' in body) updates.is_live_execution_enabled = Boolean(body.is_live_execution_enabled);
     if ('auto_trade_enabled' in body) updates.auto_trade_enabled = Boolean(body.auto_trade_enabled);
     if ('sync_trailing_stops' in body) updates.sync_trailing_stops = Boolean(body.sync_trailing_stops);
     if ('auto_trade_tiers' in body) updates.auto_trade_tiers = Array.isArray(body.auto_trade_tiers) ? body.auto_trade_tiers : [];
-    if ('use_partial_profit_taking' in body) updates.use_partial_profit_taking = Boolean(body.use_partial_profit_taking);
     if ('use_partial_profit_taking' in body) updates.use_partial_profit_taking = Boolean(body.use_partial_profit_taking);
 
     const { data, error } = await supabase
