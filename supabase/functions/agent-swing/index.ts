@@ -426,7 +426,7 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
 
   if (toolCall.name === "approve_trade") {
       const data: SwingTrade = {
-        thought_process: args.rationale,
+        thought_process: args.thought_process || args.rationale || args.reasoning || "Technical setup evaluated",
         calculated_rr_to_tp1: null,
         calculated_rr_to_tp2: null,
         calculated_rr_to_tp3: null,
@@ -448,9 +448,9 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
           structural_confirmation: args.structural_confirmation || "",
           macro_alignment: "",
           invalidation_level: "",
-          tp1_rationale: "",
-          tp2_rationale: "",
-          tp3_rationale: ""
+          tp1_rationale: args.tp1_rationale || "",
+          tp2_rationale: args.tp2_rationale || "",
+          tp3_rationale: args.tp3_rationale || ""
         }
       };
 
@@ -1092,8 +1092,7 @@ serve(async (req) => {
 
           // === INTRADAY CROSS-AGENT CONFLUENCE CHECK ===
           // Query recent intraday rejections from agent-day on this symbol (last 4 hours)
-          let intradayHasOpposingRejection = false;
-          let intradayRejectionDetail = "";
+          let recentIntradayRejections: any[] = [];
           try {
             const fourHoursAgoIso = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
             const { data: recentIntraday } = await supabase
@@ -1106,19 +1105,7 @@ serve(async (req) => {
               .limit(5);
 
             if (recentIntraday && recentIntraday.length > 0) {
-              for (const r of recentIntraday) {
-                const summary = (r.ai_summary || "").toUpperCase();
-                const risks = (r.ai_risks || "").toUpperCase();
-                if (r.status === "REJECTED" && (
-                  summary.includes("BEARISH") || summary.includes("DOWNTREND") || summary.includes("BELOW") ||
-                  summary.includes("PIVOT") || summary.includes("CHOP") || summary.includes("ANEMIC") ||
-                  risks.includes("BEARISH") || risks.includes("DOWNTREND") || summary.includes("VALUE AREA REJECTION")
-                )) {
-                  intradayHasOpposingRejection = true;
-                  intradayRejectionDetail = r.ai_summary?.slice(0, 140) || "Intraday breakdown detected";
-                  break;
-                }
-              }
+              recentIntradayRejections = recentIntraday.filter(r => r.status === "REJECTED");
             }
           } catch (intraErr: any) {
             console.warn(`[${symbol}] [Trace: ${traceId}] Failed to check intraday confluence: ${intraErr.message}`);
@@ -1358,9 +1345,12 @@ serve(async (req) => {
                 context: snapshot,
                 expires_at: expiresAt
               });
+            const thoughtSnippet = evaluation.thought_process || (evaluation as any).rationale || (evaluation as any).reasoning || (typeof evaluation === "object" ? JSON.stringify(evaluation) : "No setup identified");
+            if (evaluation.recommended_direction === "REQUIRE_LTF_DRILLDOWN") {
+              reason = "REQUIRE_LTF_DRILLDOWN: Price at HTF boundary. Sending to Sniper for 5m precision entry.";
             } else {
               reason = evaluation.recommended_direction === "NONE"
-                ? `No valid swing setup identified: ${evaluation.thought_process?.slice(0, 200)}`
+                ? `No valid swing setup identified: ${thoughtSnippet.slice(0, 200)}`
                 : `Confidence too low (${confidence}) — below 70 threshold`;
             }
 
@@ -1371,7 +1361,7 @@ serve(async (req) => {
               timeframe: timeframe.toLowerCase(),
               status: "REJECTED",
               source: "agent-swing",
-              ai_summary: `[SWING][${tier}] ${evaluation.recommended_direction === "NONE" ? "No setup" : "Low confidence"}: ${evaluation.thought_process?.slice(0, 400)}`,
+              ai_summary: `[SWING][${tier}] ${evaluation.recommended_direction === "NONE" ? "No setup" : "Low confidence"}: ${thoughtSnippet.slice(0, 400)}`,
               ai_risks: `Rejected by Swing AI: ${reason.slice(0, 200)}`,
               confidence,
               trace_id: traceId,
@@ -1459,23 +1449,64 @@ serve(async (req) => {
             return;
           }
 
-          // === CROSS-AGENT CONFLUENCE & ORDER TYPE ROUTING ===
+          // === CROSS-AGENT CONFLUENCE & DYNAMIC ORDER TYPE ROUTING ===
+          let intradayHasOpposingRejection = false;
+          let intradayRejectionDetail = "";
+
+          if (recentIntradayRejections.length > 0) {
+            for (const r of recentIntradayRejections) {
+              const summary = (r.ai_summary || "").toUpperCase();
+              const risks = (r.ai_risks || "").toUpperCase();
+              
+              if (isLong) {
+                if (summary.includes("BEARISH") || summary.includes("DOWNTREND") || summary.includes("DOWNWARD") ||
+                    summary.includes("BELOW") || summary.includes("BREAKDOWN") || summary.includes("VALUE AREA REJECTION") ||
+                    risks.includes("BEARISH") || risks.includes("DOWNTREND") || summary.includes("CHOP") || summary.includes("ANEMIC")) {
+                  intradayHasOpposingRejection = true;
+                  intradayRejectionDetail = r.ai_summary?.slice(0, 140) || "Intraday bearish breakdown detected";
+                  break;
+                }
+              } else {
+                if (summary.includes("BULLISH") || summary.includes("UPTREND") || summary.includes("UPWARD") ||
+                    summary.includes("ABOVE") || summary.includes("BREAKOUT") || summary.includes("VALUE AREA REJECTION") ||
+                    risks.includes("BULLISH") || risks.includes("UPTREND") || summary.includes("CHOP") || summary.includes("ANEMIC")) {
+                  intradayHasOpposingRejection = true;
+                  intradayRejectionDetail = r.ai_summary?.slice(0, 140) || "Intraday bullish breakout detected";
+                  break;
+                }
+              }
+            }
+          }
+
           let order_type = isLong ? "BUY MARKET" : "SELL MARKET";
-          const pendingOrderThreshold = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.20) : (currentPrice * 0.001);
+          const pendingOrderThreshold = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.15) : (currentPrice * 0.001);
 
           if (intradayHasOpposingRejection) {
             // Intraday agent detected active breakdown or opposing momentum.
-            // Block blind Market order to prevent buying into a falling knife.
+            // Strictly block blind Market order to prevent buying/selling into a falling knife.
             console.log(`[${symbol}] [Cross-Agent Confluence] Intraday agent rejected ${symbol} (${intradayRejectionDetail}). Converting to deep LIMIT order entry.`);
             const deepFib = nearestFibs.find(f => isLong ? f.price < currentPrice : f.price > currentPrice);
-            const targetLimit = deepFib ? deepFib.price : (isLong ? currentPrice - (dailyAtr * 0.5) : currentPrice + (dailyAtr * 0.5));
+            const targetLimit = deepFib ? deepFib.price : (isLong ? currentPrice - (dailyAtr * 0.50) : currentPrice + (dailyAtr * 0.50));
             entry = Number(targetLimit.toFixed(5));
             order_type = isLong ? "BUY LIMIT" : "SELL LIMIT";
-            sl = isLong ? Number((entry - minSwingSlDist).toFixed(5)) : Number((entry + minSwingSlDist).toFixed(5));
+            
+            // Expand SL to 1.5x Daily ATR to withstand intraday momentum
+            const wideSlDist = Number((dailyAtr * 1.50).toFixed(5));
+            sl = isLong ? Number((entry - wideSlDist).toFixed(5)) : Number((entry + wideSlDist).toFixed(5));
             evaluation.execution_parameters.suggested_entry_price = entry;
             evaluation.execution_parameters.suggested_stop_loss = sl;
-            safeRationale += ` [Cross-Agent Gate: Intraday counter-momentum (${intradayRejectionDetail}) — Market entry converted to deep Limit @ $${entry} with 1.25x ATR SL]`;
+            safeRationale += ` [Multi-Timeframe Protection: Intraday counter-momentum (${intradayRejectionDetail}) — Market entry converted to deep Limit @ $${entry} with 1.5x ATR SL]`;
           } else if (Math.abs(entry - currentPrice) >= pendingOrderThreshold) {
+            // Dynamic limit clamping: prevent placing limit orders excessively far (>0.35x ATR) which causes missed fills
+            const maxLimitDist = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.35) : (currentPrice * 0.01);
+            const rawLimitDist = Math.abs(entry - currentPrice);
+            if (rawLimitDist > maxLimitDist) {
+              const clampedEntry = isLong ? (currentPrice - maxLimitDist) : (currentPrice + maxLimitDist);
+              entry = Number(clampedEntry.toFixed(5));
+              console.log(`[${symbol}] [Limit Clamping] Limit order entry tightened from distance ${rawLimitDist.toFixed(4)} to ${maxLimitDist.toFixed(4)} @ ${entry} to maximize fill probability.`);
+              evaluation.execution_parameters.suggested_entry_price = entry;
+            }
+
             if (isLong) {
               order_type = entry < currentPrice ? "BUY LIMIT" : "BUY STOP";
             } else {
@@ -1493,17 +1524,19 @@ serve(async (req) => {
             console.log(`[${symbol}] Entry too close to live price (Dist: ${Math.abs(entryShift).toFixed(5)}). Converted to ${order_type} to prevent Error 10016. SL/TP adjusted.`);
           }
 
-          // === TAKE PROFIT DIRECTION & R-MULTIPLE SANITIZATION ===
+          // === TAKE PROFIT DIRECTION & MONOTONIC R-MULTIPLE SANITIZATION ===
           const swingRiskDist = Math.abs(entry - sl);
           if (swingRiskDist > 0) {
             if (isLong) {
+              // Strictly above entry
               if (!tp1 || tp1 <= entry) tp1 = Number((entry + swingRiskDist * 1.0).toFixed(5));
-              if (!tp2 || tp2 <= entry) tp2 = Number((entry + swingRiskDist * 2.0).toFixed(5));
-              if (!tp3 || tp3 <= entry) tp3 = Number((entry + swingRiskDist * 3.0).toFixed(5));
+              if (!tp2 || tp2 <= tp1) tp2 = Number((tp1 + swingRiskDist * 1.0).toFixed(5));
+              if (!tp3 || tp3 <= tp2) tp3 = Number((tp2 + swingRiskDist * 1.5).toFixed(5));
             } else {
+              // Strictly below entry
               if (!tp1 || tp1 >= entry) tp1 = Number((entry - swingRiskDist * 1.0).toFixed(5));
-              if (!tp2 || tp2 >= entry) tp2 = Number((entry - swingRiskDist * 2.0).toFixed(5));
-              if (!tp3 || tp3 >= entry) tp3 = Number((entry - swingRiskDist * 3.0).toFixed(5));
+              if (!tp2 || tp2 >= tp1) tp2 = Number((tp1 - swingRiskDist * 1.0).toFixed(5));
+              if (!tp3 || tp3 >= tp2) tp3 = Number((tp2 - swingRiskDist * 1.5).toFixed(5));
             }
           }
           evaluation.execution_parameters.take_profit_1 = tp1;

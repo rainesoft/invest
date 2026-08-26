@@ -460,71 +460,173 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
    // Ensure symbol is selected in Market Watch
    SymbolSelect(symbol, true);
    
+   int symDigits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   int stopsLevel = (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minStopDist = (stopsLevel + 5) * point;
+   
+   // Volume Normalization
+   double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   if (lotStep <= 0) lotStep = 0.01;
+   if (minLot <= 0) minLot = 0.01;
+   if (maxLot <= 0) maxLot = 100.0;
+   
+   double normVolume = MathFloor(volume / lotStep) * lotStep;
+   normVolume = MathMax(minLot, MathMin(maxLot, normVolume));
+   normVolume = NormalizeDouble(normVolume, 2);
+   
+   // Price & Stop Normalization
+   double normSl = (sl > 0) ? NormalizeDouble(sl, symDigits) : 0;
+   double normTp = (tp > 0) ? NormalizeDouble(tp, symDigits) : 0;
+   double normEntry = (entryPrice > 0) ? NormalizeDouble(entryPrice, symDigits) : 0;
+   
+   double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
+   
    MqlTradeRequest request;
    MqlTradeResult  result;
    ZeroMemory(request);
    ZeroMemory(result);
    
    request.symbol = symbol;
-   request.volume = volume;
-   request.sl = sl;
-   request.tp = tp;
+   request.volume = normVolume;
    request.magic = 410673; // RaineBank Magic
    request.comment = "RaineBank AI";
+   request.deviation = 30;
    
+   // Adaptive Order Type & Price Routing (Prevents Error 10015 on slipped pending orders)
    if(orderTypeStr == "BUY MARKET")
      {
       request.action = TRADE_ACTION_DEAL;
       request.type = ORDER_TYPE_BUY;
-      request.price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+      request.price = ask;
      }
    else if(orderTypeStr == "SELL MARKET")
      {
       request.action = TRADE_ACTION_DEAL;
       request.type = ORDER_TYPE_SELL;
-      request.price = SymbolInfoDouble(symbol, SYMBOL_BID);
+      request.price = bid;
      }
    else if(orderTypeStr == "BUY LIMIT")
      {
-      request.action = TRADE_ACTION_PENDING;
-      request.type = ORDER_TYPE_BUY_LIMIT;
-      request.price = entryPrice;
-      request.type_time = ORDER_TIME_GTC;
+      if(normEntry >= ask - minStopDist)
+        {
+         // Price has already dipped below/at limit (favorable execution) -> Execute at Market
+         request.action = TRADE_ACTION_DEAL;
+         request.type = ORDER_TYPE_BUY;
+         request.price = ask;
+         Print("BUY LIMIT entry ", normEntry, " >= live Ask ", ask, ". Adaptively executed as BUY MARKET.");
+        }
+      else
+        {
+         request.action = TRADE_ACTION_PENDING;
+         request.type = ORDER_TYPE_BUY_LIMIT;
+         request.price = normEntry;
+         request.type_time = ORDER_TIME_GTC;
+        }
      }
    else if(orderTypeStr == "SELL LIMIT")
      {
-      request.action = TRADE_ACTION_PENDING;
-      request.type = ORDER_TYPE_SELL_LIMIT;
-      request.price = entryPrice;
-      request.type_time = ORDER_TIME_GTC;
+      if(normEntry <= bid + minStopDist)
+        {
+         // Price has already risen above/at limit (favorable execution) -> Execute at Market
+         request.action = TRADE_ACTION_DEAL;
+         request.type = ORDER_TYPE_SELL;
+         request.price = bid;
+         Print("SELL LIMIT entry ", normEntry, " <= live Bid ", bid, ". Adaptively executed as SELL MARKET.");
+        }
+      else
+        {
+         request.action = TRADE_ACTION_PENDING;
+         request.type = ORDER_TYPE_SELL_LIMIT;
+         request.price = normEntry;
+         request.type_time = ORDER_TIME_GTC;
+        }
      }
    else if(orderTypeStr == "BUY STOP")
      {
-      request.action = TRADE_ACTION_PENDING;
-      request.type = ORDER_TYPE_BUY_STOP;
-      request.price = entryPrice;
-      request.type_time = ORDER_TIME_GTC;
+      if(normEntry <= ask + minStopDist)
+        {
+         // Price has already broken past stop entry -> Execute at Market
+         request.action = TRADE_ACTION_DEAL;
+         request.type = ORDER_TYPE_BUY;
+         request.price = ask;
+         Print("BUY STOP entry ", normEntry, " <= live Ask ", ask, ". Adaptively executed as BUY MARKET.");
+        }
+      else
+        {
+         request.action = TRADE_ACTION_PENDING;
+         request.type = ORDER_TYPE_BUY_STOP;
+         request.price = normEntry;
+         request.type_time = ORDER_TIME_GTC;
+        }
      }
    else if(orderTypeStr == "SELL STOP")
      {
-      request.action = TRADE_ACTION_PENDING;
-      request.type = ORDER_TYPE_SELL_STOP;
-      request.price = entryPrice;
-      request.type_time = ORDER_TIME_GTC;
+      if(normEntry >= bid - minStopDist)
+        {
+         // Price has already broken down past stop entry -> Execute at Market
+         request.action = TRADE_ACTION_DEAL;
+         request.type = ORDER_TYPE_SELL;
+         request.price = bid;
+         Print("SELL STOP entry ", normEntry, " >= live Bid ", bid, ". Adaptively executed as SELL MARKET.");
+        }
+      else
+        {
+         request.action = TRADE_ACTION_PENDING;
+         request.type = ORDER_TYPE_SELL_STOP;
+         request.price = normEntry;
+         request.type_time = ORDER_TIME_GTC;
+        }
      }
-     
-   request.deviation = 20;
+   else
+     {
+      // Fallback
+      if(side == "LONG" || side == "BUY")
+        {
+         request.action = TRADE_ACTION_DEAL;
+         request.type = ORDER_TYPE_BUY;
+         request.price = ask;
+        }
+      else
+        {
+         request.action = TRADE_ACTION_DEAL;
+         request.type = ORDER_TYPE_SELL;
+         request.price = bid;
+        }
+     }
+
+   // Pre-flight Stop & TP Alignment Guard (Prevents Error 10016)
+   if(request.type == ORDER_TYPE_BUY || request.type == ORDER_TYPE_BUY_LIMIT || request.type == ORDER_TYPE_BUY_STOP)
+     {
+      if(normSl > 0 && normSl >= request.price - minStopDist)
+         normSl = NormalizeDouble(request.price - minStopDist, symDigits);
+      if(normTp > 0 && normTp <= request.price + minStopDist)
+         normTp = NormalizeDouble(request.price + minStopDist, symDigits);
+     }
+   else
+     {
+      if(normSl > 0 && normSl <= request.price + minStopDist)
+         normSl = NormalizeDouble(request.price + minStopDist, symDigits);
+      if(normTp > 0 && normTp >= request.price - minStopDist)
+         normTp = NormalizeDouble(request.price - minStopDist, symDigits);
+     }
+
+   request.sl = normSl;
+   request.tp = normTp;
    
    bool sent = OrderSend(request, result);
    string statusStr = "";
    string ticketStr = "0";
    string errorStr = "";
    
-   if(sent && result.retcode == TRADE_RETCODE_DONE)
+   if(sent && (result.retcode == TRADE_RETCODE_DONE || result.retcode == TRADE_RETCODE_PLACED))
      {
       statusStr = "OPEN";
       ticketStr = IntegerToString(result.order);
-      Print("Trade successfully executed. Ticket: ", result.order);
+      Print("Trade successfully executed. Ticket: ", result.order, " Action: ", request.action, " Type: ", request.type);
       
       int size = ArraySize(activeTickets);
       ArrayResize(activeTickets, size+1);
@@ -534,7 +636,7 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
      {
       statusStr = "FAILED";
       errorStr = "Code:" + IntegerToString(result.retcode);
-      Print("Trade execution failed. Retcode: ", result.retcode);
+      Print("Trade execution failed. Retcode: ", result.retcode, " (Error 10015/10016 prevented where possible)");
      }
      
    // URL Encode Error String safely

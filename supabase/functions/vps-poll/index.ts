@@ -61,38 +61,59 @@ serve(async (req) => {
       const riskDistance = (entryPrice > 0 && stopLossRaw > 0) ? Math.abs(entryPrice - stopLossRaw) : 0;
       
       let targetTP = tpRaw;
+      const isLong = trade.side === "LONG" || trade.side === "BUY";
       if (trade.trade_type === "QUICK_EXIT") {
-         if (tp1Raw) {
-           targetTP = tp1Raw;
-         } else if (riskDistance > 0) {
-           targetTP = trade.side === "LONG" 
-             ? Number((entryPrice + riskDistance).toFixed(5))
-             : Number((entryPrice - riskDistance).toFixed(5));
+         targetTP = tp1Raw;
+         if (!targetTP || (isLong ? targetTP <= entryPrice : targetTP >= entryPrice)) {
+           targetTP = isLong ? Number((entryPrice + riskDistance * 1.0).toFixed(5)) : Number((entryPrice - riskDistance * 1.0).toFixed(5));
          }
       } else if (trade.trade_type === "SWING") {
          targetTP = tp2Raw || tpRaw;
+         if (!targetTP || (isLong ? targetTP <= entryPrice : targetTP >= entryPrice)) {
+           targetTP = isLong ? Number((entryPrice + riskDistance * 2.0).toFixed(5)) : Number((entryPrice - riskDistance * 2.0).toFixed(5));
+         }
       } else if (trade.trade_type === "RUNNER") {
-         if (tp3Raw) {
-           targetTP = tp3Raw;
-         } else if (riskDistance > 0) {
-           targetTP = trade.side === "LONG"
-             ? Number((entryPrice + (riskDistance * 3.0)).toFixed(5))
-             : Number((entryPrice - (riskDistance * 3.0)).toFixed(5));
+         targetTP = tp3Raw;
+         const swingTp = tp2Raw || (isLong ? entryPrice + riskDistance * 2.0 : entryPrice - riskDistance * 2.0);
+         if (!targetTP || (isLong ? targetTP <= swingTp : targetTP >= swingTp)) {
+           targetTP = isLong ? Number((entryPrice + (riskDistance * 3.5)).toFixed(5)) : Number((entryPrice - (riskDistance * 3.5)).toFixed(5));
          }
       }
       
       // === STRICT DIRECTION VALIDATION FOR TARGET TP (Error 10016 Prevention) ===
-      const isLong = trade.side === "LONG" || trade.side === "BUY";
-      if (entryPrice > 0) {
+      if (entryPrice > 0 && riskDistance > 0) {
         const tpInvalid = isLong ? (targetTP <= entryPrice) : (targetTP >= entryPrice);
-        if (tpInvalid && riskDistance > 0) {
-          const mult = trade.trade_type === "RUNNER" ? 3.0 : (trade.trade_type === "SWING" ? 2.0 : 1.0);
+        if (tpInvalid) {
+          const mult = trade.trade_type === "RUNNER" ? 3.5 : (trade.trade_type === "SWING" ? 2.0 : 1.0);
           targetTP = isLong
             ? Number((entryPrice + (riskDistance * mult)).toFixed(5))
             : Number((entryPrice - (riskDistance * mult)).toFixed(5));
         }
       }
       
+      // Symbol-specific precision helper
+      const getDecimals = (sym: string) => {
+        if (["US30", "NAS100", "SPX500", "GER30", "BTCUSD", "XAUUSD", "XAGUSD", "UKOIL"].includes(sym)) return 2;
+        if (sym.endsWith("JPY")) return 3;
+        return 5;
+      };
+      const decimals = getDecimals(trade.symbol);
+      
+      let safeEntry = entryPrice > 0 ? Number(entryPrice.toFixed(decimals)) : 0;
+      let safeSl = stopLossRaw > 0 ? Number(stopLossRaw.toFixed(decimals)) : 0;
+      let safeTp = targetTP > 0 ? Number(targetTP.toFixed(decimals)) : 0;
+      let safeVolume = Number(trade.volume.toFixed(2));
+
+      // Validate SL direction
+      if (safeEntry > 0 && safeSl > 0) {
+        const isLong = trade.side === "LONG" || trade.side === "BUY";
+        if (isLong && safeSl >= safeEntry) {
+          safeSl = Number((safeEntry - (riskDistance > 0 ? riskDistance : 0.001)).toFixed(decimals));
+        } else if (!isLong && safeSl <= safeEntry) {
+          safeSl = Number((safeEntry + (riskDistance > 0 ? riskDistance : 0.001)).toFixed(decimals));
+        }
+      }
+
       const orderType = opp?.entry_plan_json?.order_type || (trade.side === "LONG" ? "BUY MARKET" : "SELL MARKET");
       let action = "MODIFY";
       if (trade.status === "VPS_PENDING") action = "EXECUTE";
@@ -100,7 +121,7 @@ serve(async (req) => {
       const ticket = trade.meta_api_order_id || "0";
 
       // Format: ID,SYMBOL,SIDE,VOLUME,STOPLOSS,TAKEPROFIT,TRADE_TYPE,ENTRY_PRICE,ORDER_TYPE,ACTION,TICKET
-      csvResponse += `${trade.id},${trade.symbol},${trade.side},${trade.volume},${stopLossRaw},${targetTP},${trade.trade_type},${entryPrice},${orderType},${action},${ticket}\n`;
+      csvResponse += `${trade.id},${trade.symbol},${trade.side},${safeVolume},${safeSl},${safeTp},${trade.trade_type},${safeEntry},${orderType},${action},${ticket}\n`;
       
       // Lock the trade so it isn't picked up twice by multiple polls
       if (trade.status === "VPS_PENDING") {

@@ -411,15 +411,17 @@ serve(async (req) => {
              const isCTier = latestSignal.ai_summary?.includes("C-Tier") || latestSignal.ai_summary?.includes("No setup");
              const isOppositeMacro = isOpposite && (latestSignal.ai_summary?.includes("S-Tier") || latestSignal.ai_summary?.includes("A-Tier"));
              
-             // Swing Protection: Ignore C-Tier if this is a Swing Runner or Macro Swing.
+             // Swing Protection: Ignore lower-timeframe noise if this is part of the Swing trade family (SWING or RUNNER).
              let shouldInvalidate = false;
              let reason = "";
-             if (isOpposite && trade.trade_type !== "SWING") {
+             const isSwingFamily = trade.trade_type === "SWING" || trade.trade_type === "RUNNER" || opp?.source === "agent-swing" || ["4h", "1d", "1w"].includes(opp?.timeframe?.toLowerCase());
+              
+             if (isOpposite && !isSwingFamily) {
                  shouldInvalidate = true;
                  reason = "AI Trend Reversal Invalidation (Opposing Setup Detected)";
-             } else if (isOppositeMacro && trade.trade_type === "SWING") {
+             } else if (isOppositeMacro && isSwingFamily) {
                  shouldInvalidate = true;
-                 reason = "AI Macro Trend Reversal (Opposing S-Tier/A-Tier Setup Detected)";
+                 reason = "AI Macro Trend Reversal (Opposing Macro S-Tier/A-Tier Setup Detected)";
              }
              
              if (shouldInvalidate) {
@@ -762,37 +764,37 @@ serve(async (req) => {
 
       if (riskDist > 0) {
         if (isLong) {
-          if (currentTp && currentTp <= defaultEntryPrice) {
-            currentTp = Number((defaultEntryPrice + riskDist * 2.0).toFixed(5));
-            tpUpdated = true;
-          }
-          if (tp1 && tp1 <= defaultEntryPrice) {
+          if (!tp1 || tp1 <= defaultEntryPrice) {
             tp1 = Number((defaultEntryPrice + riskDist * 1.0).toFixed(5));
             tpUpdated = true;
           }
-          if (tp2 && tp2 <= defaultEntryPrice) {
-            tp2 = Number((defaultEntryPrice + riskDist * 2.0).toFixed(5));
+          if (!tp2 || tp2 <= tp1) {
+            tp2 = Number((tp1 + riskDist * 1.0).toFixed(5));
             tpUpdated = true;
           }
-          if (tp3 && tp3 <= defaultEntryPrice) {
-            tp3 = Number((defaultEntryPrice + riskDist * 3.0).toFixed(5));
+          if (!tp3 || tp3 <= tp2) {
+            tp3 = Number((tp2 + riskDist * 1.5).toFixed(5));
+            tpUpdated = true;
+          }
+          if (!currentTp || currentTp <= defaultEntryPrice) {
+            currentTp = tp2;
             tpUpdated = true;
           }
         } else {
-          if (currentTp && currentTp >= defaultEntryPrice) {
-            currentTp = Number((defaultEntryPrice - riskDist * 2.0).toFixed(5));
-            tpUpdated = true;
-          }
-          if (tp1 && tp1 >= defaultEntryPrice) {
+          if (!tp1 || tp1 >= defaultEntryPrice) {
             tp1 = Number((defaultEntryPrice - riskDist * 1.0).toFixed(5));
             tpUpdated = true;
           }
-          if (tp2 && tp2 >= defaultEntryPrice) {
-            tp2 = Number((defaultEntryPrice - riskDist * 2.0).toFixed(5));
+          if (!tp2 || tp2 >= tp1) {
+            tp2 = Number((tp1 - riskDist * 1.0).toFixed(5));
             tpUpdated = true;
           }
-          if (tp3 && tp3 >= defaultEntryPrice) {
-            tp3 = Number((defaultEntryPrice - riskDist * 3.0).toFixed(5));
+          if (!tp3 || tp3 >= tp2) {
+            tp3 = Number((tp2 - riskDist * 1.5).toFixed(5));
+            tpUpdated = true;
+          }
+          if (!currentTp || currentTp >= defaultEntryPrice) {
+            currentTp = tp2;
             tpUpdated = true;
           }
         }

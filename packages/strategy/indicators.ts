@@ -54,6 +54,14 @@ export type LogicContext = {
   volume_surge?: boolean;
   volume_regime?: 'VERY_HIGH' | 'HIGH' | 'NORMAL' | 'LOW' | 'ANEMIC';
   nearest_hvn?: number | null;
+
+  // Session & Killzone Engine
+  market_session?: string;
+  killzone_active?: boolean;
+  asian_high?: number | null;
+  asian_low?: number | null;
+  asian_sweep?: 'SWEPT_HIGH' | 'SWEPT_LOW' | 'NONE';
+  mean_reversion_target?: number | null;
 };
 
 export function calculateFractals(high: number[], low: number[]) {
@@ -496,6 +504,79 @@ export function detectLiquiditySweeps(
   return { liquidity_sweep_bullish, liquidity_sweep_bearish };
 }
 
+export function getMarketSession(utcDate: Date = new Date()): {
+  session: 'ASIA' | 'LONDON_OPEN' | 'LONDON_SESSION' | 'NY_OPEN' | 'NY_AFTERNOON' | 'OFF_HOURS';
+  killzone_active: boolean;
+  name: string;
+} {
+  const hour = utcDate.getUTCHours();
+  const minute = utcDate.getUTCMinutes();
+  const timeNum = hour + minute / 60;
+
+  if (timeNum >= 0 && timeNum < 6) {
+    return { session: 'ASIA', killzone_active: false, name: 'Asian Accumulation Session' };
+  } else if (timeNum >= 7 && timeNum <= 9.5) {
+    return { session: 'LONDON_OPEN', killzone_active: true, name: 'London Open Killzone (Judas Sweep Window)' };
+  } else if (timeNum > 9.5 && timeNum < 12.5) {
+    return { session: 'LONDON_SESSION', killzone_active: false, name: 'London Morning Continuation' };
+  } else if (timeNum >= 12.5 && timeNum <= 15.5) {
+    return { session: 'NY_OPEN', killzone_active: true, name: 'New York Open Killzone (Institutional Volume)' };
+  } else if (timeNum > 15.5 && timeNum <= 20) {
+    return { session: 'NY_AFTERNOON', killzone_active: false, name: 'NY Afternoon / Trend Reversal Window' };
+  } else {
+    return { session: 'OFF_HOURS', killzone_active: false, name: 'Off-Hours Low Liquidity' };
+  }
+}
+
+export function computeAsianRange(timestamps: string[], high: number[], low: number[], close: number[]): {
+  asian_high: number | null;
+  asian_low: number | null;
+  asian_sweep: 'SWEPT_HIGH' | 'SWEPT_LOW' | 'NONE';
+} {
+  if (timestamps.length === 0 || high.length === 0) {
+    return { asian_high: null, asian_low: null, asian_sweep: 'NONE' };
+  }
+
+  const now = new Date(timestamps[timestamps.length - 1]);
+  const todayDateStr = now.toISOString().split('T')[0];
+
+  let asianHigh = -Infinity;
+  let asianLow = Infinity;
+  let hasAsianBars = false;
+
+  for (let i = 0; i < timestamps.length; i++) {
+    const t = new Date(timestamps[i]);
+    const dStr = t.toISOString().split('T')[0];
+    const h = t.getUTCHours();
+    if (dStr === todayDateStr && h >= 0 && h < 6) {
+      hasAsianBars = true;
+      if (high[i] > asianHigh) asianHigh = high[i];
+      if (low[i] < asianLow) asianLow = low[i];
+    }
+  }
+
+  if (!hasAsianBars || asianHigh === -Infinity || asianLow === Infinity) {
+    return { asian_high: null, asian_low: null, asian_sweep: 'NONE' };
+  }
+
+  const currentPrice = close[close.length - 1];
+  const lastBarHigh = high[high.length - 1];
+  const lastBarLow = low[low.length - 1];
+
+  let asian_sweep: 'SWEPT_HIGH' | 'SWEPT_LOW' | 'NONE' = 'NONE';
+  if (lastBarHigh > asianHigh && currentPrice < asianHigh) {
+    asian_sweep = 'SWEPT_HIGH';
+  } else if (lastBarLow < asianLow && currentPrice > asianLow) {
+    asian_sweep = 'SWEPT_LOW';
+  }
+
+  return {
+    asian_high: Number(asianHigh.toFixed(5)),
+    asian_low: Number(asianLow.toFixed(5)),
+    asian_sweep
+  };
+}
+
 export function getContextSnapshot(
   timestamps: string[],
   open: number[],
@@ -681,6 +762,11 @@ export function getContextSnapshot(
     else if (isBearishRejection(prev, curr)) candlestick_pattern = 'BEARISH_REJECTION_PINBAR';
   }
 
+  // Session & Asian Range Calculations
+  const marketSessionInfo = getMarketSession(new Date(timestamp));
+  const asianRange = computeAsianRange(timestamps, high, low, close);
+  const mean_reversion_target = volProfile.poc || (current_bb_upper !== null && current_bb_lower !== null ? Number(((current_bb_upper + current_bb_lower) / 2).toFixed(5)) : null);
+
   return {
     timestamp,
     current_price,
@@ -722,6 +808,14 @@ export function getContextSnapshot(
     volume_surge: volSurge.volume_surge,
     volume_regime: volSurge.volume_regime,
     nearest_hvn: volProfile.nearest_hvn,
+
+    // Session & Killzone Engine
+    market_session: marketSessionInfo.name,
+    killzone_active: marketSessionInfo.killzone_active,
+    asian_high: asianRange.asian_high,
+    asian_low: asianRange.asian_low,
+    asian_sweep: asianRange.asian_sweep,
+    mean_reversion_target,
   };
 }
 

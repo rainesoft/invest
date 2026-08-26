@@ -89,7 +89,7 @@ const TradeEvaluationSchema = z.object({
   }),
   market_structure: z.enum(["BULLISH_TREND", "BEARISH_TREND", "RANGING", "BREAKOUT"]),
   recommended_direction: z.enum(["LONG", "SHORT", "NONE"]),
-  strategy_applied: z.enum(["PULLBACK", "MOMENTUM_CONTINUATION", "MEAN_REVERSION", "MOMENTUM_BREAKOUT", "NONE"]),
+  strategy_applied: z.enum(["PULLBACK", "MOMENTUM_CONTINUATION", "MEAN_REVERSION", "MOMENTUM_BREAKOUT", "ASIAN_RANGE_SWEEP", "BOUNDARY_REJECTION_SCALP", "NONE"]),
   execution_parameters: z.object({
     entry_type: z.enum(["Buy Limit", "Sell Limit", "Buy Stop", "Sell Stop", "Market", "NONE"]),
     suggested_entry_price: z.number().describe("The exact numeric price level to enter the trade. MUST be provided."),
@@ -137,13 +137,16 @@ CRITICAL RULES:
 6. REQUIRED PARAMETERS: You MUST provide a numeric suggested_entry_price, suggested_stop_loss, and suggested_take_profit for ANY trade setup. Do not return nulls for these fields.
 7. LIMIT ORDERS FOR BETTER ENTRIES: If the price is hovering mid-range between the Pivot and Support/Resistance, do not reject the setup. Instead, issue a BUY LIMIT or SELL LIMIT at the Pivot to catch the wick.
 8. HIGH-LEVERAGE ASSETS (VOLATILITY): Indices (US30, NAS100) and Metals (XAGUSD) have massive volatility wicks. You MUST use wider structural stops for these assets to survive normal market noise. Do not use tight stops.
-9. MEAN REVERSION STRICT GUARD: You are ONLY authorized to use a MEAN_REVERSION strategy if ADX < 25 (Choppy/Ranging). If ADX > 25, the market has strong momentum—DO NOT attempt mean reversion against strong momentum, as you will be run over.
-10. PROXIMITY RULES: Do not reject a trade for being 'too close' to resistance/support unless the distance is < 0.1% for Forex pairs, or < 0.015% for Indices (US30, NAS100) and Metals.
-11. NO COUNTER-TREND HEROICS: Do not attempt to catch "short-term retracements" against the dominant macro trend. If the HTF Trend is BEARISH, you may ONLY look for SHORT setups. If BULLISH, ONLY look for LONG setups.
+9. MEAN REVERSION & RANGE BOUNDARY DISCIPLINE: If ADX < 20 or trend_alignment is 'CHOP', you are EXPLICITLY AUTHORIZED to originate a MEAN_REVERSION or RANGE_BOUNDARY trade. Buy near Value Area Low (val_price) or Support with target at POC (poc_price) / mean_reversion_target. Sell near Value Area High (vah_price) or Resistance with target at POC. Do NOT reject simply for being choppy if clear boundaries exist.
+10. PROXIMITY & BOUNDARY REJECTION SCALPS: Do not reject a trade for being close to resistance/support if a clear candlestick rejection pinbar or engulfing pattern is present. Originate a 'BOUNDARY_REJECTION_SCALP' with tight SL behind the boundary wick and target at Pivot / VWAP.
+11. NO COUNTER-TREND HEROICS: Do not attempt to catch "short-term retracements" against the dominant macro trend unless a valid Mean Reversion or Boundary Rejection setup is present with strict SL.
 12. SMART MONEY ORDER FLOW & VWAP VALUE DISCIPLINE:
     - VWAP PULLBACKS: In a BULLISH regime, optimal long entries occur when price is testing Session VWAP, POC, or bouncing off the lower VWAP band (lower1). Do NOT chase breakout longs if price is already at EXTREME_OVERBOUGHT (> upper2).
     - BREAKOUT VOLUME REQUIREMENT: For MOMENTUM_BREAKOUT or Stop orders (Buy Stop / Sell Stop), you MUST verify that volume_surge is true or volume_ratio >= 1.4. If volume is LOW or ANEMIC, reject the breakout as a false trap or place a LIMIT order pullback at the POC (poc_price) / HVN (nearest_hvn).
     - VALUE AREA ACCEPTANCE: When price is within the Value Area (in_value_area: true), expect mean reversion toward POC. Trend continuations require acceptance outside VAH/VAL on expanding volume.
+13. SESSION KILLZONES & ASIAN RANGE SWEEPS:
+    - If asian_sweep === 'SWEPT_HIGH' during London or NY Open Killzone, evaluate an 'ASIAN_RANGE_SWEEP' short reversal targeting Asian Low / VAL.
+    - If asian_sweep === 'SWEPT_LOW', evaluate an 'ASIAN_RANGE_SWEEP' long reversal targeting Asian High / VAH.
 
 Historical Memory:
 ${historicalMemory || "None"}
@@ -242,8 +245,9 @@ ${JSON.stringify(snapshot, null, 2)}`,
   }
 
   if (toolCall.name === "approve_trade") {
+      const thought = args.thought_process || args.rationale || args.reasoning || "Intraday setup evaluated";
       return {
-        thought_process: args.rationale,
+        thought_process: thought,
         market_structure: args.market_structure,
         recommended_direction: args.direction || args.recommended_direction,
         strategy_applied: args.strategy_applied,
@@ -257,7 +261,7 @@ ${JSON.stringify(snapshot, null, 2)}`,
         },
         confidence_score: args.confidence_score,
         institutional_rationale: {
-          directional_bias: args.rationale,
+          directional_bias: thought,
           execution_trigger: "",
           invalidation_point: "",
           take_profit_target: "",
@@ -1182,12 +1186,17 @@ serve(async (req) => {
 
             // --- Regime Enforcement ---
             if (snapshot.trend_alignment === "CHOP") {
-              if (evaluation.strategy_applied !== "MEAN_REVERSION" && confidence_score < 90) {
+              const isPermittedChopStrategy = 
+                evaluation.strategy_applied === "MEAN_REVERSION" || 
+                evaluation.strategy_applied === "ASIAN_RANGE_SWEEP" || 
+                evaluation.strategy_applied === "BOUNDARY_REJECTION_SCALP";
+
+              if (!isPermittedChopStrategy && confidence_score < 90) {
                 console.log(`[Layer C: Execution Desk] REJECTED ${symbol}: Structural Regime Mismatch (Attempting non-mean-reversion in CHOP).`);
                 sendEvent({ type: 'progress', message: `[Layer C: Execution Desk] REJECTED: Structural Regime Mismatch in CHOP.` });
                 rejections.push({
                   symbol,
-                  reason: `Structural Regime Mismatch: The market is in a CHOP regime, but the AI proposed a ${evaluation.strategy_applied} strategy. Only MEAN_REVERSION is structurally permitted in chop unless confidence is S-Tier.`,
+                  reason: `Structural Regime Mismatch: The market is in a CHOP regime, but the AI proposed a ${evaluation.strategy_applied} strategy. Only MEAN_REVERSION, ASIAN_RANGE_SWEEP, or BOUNDARY_REJECTION_SCALP are structurally permitted in chop unless confidence is S-Tier.`,
                   layer: "Execution Desk"
                 });
                 await supabase.from("trade_opportunities").insert({

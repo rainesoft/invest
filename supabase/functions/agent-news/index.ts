@@ -477,17 +477,22 @@ serve(async (req) => {
           }
         }
         
+        // Fetch processed news cache from system_settings to prevent table pollution
+        const { data: cacheRow } = await supabase
+          .from("system_settings")
+          .select("value")
+          .eq("key", "macro_scout_processed_news")
+          .maybeSingle();
+
+        let processedHeadlines: string[] = Array.isArray(cacheRow?.value) ? cacheRow.value : [];
+        const processedSet = new Set(processedHeadlines);
+
         debugInfo.headlines = headlinesToProcess;
         for (const title of headlinesToProcess) {
           const headlineIdentifier = `[SENTIMENT] ${title}`;
           
-          // Check if already processed
-          const { count } = await supabase
-            .from("trade_opportunities")
-            .select("id", { count: "exact", head: true })
-            .eq("ai_summary", headlineIdentifier);
-            
-          if ((count ?? 0) > 0) continue; // Already processed
+          // Check if already processed via cache
+          if (processedSet.has(headlineIdentifier)) continue;
           
           console.log(`[Macro Scout] [Trace: ${traceId}] Evaluating Sentiment: ${title}`);
           
@@ -532,35 +537,26 @@ Headline: "${title}"`;
              resultText = resultText.replace(/^```json\n?/, "").replace(/\n?```$/, "").trim();
           }
           const parsed = JSON.parse(resultText);
-          
-          // Mark as processed regardless of execution so we don't spam API
-          const { error: insertErr } = await supabase.from("trade_opportunities").insert({
-            symbol: parsed.symbol !== "NONE" ? parsed.symbol : "MACRO",
-            side: parsed.sentiment === "BULLISH" ? "LONG" : "SHORT",
-            status: "REJECTED", // silently discard by default to reduce noise
-            timeframe: "M1",
-            ai_summary: headlineIdentifier,
-            risk_summary: `Sentiment evaluation: ${parsed.sentiment} (${parsed.confidence}%) for ${parsed.symbol}`,
-            created_at: new Date().toISOString(),
-            trace_id: traceId
+
+          // Mark headline as processed in cache
+          processedSet.add(headlineIdentifier);
+          processedHeadlines = [headlineIdentifier, ...processedHeadlines.filter(h => h !== headlineIdentifier)].slice(0, 300);
+          await supabase.from("system_settings").upsert({
+            key: "macro_scout_processed_news",
+            value: processedHeadlines,
+            updated_at: new Date().toISOString()
           });
-          if (insertErr) {
-             console.error(`[Macro Scout] Insert Error:`, insertErr);
-             debugInfo.insert_error = insertErr;
-          }
-          await supabase.from("trade_opportunities").select("id").eq("ai_summary", headlineIdentifier).single().then(async ({ data: opp }) => {
-            if (!opp) return;
 
-            let finalParsed = parsed;
-            let verifiedContext = "Tier 1 Instant";
+          let finalParsed = parsed;
+          let verifiedContext = "Tier 1 Instant";
 
-            // TIER 2: TAVILY VERIFICATION
-            if (finalParsed.requires_verification && TAVILY_API_KEY) {
-               console.log(`[Macro Scout] [Trace: ${traceId}] Tier 2 Verification Triggered for: ${title}`);
-               const tavilyContext = await verifyWithTavily(title);
-               
-               if (tavilyContext) {
-                 const verifyPrompt = `You are a high-frequency quantitative macro and sentiment API.
+          // TIER 2: TAVILY VERIFICATION
+          if (finalParsed.requires_verification && TAVILY_API_KEY) {
+             console.log(`[Macro Scout] [Trace: ${traceId}] Tier 2 Verification Triggered for: ${title}`);
+             const tavilyContext = await verifyWithTavily(title);
+             
+             if (tavilyContext) {
+               const verifyPrompt = `You are a high-frequency quantitative macro and sentiment API.
 Original Headline: "${title}"
 Web Search Context:
 ${tavilyContext}
@@ -573,59 +569,67 @@ Format: {
 }
 CRITICAL RULE: If the headline and context refer to a generic homepage index without a specific underlying catalyst, set sentiment to NEUTRAL, confidence to 0, and symbol to NONE.`;
 
-                 const verifyRes = await fetch("https://api.openai.com/v1/chat/completions", {
-                    method: "POST",
-                    headers: {
-                      "Content-Type": "application/json",
-                      "Authorization": `Bearer ${OPENAI_API_KEY}`
-                    },
-                    body: JSON.stringify({
-                      model: "gpt-4o-mini",
-                      messages: [{ role: "user", content: verifyPrompt }],
-                      temperature: 0.0
-                    })
-                 });
-                 const verifyData = await verifyRes.json();
-                 if (verifyData.choices && verifyData.choices[0]) {
-                    let vt = verifyData.choices[0].message.content.trim();
-                    if (vt.startsWith("```json")) {
-                       vt = vt.replace(/^```json\n?/, "").replace(/\n?```$/, "").trim();
-                    }
-                    finalParsed = JSON.parse(vt);
-                    verifiedContext = `Tavily Verified: ${finalParsed.sentiment} (${finalParsed.confidence}%)`;
-                    console.log(`[Macro Scout] [Trace: ${traceId}] Tavily Verification Complete:`, finalParsed);
-                 }
+               const verifyRes = await fetch("https://api.openai.com/v1/chat/completions", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${OPENAI_API_KEY}`
+                  },
+                  body: JSON.stringify({
+                    model: "gpt-4o-mini",
+                    messages: [{ role: "user", content: verifyPrompt }],
+                    temperature: 0.0
+                  })
+               });
+               const verifyData = await verifyRes.json();
+               if (verifyData.choices && verifyData.choices[0]) {
+                  let vt = verifyData.choices[0].message.content.trim();
+                  if (vt.startsWith("```json")) {
+                     vt = vt.replace(/^```json\n?/, "").replace(/\n?```$/, "").trim();
+                  }
+                  finalParsed = JSON.parse(vt);
+                  verifiedContext = `Tavily Verified: ${finalParsed.sentiment} (${finalParsed.confidence}%)`;
+                  console.log(`[Macro Scout] [Trace: ${traceId}] Tavily Verification Complete:`, finalParsed);
                }
+             }
+          }
+
+          // Execute & Publish ONLY if threshold met across valid trading universe
+          const validSymbols = ["EURJPY", "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "AUDJPY", "CADJPY", "EURGBP", "BTCUSD", "XAUUSD", "US30", "NAS100"];
+          if (finalParsed.confidence >= 85 && (finalParsed.sentiment === "BULLISH" || finalParsed.sentiment === "BEARISH") && validSymbols.includes(finalParsed.symbol)) {
+            
+            const side = finalParsed.sentiment === "BULLISH" ? "LONG" : "SHORT";
+            
+            // Insert cleanly into trade_opportunities as PUBLISHED
+            const { data: opp, error: oppErr } = await supabase.from("trade_opportunities").insert({
+              symbol: finalParsed.symbol,
+              side,
+              status: "PUBLISHED",
+              timeframe: "M1",
+              ai_summary: headlineIdentifier,
+              risk_summary: `Sentiment evaluation: ${finalParsed.sentiment} (${finalParsed.confidence}%). Context: ${verifiedContext}`,
+              created_at: new Date().toISOString(),
+              trace_id: traceId
+            }).select("id").single();
+
+            if (oppErr) {
+              console.error(`[Macro Scout] Opportunity Insert Error:`, oppErr);
+              continue;
             }
 
-            // Execute & Publish if threshold met across valid trading universe
-            const validSymbols = ["EURJPY", "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "AUDJPY", "CADJPY", "EURGBP", "BTCUSD", "XAUUSD", "US30", "NAS100"];
-            if (finalParsed.confidence >= 85 && (finalParsed.sentiment === "BULLISH" || finalParsed.sentiment === "BEARISH") && validSymbols.includes(finalParsed.symbol)) {
-              
-              const side = finalParsed.sentiment === "BULLISH" ? "LONG" : "SHORT";
-              
-              // Update opportunity to PUBLISHED to allow agent-swing to evaluate it
-              await supabase.from("trade_opportunities").update({
-                symbol: finalParsed.symbol,
-                side,
-                status: "PUBLISHED",
-                risk_summary: `Sentiment evaluation: ${finalParsed.sentiment} (${finalParsed.confidence}%). Context: ${verifiedContext}`
-              }).eq("id", opp.id);
+            // Wake up agent-swing immediately for Event-Driven Technical Confluence
+            await pingAgentSwing(finalParsed.symbol);
 
-              // Wake up agent-swing immediately for Event-Driven Technical Confluence
-              await pingAgentSwing(finalParsed.symbol);
-
-              console.log(`[Macro Scout] [Trace: ${traceId}] Signal queued for technical confluence:`, side, finalParsed.symbol);
-              await notify(
-                `📰 <b>SENTIMENT SIGNAL DETECTED</b>\n` +
-                `<b>${title}</b>\n` +
-                `Sentiment: ${finalParsed.sentiment} (${finalParsed.confidence}%)\n` +
-                `Context: ${verifiedContext}\n\n` +
-                `Signal queued for <b>${side} ${finalParsed.symbol}</b> pending technical confluence.`
-              );
-              results.push({ rule: "SENTIMENT", action: side, symbol: finalParsed.symbol });
-            }
-          });
+            console.log(`[Macro Scout] [Trace: ${traceId}] Signal queued for technical confluence:`, side, finalParsed.symbol);
+            await notify(
+              `📰 <b>SENTIMENT SIGNAL DETECTED</b>\n` +
+              `<b>${title}</b>\n` +
+              `Sentiment: ${finalParsed.sentiment} (${finalParsed.confidence}%)\n` +
+              `Context: ${verifiedContext}\n\n` +
+              `Signal queued for <b>${side} ${finalParsed.symbol}</b> pending technical confluence.`
+            );
+            results.push({ rule: "SENTIMENT", action: side, symbol: finalParsed.symbol });
+          }
         }
       } catch (err: any) {
         console.error(`[Macro Scout] [Trace: ${traceId}] Sentiment Error:`, err.message);
