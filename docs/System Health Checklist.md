@@ -105,7 +105,7 @@ LIMIT 10;
 
 The `created_at` timestamps should fall within the last 4 hours for `agent-swing`, within the last 30 minutes for `agent-day`, and within the last hour for `agent-news`.
 
-### Expected Cron Schedule Reference
+### Expected Cron Schedule Reference (12 Canonical Jobs)
 
 | Job Name | Schedule | Expected Behaviour |
 |---|---|---|
@@ -115,13 +115,13 @@ The `created_at` timestamps should fall within the last 4 hours for `agent-swing
 | `agent-swing-crypto` | `2 */4 * * *` | Fires every 4 hours daily for BTCUSD |
 | `agent-swing-indices` | `4 */4 * * 1-5` | Fires every 4 hours on weekdays for Indices & Commodities |
 | `agent-trade-poll` | `3-59/5 * * * *` | Fires every 5 min (offset 3m), 7 days a week |
-| `agent-trade-manage-positions` | `*/30 * * * *` | Fires every 30 min, 7 days a week |
-| `position-manager-poll` | `*/30 * * * *` | Fires every 30 min, 7 days a week to trail stops and evaluate invalidations |
+| `position-manager-poll` | `*/30 * * * *` | Fires every 30 min, 7 days a week to trail stops, manage invalidations, and cancel stale pending orders |
 | `exness-history-sync-poll` | `*/15 * * * *` | Fires every 15 min to reconcile closed trades and update portfolio capital |
 | `resolve-outcomes-poll` | `*/10 * * * *` | Fires every 10 min to reconcile MT5 deals and grade trade opportunities |
 | `system-health-check-poll` | `15 * * * *` | Fires hourly to scan `cron.job_run_details` and trigger agent-kill-switch health check |
 | `invoke_reset_daily_drawdown` | `0 22 * * *` | Fires at 22:00 UTC daily |
 | `weekend-defense-cron` | `30 20 * * 5` | Fires Friday 20:30 UTC |
+
 
 ---
 
@@ -321,6 +321,34 @@ LIMIT 10;
 
 - ❌ **DNS/URL Errors:** If rows show `error_msg = 'Couldn't resolve host name'`, inspect `pg_proc` for functions with hardcoded `http://kong:8000` or unset GUC settings. Ensure all triggers call production Edge Function URLs (`https://<project-ref>.supabase.co/functions/v1/...`).
 - ❌ **HTTP 500 Responses (e.g. `Failed to fetch Master history`):** If rows show `status_code = 500` with `content = 'Failed to fetch Master history'`, `exness-history-sync` experienced a transient MetaAPI timeout or rate limit while pulling `/history-deals`. Re-invoke the function manually or verify MetaAPI token status.
+
+---
+
+## ⚠️ 1H. pg_cron Diagnostic — Duplicate or Conflicting Cron Jobs
+
+> [!WARNING]
+> **Incident (2026-08-26):** Redundant duplicate cron jobs (`agent-trade-manage-positions` and `position-manager-poll`) were both configured at `*/30 * * * *` invoking `agent-trade` with `{"action":"MANAGE_POSITIONS"}` concurrently, doubling server load and causing race conditions on position evaluation.
+
+### Step 1 — Check for Duplicate Commands in pg_cron
+
+Run the following query to detect duplicate commands or identical schedules:
+
+```sql
+SELECT command, schedule, count(*), array_agg(jobname) as duplicate_jobs
+FROM cron.job
+GROUP BY command, schedule
+HAVING count(*) > 1;
+```
+
+- [ ] Query returns zero rows (no duplicates).
+
+### Step 2 — Apply the Fix (Unschedule Redundant Job)
+
+If duplicates are detected, unschedule the redundant entry and retain the canonical job:
+
+```sql
+SELECT cron.unschedule('agent-trade-manage-positions');
+```
 
 ---
 
