@@ -17,7 +17,7 @@ Whenever the user requests a "system health check", you should:
    ```
    Or execute `python3 scripts/comprehensive_healthcheck.py` to fetch real-time diagnostics via the REST API.
 3. Verify the output to ensure:
-   - `pg_cron` jobs (all 13 active jobs) are firing successfully with `status = 'succeeded'` and have no missing `timeout_milliseconds` or `x-cron-secret` configurations (the proactive sweep in Section 1B will flag this).
+   - `pg_cron` jobs (all 12 active canonical jobs) are firing successfully with `status = 'succeeded'`, have zero duplicate/overlapping jobs (Section 1H), and have no missing `timeout_milliseconds` or `x-cron-secret` configurations (proactive sweep in Section 1B).
    - No silent agent crashes are occurring (query `audit_log` for `AGENT_CRASH`).
    - Autonomous agents (`agent-news`, `agent-day`, `agent-swing` split crons) are generating signals and heartbeats.
    - Database Webhook & Cron HTTP responses in `net._http_response` have zero network failures (`Couldn't resolve host name`) and no unhandled 500 server errors (e.g. MetaAPI transient failures in `exness-history-sync` are caught gracefully).
