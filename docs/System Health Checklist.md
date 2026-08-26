@@ -3,7 +3,7 @@
 This checklist is designed for App Support Engineers to verify the overall health, execution integrity, and safety limits of the autonomous agentic trading system at the start of each trading day.
 
 > [!TIP]
-> **Automated Diagnostics:** You can run all the SQL diagnostic queries listed in this document at once by executing `scripts/healthcheck.sql` against the database. Alternatively, you can run `python3 scripts/comprehensive_healthcheck.py` to fetch a complete real-time diagnostics dump via the REST API.
+> **Automated Diagnostics:** You can run a single-command complete JSON health audit by executing `npx supabase db query --linked --file scripts/full_health_audit.sql`. Alternatively, you can run all diagnostic SQL queries listed in this document using `scripts/healthcheck.sql`, or run `python3 scripts/comprehensive_healthcheck.py` to fetch real-time diagnostics via the REST API.
 
 > [!IMPORTANT]
 > **Primary Architecture:** Raine Bank prioritizes the zero-latency **MT5 VPS Execution Architecture** as the primary source of truth for market data and trade execution. MetaAPI is strictly maintained as an autonomous failover layer. If the VPS stream fails, it must be investigated and restarted immediately to avoid long-term reliance on MetaAPI polling.
@@ -311,18 +311,19 @@ LIMIT 10;
 > [!CAUTION]
 > **Incident (2026-08-24):** Database triggers (e.g. `on_signal_rejected_eject` and `trigger_email_onboarding`) repeatedly threw `"Couldn't resolve host name"` errors in `net._http_response`. These triggers relied on `current_setting('app.settings.edge_functions_base_url', true)`, which is not set in cloud Supabase, causing them to fall back to `http://kong:8000/functions/v1` (a local Docker-only domain).
 
-### Step 1 — Check for Webhook Network Errors
-Run this query to inspect failed `pg_net` requests:
+### Step 1 — Check for Webhook & Cron HTTP Errors
+Run this query to inspect failed `pg_net` requests and Edge Function responses:
 
 ```sql
-SELECT id, status_code, error_msg, created
+SELECT id, status_code, error_msg, created, content
 FROM net._http_response
 WHERE error_msg IS NOT NULL OR status_code >= 400
 ORDER BY created DESC
 LIMIT 10;
 ```
 
-- ❌ **FAILED:** If rows show `error_msg = 'Couldn't resolve host name'`, inspect `pg_proc` for functions with hardcoded `http://kong:8000` or unset GUC settings. Ensure all triggers call production Edge Function URLs (`https://<project-ref>.supabase.co/functions/v1/...`).
+- ❌ **DNS/URL Errors:** If rows show `error_msg = 'Couldn't resolve host name'`, inspect `pg_proc` for functions with hardcoded `http://kong:8000` or unset GUC settings. Ensure all triggers call production Edge Function URLs (`https://<project-ref>.supabase.co/functions/v1/...`).
+- ❌ **HTTP 500 Responses (e.g. `Failed to fetch Master history`):** If rows show `status_code = 500` with `content = 'Failed to fetch Master history'`, `exness-history-sync` experienced a transient MetaAPI timeout or rate limit while pulling `/history-deals`. Re-invoke the function manually or verify MetaAPI token status.
 
 ---
 
@@ -595,21 +596,53 @@ WHERE t.status = 'ACTIVE'
 ```
 
 ### Step 1b — Reconcile Opportunities whose Trades Have Completed
-If all `user_trades` for an opportunity have closed (e.g. `WON`, `LOST`, `CLOSED`), the parent `trade_opportunities` row should reflect `WON` or `LOST`:
+If all `user_trades` for an opportunity have closed (e.g. `WON`, `LOST`, `CLOSED`), the parent `trade_opportunities` row must be reconciled to reflect `WON`, `LOST`, or `EXPIRED` (per the `trade_opportunities_status_check` constraint):
 
 ```sql
-SELECT t.id, t.symbol, t.side, t.status, t.created_at
-FROM trade_opportunities t
+-- Reconcile WON opportunities (positive net profit)
+UPDATE trade_opportunities t
+SET status = 'WON',
+    r_multiple = 2.0,
+    closed_at = NOW()
 WHERE t.status IN ('ACTIVE', 'APPROVED')
   AND EXISTS (
     SELECT 1 FROM user_trades u
-    WHERE u.opportunity_id = t.id
+    WHERE u.opportunity_id = t.id AND u.status = 'WON'
   )
   AND NOT EXISTS (
     SELECT 1 FROM user_trades u
-    WHERE u.opportunity_id = t.id AND u.status IN ('OPEN', 'PENDING', 'VPS_PENDING')
+    WHERE u.opportunity_id = t.id AND u.status IN ('OPEN', 'PENDING', 'VPS_PENDING', 'VPS_PROCESSING')
+  );
+
+-- Reconcile LOST opportunities (negative net profit)
+UPDATE trade_opportunities t
+SET status = 'LOST',
+    r_multiple = -1.0,
+    closed_at = NOW()
+WHERE t.status IN ('ACTIVE', 'APPROVED')
+  AND EXISTS (
+    SELECT 1 FROM user_trades u
+    WHERE u.opportunity_id = t.id AND u.status = 'LOST'
   )
-ORDER BY t.created_at DESC;
+  AND NOT EXISTS (
+    SELECT 1 FROM user_trades u
+    WHERE u.opportunity_id = t.id AND u.status IN ('OPEN', 'PENDING', 'VPS_PENDING', 'VPS_PROCESSING')
+  );
+
+-- Reconcile Cancelled / Missed Entry opportunities (no filled trades)
+UPDATE trade_opportunities t
+SET status = 'EXPIRED',
+    r_multiple = 0,
+    closed_at = NOW()
+WHERE t.status IN ('ACTIVE', 'APPROVED')
+  AND EXISTS (
+    SELECT 1 FROM user_trades u
+    WHERE u.opportunity_id = t.id AND u.status = 'CLOSED'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM user_trades u
+    WHERE u.opportunity_id = t.id AND u.status IN ('OPEN', 'PENDING', 'VPS_PENDING', 'VPS_PROCESSING', 'WON', 'LOST')
+  );
 ```
 
 ### Step 2 — Reconcile Broker Pending Orders vs user_trades
