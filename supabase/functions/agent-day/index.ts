@@ -127,25 +127,29 @@ CRITICAL RULES:
 0. TOP-DOWN MACRO TIDE & ORDER OF OPERATIONS (CRITICAL PRIORITY):
    - STEP 1 (HTF Macro Tide & Swing Priming): Inspect snapshot.htf_trend, snapshot.htf_pivot, and snapshot.agent_context (Swing Trader context). If snapshot.agent_context contains a Daily Swing prime or active Swing narrative, prioritize intraday pullbacks into those Daily Fibonacci/Order Block levels. If the Daily 1D trend is strongly BEARISH, look strictly for Short continuation or Pullback Sell Limits at resistance. If Daily 1D trend is strongly BULLISH, look strictly for Longs or Pullback Buy Limits at support.
    - STEP 2 (Intraday Pivot Regime): If Current Price > htf_pivot, your default trend regime is BULLISH. If Current Price < htf_pivot, your default trend regime is BEARISH. If trend_alignment is 'CHOP' or ADX < 20, pivot directional bias transitions to RANGE-BOUND MEAN-REVERSION (Rule 9).
-   - STEP 3 (Indicator Confluence): Check MACD and moving averages (ema_20 and ema_50). For trend breakouts, ensure MACD agrees with direction. For Range Boundary Fades, MACD histogram exhaustion / divergence confirms the fade.
+   - STEP 3 (Indicator Confluence): Check MACD, MACD divergence (snapshot.macd_divergence), RSI divergence (snapshot.rsi_divergence), and moving averages (ema_50 and ema_200). For trend breakouts, ensure MACD agrees with direction. For Range Boundary Fades, MACD histogram exhaustion / divergence confirms the fade.
 
 1. PIVOT DIRECTIONAL BIAS & RANGE TRADING:
    - For TREND-FOLLOWING setups: You MUST align direction with the Pivot Regime (Long only if Price > Pivot; Short only if Price < Pivot).
    - For RANGE-BOUND / MEAN-REVERSION setups (Rule 9): You are explicitly authorized to fade the range boundaries (Long at Support 1 / Value Area Low with Target at POC/Pivot; Short at Resistance 1 / Value Area High with Target at POC/Pivot).
-2. TARGETS (ASYMMETRIC RISK): If originating a LONG trade, target the second liquidity pool (Resistance 2 or VWAP Upper 2) or POC/VAH for range trades to ensure high R:R (>= 1.5). If originating a SHORT trade, target Support 2 or VWAP Lower 2 or POC/VAL.
-3. INVALIDATION (SAFE STOPS): Your stop loss MUST be placed safely outside the ATR buffer (>= 1.0x ATR) and behind major HTF structural pivots/range wicks. Do NOT place overly tight stops just to maximize R:R. A safe stop with a 1.5+ R:R is far superior to a tight stop that gets hunted.
+2. TARGETS (ASYMMETRIC RISK): If originating a LONG trade, target the second liquidity pool (Resistance 2 or VWAP Upper 2) or POC/VAH for range trades to ensure high R:R (>= 1.70 on Target 2). If originating a SHORT trade, target Support 2 or VWAP Lower 2 or POC/VAL.
+3. INVALIDATION (BAR-CLOSE STOP LOSS & SAFE STOPS):
+   - Trading Central Methodology: Invalidation / Stop Loss is managed at the confirmed CLOSE of a 30-minute bar. Price may temporarily wick beyond the pivot/stop without invalidating the preferred scenario.
+   - Stop loss MUST be placed safely outside the ATR buffer (>= 1.0x ATR) and behind major HTF structural pivots/range wicks.
 4. CONFLICT RESOLUTION: If indicators are completely conflicting and neither a trend breakout nor a clear range boundary test is present, invoke 'reject_trade' to stay flat.
 5. PIVOT BREAKS: A sharp high-volume break through the pivot is a trend transition, not a pullback.
 6. REQUIRED PARAMETERS: You MUST provide a numeric suggested_entry_price, suggested_stop_loss, and suggested_take_profit for ANY trade setup. Do not return nulls for these fields.
-7. ASYMMETRIC R:R & ADAPTIVE LIMIT ORDERS (NEVER REJECT SOLELY FOR LOW R:R AT MARKET): If the market structure and directional bias are strong (A-Tier/S-Tier) but current market price is hovering near resistance/support (yielding R:R < 1.5 at market), DO NOT REJECT. Instead, calculate and issue a BUY LIMIT or SELL LIMIT at the nearest value area (50 EMA, Session VWAP, or Daily Pivot/Fibonacci zone) to guarantee an institutional R:R >= 1.75.
-8. HIGH-LEVERAGE ASSETS (VOLATILITY): Indices (US30, NAS100, GER30) and Metals (XAGUSD) have massive volatility wicks. You MUST use wider structural stops for these assets to survive normal market noise.
+7. ASYMMETRIC R:R & ADAPTIVE LIMIT ORDERS (NEVER REJECT SOLELY FOR LOW R:R AT MARKET):
+   - Trading Central requires a minimum Risk/Reward ratio of 1:1.70 calculated using Target 2 (TP2).
+   - If market structure and directional bias are strong (A-Tier/S-Tier) but current market price yields R:R < 1.70 at market, DO NOT REJECT. Instead, calculate and issue a BUY LIMIT or SELL LIMIT at the nearest value area (50 EMA, Session VWAP, or Daily Pivot/Fibonacci zone) to guarantee an institutional R:R >= 1.75.
+8. HIGH-LEVERAGE ASSETS (VOLATILITY): Indices (US30, NAS100, SPX500, GER30) and Metals (XAGUSD, XAUUSD) have massive volatility wicks. You MUST use wider structural stops for these assets to survive normal market noise.
 9. REGIME-ADAPTIVE STRATEGY ROUTING (RANGE-BOUND MEAN-REVERSION PLAYBOOK):
    - When trend_alignment is 'CHOP', ADX < 20, or volume_regime === 'ANEMIC': MOMENTUM_BREAKOUT is strictly forbidden. You MUST switch to the Institutional Range-Bound Playbook:
      * RANGE LONG (Mean-Reversion): When price tests Support 1, Value Area Low (val_price), or sweeps Session Low with a rejection candle, originate a 'RANGE_BOUNDARY_FADE' or 'MEAN_REVERSION' BUY LIMIT/MARKET. Stop loss placed safely below the swing low wick (>= 1.0x ATR or below S1), Target 1 at POC (poc_price) / Session VWAP, Target 2 at VAH (vah_price) / Resistance 1 (R:R >= 1.75).
      * RANGE SHORT (Mean-Reversion): When price tests Resistance 1, Value Area High (vah_price), or sweeps Session High with a rejection candle, originate a 'RANGE_BOUNDARY_FADE' or 'MEAN_REVERSION' SELL LIMIT/MARKET. Stop loss placed safely above the swing high wick (>= 1.0x ATR or above R1), Target 1 at POC (poc_price) / Session VWAP, Target 2 at VAL (val_price) / Support 1 (R:R >= 1.75).
-10. PROXIMITY & BOUNDARY REJECTION SCALPS: Do not reject a trade for being close to resistance/support if a clear candlestick rejection pinbar or engulfing pattern is present. Originate a 'BOUNDARY_REJECTION_SCALP' with tight SL behind the boundary wick and target at Pivot / VWAP.
+10. PROXIMITY & BOUNDARY REJECTION SCALPS: Do not reject a trade for being close to resistance/support if a clear candlestick rejection pinbar, engulfing, harami, or piercing pattern is present. Originate a 'BOUNDARY_REJECTION_SCALP' with tight SL behind the boundary wick and target at Pivot / VWAP.
 11. VOLATILITY-NORMALIZED DISTANCE CHECKS (DYNAMIC ATR SCALING):
-    - For ALL asset classes (Forex, Indices, Crypto, Commodities): Minimum structural breathing room is calculated dynamically against ATR as: Distance >= 0.20x ATR(14) (or >= 0.02% on indices).
+    - For ALL asset classes (Forex, Indices, Crypto, Commodities, Equities): Minimum structural breathing room is calculated dynamically against ATR as: Distance >= 0.20x ATR(14) (or >= 0.02% on indices).
     - If price distance to the level exceeds 0.20x ATR, there IS sufficient structural breathing room. Do NOT reject on distance if this condition is met.
 12. SMART MONEY ORDER FLOW & VWAP VALUE DISCIPLINE:
     - VWAP PULLBACKS: In a BULLISH regime, optimal long entries occur when price is testing Session VWAP, POC, or bouncing off the lower VWAP band (lower1). Do NOT chase breakout longs if price is already at EXTREME_OVERBOUGHT (> upper2).
@@ -154,9 +158,11 @@ CRITICAL RULES:
 13. SESSION KILLZONES & ASIAN RANGE SWEEPS:
     - If asian_sweep === 'SWEPT_HIGH' during London or NY Open Killzone, evaluate an 'ASIAN_RANGE_SWEEP' short reversal targeting Asian Low / VAL.
     - If asian_sweep === 'SWEPT_LOW', evaluate an 'ASIAN_RANGE_SWEEP' long reversal targeting Asian High / VAH.
-14. RSI DIVERGENCES & UNFILLED PRICE GAPS (TRADING CENTRAL METHODOLOGY):
-    - If snapshot.rsi_divergence is 'REGULAR_BULLISH' or 'REGULAR_BEARISH', treat it as institutional exhaustion / reversal confirmation (+10 confidence).
-    - If snapshot.rsi_divergence is 'HIDDEN_BULLISH' or 'HIDDEN_BEARISH', treat it as trend continuation confirmation (+5 confidence).
+14. CHARTIST PATTERNS, DIVERGENCES & UNFILLED GAPS (TRADING CENTRAL METHODOLOGY):
+    - If snapshot.trend_channel is present (ASCENDING_CHANNEL / DESCENDING_CHANNEL / HORIZONTAL_CHANNEL), respect channel boundaries (buy lower boundary, sell upper boundary).
+    - If snapshot.chart_pattern is detected (TRIANGLES, WEDGES, DOUBLE TOPS/BOTTOMS, HEAD & SHOULDERS), align execution with pattern breakout/reversal target (+10 confidence).
+    - If snapshot.rsi_divergence or snapshot.macd_divergence is 'REGULAR_BULLISH' or 'REGULAR_BEARISH', treat it as institutional exhaustion / reversal confirmation (+10 confidence).
+    - If snapshot.rsi_divergence or snapshot.macd_divergence is 'HIDDEN_BULLISH' or 'HIDDEN_BEARISH', treat it as trend continuation confirmation (+5 confidence).
     - If snapshot.has_unfilled_gap is true, prioritize the unfilled gap level (snapshot.unfilled_gap_target) as a primary institutional liquidity magnet (Target 1).
 15. 20-BAR ANTICIPATION HORIZON & TIME-TO-LIVE (TTL):
     - All 30m intraday setups are strictly valid for a maximum horizon of 20 periods (10 hours).
@@ -311,12 +317,12 @@ serve(async (req) => {
   const modelVersion = searchParams.get("model_version") ?? undefined;
   const newsContext = searchParams.get("news") ?? undefined;
   const symbolsParam =
-    (reqBody as any).symbols?.join(",") || searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "XAUUSD,XAGUSD,BTCUSD,UKOIL,EURUSD,GBPUSD,USDJPY,EURJPY,GBPJPY,AUDUSD,NZDUSD,AUDJPY,CADJPY,EURGBP,US30,NAS100";
+    (reqBody as any).symbols?.join(",") || searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "XAUUSD,XAGUSD,BTCUSD,ETHUSD,UKOIL,USOIL,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF,NZDUSD,EURJPY,GBPJPY,US30,NAS100,SPX500,GER30,JP225,AAPL,MSFT,NVDA,TSLA";
   const symbols = symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean);
 
   // Institutional Opportunity-Ranked Asset Sorting:
   // Priority: 1) Open high-liquidity / high-volatility assets, 2) Other open markets, 3) Closed markets
-  const priorityList = ['BTCUSD', 'XAUUSD', 'US30', 'NAS100', 'EURUSD', 'GBPUSD', 'AUDUSD', 'UKOIL', 'XAGUSD', 'USDJPY', 'GBPJPY', 'EURJPY', 'NZDUSD'];
+  const priorityList = ['BTCUSD', 'ETHUSD', 'XAUUSD', 'US30', 'NAS100', 'SPX500', 'EURUSD', 'GBPUSD', 'AUDUSD', 'USDCAD', 'USDCHF', 'UKOIL', 'USOIL', 'XAGUSD', 'USDJPY', 'GBPJPY', 'EURJPY', 'GER30', 'JP225', 'NVDA', 'AAPL', 'MSFT', 'TSLA'];
   symbols.sort((a, b) => {
     const aOpen = isMarketOpen(a);
     const bOpen = isMarketOpen(b);
@@ -498,12 +504,12 @@ serve(async (req) => {
         if (activeSignals && activeSignals.length > 0) {
           for (const signal of activeSignals) {
             try {
-              // 1. Math Validation (TTL)
+              // 1. Math Validation (20-Period Anticipation Horizon TTL: 10 Hours for 30m)
               const hoursElapsed = (Date.now() - new Date(signal.created_at).getTime()) / (1000 * 60 * 60);
-              if (hoursElapsed > 12) {
-                await supabase.from("trade_opportunities").update({ status: "EXPIRED", ai_risks: "Expired: 12h TTL exceeded without execution." }).eq("id", signal.id);
+              if (hoursElapsed > 10) {
+                await supabase.from("trade_opportunities").update({ status: "EXPIRED", ai_risks: "Expired: 20-period anticipation horizon (10h) reached without fill/continuation." }).eq("id", signal.id);
                 // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
-                console.log(`[Validation] EXPIRED ${signal.symbol}: 12h TTL expired.`);
+                console.log(`[Validation] EXPIRED ${signal.symbol}: 20-period anticipation horizon (10h) reached.`);
                 continue;
               }
 
@@ -519,17 +525,29 @@ serve(async (req) => {
                 signal.symbol
               );
 
-              // 3. Math Validation (Stop Loss & Take Profit Hit)
+              // 3. Math Validation (Bar-Close Stop Loss & Take Profit Hit)
+              const currentClose = result.length > 0 ? result[result.length - 1].c : snapshot.current_price;
               const currentHigh = result.length > 0 ? result[result.length - 1].h : snapshot.current_price;
               const currentLow = result.length > 0 ? result[result.length - 1].l : snapshot.current_price;
               const stopLoss = signal.stop_plan_json?.stop;
               const takeProfit = signal.take_profit_json?.tp;
-              
+              const atr = snapshot.atr_14 || Math.abs(currentClose * 0.005);
+              const catastrophicSlLong = stopLoss ? stopLoss - (atr * 2.0) : null;
+              const catastrophicSlShort = stopLoss ? stopLoss + (atr * 2.0) : null;
+
               if (stopLoss) {
-                if ((signal.side === 'LONG' && currentLow <= stopLoss) || 
-                    (signal.side === 'SHORT' && currentHigh >= stopLoss)) {
-                  await supabase.from("trade_opportunities").update({ status: "LOST", r_multiple: -1, ai_risks: "Technical Invalidation: Stop Loss crossed." }).eq("id", signal.id);
-                  console.log(`[Validation] LOST ${signal.symbol}: Stop loss crossed by live price.`);
+                // Trading Central Bar-Close Stop Loss Rule:
+                // Evaluated strictly on confirmed bar close, allowing intra-bar wicks to breathe unless catastrophic emergency stop is reached
+                const isBarCloseLostLong = signal.side === 'LONG' && (currentClose <= stopLoss || (catastrophicSlLong !== null && currentLow <= catastrophicSlLong));
+                const isBarCloseLostShort = signal.side === 'SHORT' && (currentClose >= stopLoss || (catastrophicSlShort !== null && currentHigh >= catastrophicSlShort));
+
+                if (isBarCloseLostLong || isBarCloseLostShort) {
+                  await supabase.from("trade_opportunities").update({ 
+                    status: "LOST", 
+                    r_multiple: -1, 
+                    ai_risks: "Technical Invalidation: Confirmed bar close beyond Stop Loss / Pivot level." 
+                  }).eq("id", signal.id);
+                  console.log(`[Validation] LOST ${signal.symbol}: Confirmed bar close beyond stop loss.`);
                   continue;
                 }
               }
@@ -1220,20 +1238,12 @@ serve(async (req) => {
               return;
             }
             
-            // --- Risk:Reward Check ---
+            // --- Risk:Reward Check (Trading Central Minimum 1:1.70 on Target 2) ---
             const riskPoints = Math.abs(entry_price - stop_loss);
             const rewardPoints = Math.abs(take_profit - entry_price);
             const riskRewardRatio = riskPoints > 0 ? (rewardPoints / riskPoints) : 0;
             
-            let deskRequiredRR = 1.5;
-            if (symbol === 'XAGUSD' || symbol === 'UKOIL') {
-              deskRequiredRR = 1.0; // Lower threshold due to high volatility and wider stops
-            } else if (symbol === 'BTCUSD' || symbol === 'US30' || symbol === 'NAS100') {
-              deskRequiredRR = 1.25; // Indices/Crypto have wider swings, need wider stops
-            } else {
-              if (confidence_score >= 90) deskRequiredRR = 1.75;
-              else if (confidence_score >= 80) deskRequiredRR = 1.5;
-            }
+            let deskRequiredRR = 1.70;
 
             // --- Regime Enforcement ---
             if (snapshot.trend_alignment === "CHOP") {
@@ -1264,22 +1274,22 @@ serve(async (req) => {
                 });
                 return;
               }
-              // Loosen R:R strictness for mean reversion range trades
-              if (deskRequiredRR > 1.2) deskRequiredRR = 1.2;
+              // Loosen R:R strictness slightly for tight mean reversion range trades
+              if (deskRequiredRR > 1.50) deskRequiredRR = 1.50;
             }
 
             let order_type = dbSide === 'LONG' ? 'BUY MARKET' : 'SELL MARKET';
 
             if (riskRewardRatio < deskRequiredRR - 0.05) {
               // --- ADAPTIVE LIMIT SOLVER (Institutional Execution Desk) ---
-              // If the setup has high conviction (confidence >= 80) and structural target & stop are sound,
+              // If the setup has high conviction and structural target & stop are sound,
               // do NOT discard the trade. Instead, solve for the required pullback limit entry to achieve >= 1.75 R:R.
               const targetRR = Math.max(deskRequiredRR, 1.75);
               const currentPrice = snapshot.current_price;
               
               // Formula: entry = (take_profit + targetRR * stop_loss) / (1 + targetRR)
               const solvedEntry = (take_profit + (targetRR * stop_loss)) / (1 + targetRR);
-              const isIndexOrCrypto = ['US30', 'NAS100', 'GER30', 'SPX500', 'BTCUSD'].includes(symbol);
+              const isIndexOrCrypto = ['US30', 'NAS100', 'GER30', 'SPX500', 'JP225', 'BTCUSD', 'ETHUSD'].includes(symbol);
               const decimals = isIndexOrCrypto ? 2 : 5;
               const formattedEntry = Number(solvedEntry.toFixed(decimals));
               
@@ -1288,21 +1298,21 @@ serve(async (req) => {
               const isEntryValidShort = !isLong && formattedEntry > currentPrice && formattedEntry < stop_loss;
               
               const atr = snapshot.atr_14 || Math.abs(currentPrice - stop_loss);
-              const isWithinReach = Math.abs(formattedEntry - currentPrice) <= (atr * 2.0);
+              const isWithinReach = Math.abs(formattedEntry - currentPrice) <= (atr * 2.5);
               
-              if (confidence_score >= 80 && (isEntryValidLong || isEntryValidShort) && isWithinReach) {
+              if (confidence_score >= 70 && (isEntryValidLong || isEntryValidShort) && isWithinReach) {
                 console.log(`[Layer C: Execution Desk] ADAPTIVE LIMIT: Converted ${symbol} ${dbSide} market entry from ${entry_price} (R:R ${riskRewardRatio.toFixed(2)}) to Pullback Limit @ ${formattedEntry} (R:R 1:${targetRR.toFixed(1)}).`);
                 sendEvent({ type: 'progress', message: `[Execution Desk] Adaptive Limit: Adjusted entry on ${symbol} to ${formattedEntry} for 1:${targetRR.toFixed(1)} R:R.` });
                 
                 entry_price = formattedEntry;
                 order_type = isLong ? 'BUY LIMIT' : 'SELL LIMIT';
-                institutional_rationale += ` [Adaptive Limit Solver: Converted overextended market entry into a pullback ${order_type} @ ${entry_price} to lock in institutional 1:${targetRR.toFixed(1)} R:R].`;
+                institutional_rationale += ` [Adaptive Limit Solver: Converted overextended market entry into a pullback ${order_type} @ ${entry_price} to lock in institutional 1:${targetRR.toFixed(1)} R:R on Target 2].`;
               } else {
                 console.log(`[Layer C: Execution Desk] REJECTED ${symbol}: Risk:Reward ratio (${riskRewardRatio.toFixed(2)}) is below the institutional minimum of ${deskRequiredRR} for Tier score ${confidence_score}.`);
                 sendEvent({ type: 'progress', message: `[Layer C: Execution Desk] REJECTED: Structural mismatch. R:R ratio (${riskRewardRatio.toFixed(2)}) is below minimum of ${deskRequiredRR}.` });
                 rejections.push({
                   symbol,
-                  reason: `Structural R:R mismatch: Risk:Reward ratio is ${riskRewardRatio.toFixed(2)}, which is below the required 1:${deskRequiredRR} threshold for a ${confidence_score} confidence score.`,
+                  reason: `Structural R:R mismatch: Risk:Reward ratio is ${riskRewardRatio.toFixed(2)}, which is below the required 1:${deskRequiredRR} threshold for Target 2.`,
                   layer: "Execution Desk"
                 });
                 await supabase.from("trade_opportunities").insert({
