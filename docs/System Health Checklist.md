@@ -603,25 +603,38 @@ WHERE t.status = 'APPROVED'
 ORDER BY t.created_at DESC;
 ```
 
-- [ ] **Signal TTL Monitor:** APPROVED signals expire after 12 hours. Check for signals approaching expiry that have not executed, especially pending limit orders that may never have been triggered:
+- [ ] **Signal 20-Period Anticipation Horizon (TTL Monitor):**
+  - **30m Intraday Signals (`agent-day`):** Expire after **10 hours (20 bars)** if unexecuted.
+  - **1D Swing Signals (`agent-swing`):** Expire after **20 trading days (480 hours)** if unexecuted.
+  - Check for signals approaching expiry that have not executed:
 
 ```sql
-SELECT symbol, side, entry_plan_json->>'order_type' AS order_type, created_at,
-       ROUND(EXTRACT(EPOCH FROM (NOW() - created_at)) / 3600, 1) AS hours_open
+SELECT symbol, side, timeframe, entry_plan_json->>'order_type' AS order_type, created_at,
+       ROUND(EXTRACT(EPOCH FROM (NOW() - created_at)) / 3600, 1) AS hours_open,
+       CASE 
+         WHEN timeframe = '30m' AND EXTRACT(EPOCH FROM (NOW() - created_at)) > 36000 THEN 'EXPIRED_10H_HORIZON'
+         WHEN timeframe = '1d' AND EXTRACT(EPOCH FROM (NOW() - created_at)) > 1728000 THEN 'EXPIRED_20D_HORIZON'
+         ELSE 'ACTIVE'
+       END AS horizon_status
 FROM trade_opportunities
-WHERE status = 'APPROVED'
+WHERE status IN ('APPROVED', 'ACTIVE')
 ORDER BY created_at ASC;
 ```
 
-Any signal with `hours_open > 10` should be reviewed manually. If the limit order price was never reached, consider whether the setup is still valid or should be manually expired.
+Any 30m signal with `hours_open > 10` is automatically expired by the 20-period anticipation horizon engine.
+
+- [ ] **Bar-Close Stop Loss & Invalidation Rule:**
+  - Invalidation is governed strictly at the confirmed **CLOSE of a candle** (30m for intraday, 1D for swing).
+  - Intra-bar wicks are permitted to breathe unless the Catastrophic Emergency Stop ($2.0\times$ ATR behind the Pivot) is breached.
+  - Verify that `agent-day` and `agent-swing` revalidation routines evaluate `currentClose <= stopLoss` for Longs and `currentClose >= stopLoss` for Shorts on completed candles.
 
 - [ ] **Master Broker Gateway (MetaAPI):** Check `meta_api_order_id` in `user_trades`. Confirm that orders are correctly syncing with MetaTrader and not returning structural errors (e.g., `SYMBOL_NOT_FOUND` or `INSUFFICIENT_MARGIN`).
 - [ ] **Drawdown Breaker & House Money (PHM):** 
   - Check `user_risk_settings`. Ensure no critical master/PAMM accounts have their `high_water_mark_equity` threshold breached by more than their `max_drawdown_pct`.
   - Check `system_settings` for `phm_settings`. Confirm if the master account is currently playing with **House Money**. If active, verify that the escalated risk (e.g. 15%) is correctly overriding standard risk, and that the Drawdown Breaker correctly locks to the PHM Floor to ensure a safe soft-landing if a loss streak occurs.
-- [ ] **10% Account Blowout Protection:** Verify if trades are being rejected due to the 10% hard risk cap. If a user's capital is too small to handle the 0.01 minimum lot size for an asset, `agent-trade` will log `10% Account Blowout Protection hard cap reached`. Ensure users have sufficient capital to safely absorb minimum lot risk.
-- [ ] **Trailing Stop Loss & Position Manager:** Verify `agent-trade-manage-positions` is successfully executing every 30 minutes. Check the edge function logs for `agent-trade` and the `user_trades.stop_loss` column. Profitable trades should log `TRAIL_RUNNER`, `LOCK_IN_1R`, or `BREAK_EVEN` moves. If trades are highly profitable but not trailing, ensure the Position Manager is properly fetching live price data (`market_data_pti.c`) and updating the SL on both the broker and database mock.
-- [ ] **Pending Order Garbage Collection:** Verify `position-manager-poll` (`agent-trade` with `action: "MANAGE_POSITIONS"`) is executing every 30 minutes. Check the edge function logs for `agent-trade` to confirm it is cross-referencing live MetaAPI/MT5 broker orders and autonomously cancelling stale pending limit/stop orders (older than 24 hours) as well as orphaned broker orders to prevent ghost executions.
+- [ ] **10% Account Blowout Protection & Contract Multipliers:** Verify if trades are being rejected due to the 10% hard risk cap ($150 on $1,500 base capital). For high-multiplier assets like `XAGUSD` (5000) and `UKOIL` (1000), `agent-day` and `agent-swing` dynamically anchor limit entries to structural discounts so 0.01 lot dollar risk stays strictly below $150.
+- [ ] **Trailing Stop Ladder & 20-Bar Stagnation Decay:** Verify `position-manager-poll` (`agent-trade` with `action: "MANAGE_POSITIONS"`) is executing every 30 minutes. Profitable trades should log `BREAK_EVEN` (+0.5R), `LOCK_IN_HALF_R` (+1.0R), `LOCK_IN_1R` (+2.0R), `LOCK_IN_2R` (+3.0R), or `TRAIL_RUNNER`. Positions active for $> 20$ bars in profit with $< +0.5\text{R}$ progress are automatically moved to Breakeven via `20_BAR_THESIS_DECAY_BE`.
+- [ ] **Pending Order Garbage Collection:** Verify `position-manager-poll` cancels stale pending limit/stop orders older than their 20-bar horizon (10h intraday / 20 days swing) and purges orphaned broker orders.
 
 ---
 

@@ -23,10 +23,11 @@ Whenever the user requests a "system health check", you should:
    - Database Webhook & Cron HTTP responses in `net._http_response` have zero network failures (`Couldn't resolve host name`) and no unhandled 500 server errors (e.g. MetaAPI transient failures in `exness-history-sync` are caught gracefully).
    - Orphaned signals (stuck in `PUBLISHED`, `APPROVED` without `user_trades`, or `PENDING`) are zero.
    - Closed trades with calculated `profit_usd` are not desynced in `status = 'OPEN'` (reconcile to `WON` or `LOST` via Section 3G, Step 1c).
-   - Stale unfilled pending orders (`open_price IS NULL` older than 48 hours) are zero or garbage-collected to `status = 'CLOSED'` with parent opportunities marked `EXPIRED` (Section 3H).
+   - Stale unfilled pending orders older than their 20-bar horizon (10h for 30m intraday, 20 days for 1D swing) are zero or garbage-collected to `status = 'CLOSED'` with parent opportunities marked `EXPIRED`.
+   - Stop loss evaluations adhere to the Bar-Close Invalidation rule (governed on confirmed candle close, allowing intra-bar liquidity wicks to breathe unless the $2.0\times$ ATR catastrophic emergency stop is reached).
    - Database triggers (e.g. `allocate_virtual_pnl()`) are idempotent and skip duplicate reference codes without throwing `23505 duplicate key` errors.
    - Broker execution errors in `user_trades` (MT5 error codes 10014 Invalid Volume, 10015 Invalid Price, 10016 Invalid Stops / Multi-Leg TP Direction, 10019 Margin) are caught and parent opportunities updated to `REJECTED`.
-   - All TP targets (`tp1`, `tp2`, `tp3`) enforce the 3-Layer Direction Validation against entry prices across `agent-swing`, `agent-trade`, and `vps-poll`.
+   - All TP targets (`tp1`, `tp2`, `tp3`) enforce the 3-Layer Direction Validation against entry prices across `agent-swing`, `agent-trade`, and `vps-poll`, verifying Target 2 satisfies $\ge 1:1.70$ R:R.
    - `vps-history` callback adheres to canonical schema (`profit_usd`, `error_message`, `status = WON | LOST`) and dynamically updates user capital and high-water mark.
    - Stale `ACTIVE` trade opportunities older than 24 hours without live `OPEN` positions are safely expired to `status = 'EXPIRED'` (complying with `trade_opportunities_status_check` constraint).
    - Completed trades (`WON`/`LOST`/`CLOSED`) have their parent `trade_opportunities` reconciled (`WON` for positive net PnL, `LOST` for negative net PnL, `EXPIRED` for cancelled/missed entries) rather than lingering in `ACTIVE`.
@@ -38,5 +39,5 @@ Whenever the user requests a "system health check", you should:
 - [Unified Health Audit SQL Script](../../../scripts/full_health_audit.sql)
 - [Healthcheck SQL Script](../../../scripts/healthcheck.sql)
 - [Comprehensive Healthcheck Python Script](../../../scripts/comprehensive_healthcheck.py)
-- [System Health Checklist](../../../docs/System Health Checklist.md)
+- [System Health Checklist](../../../docs/System%20Health%20Checklist.md)
 
