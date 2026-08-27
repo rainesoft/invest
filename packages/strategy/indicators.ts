@@ -66,9 +66,24 @@ export type LogicContext = {
   // Trading Central Institutional Elements
   rsi_divergence?: 'REGULAR_BULLISH' | 'REGULAR_BEARISH' | 'HIDDEN_BULLISH' | 'HIDDEN_BEARISH' | 'NONE';
   rsi_divergence_narrative?: string;
+  macd_divergence?: 'REGULAR_BULLISH' | 'REGULAR_BEARISH' | 'HIDDEN_BULLISH' | 'HIDDEN_BEARISH' | 'NONE';
+  macd_divergence_narrative?: string;
+  trend_channel?: {
+    type: 'ASCENDING_CHANNEL' | 'DESCENDING_CHANNEL' | 'HORIZONTAL_CHANNEL' | 'NONE';
+    upper_line: number;
+    lower_line: number;
+    midline: number;
+    slope: number;
+    channel_position: 'UPPER_BOUNDARY' | 'LOWER_BOUNDARY' | 'MID_CHANNEL' | 'OUTSIDE';
+    channel_description: string;
+  } | null;
+  chart_pattern?: 'ASCENDING_TRIANGLE' | 'DESCENDING_TRIANGLE' | 'SYMMETRICAL_TRIANGLE' | 'RISING_WEDGE' | 'FALLING_WEDGE' | 'DOUBLE_TOP' | 'DOUBLE_BOTTOM' | 'HEAD_AND_SHOULDERS' | 'INVERSE_HEAD_AND_SHOULDERS' | 'RECTANGLE_RANGE' | 'NONE';
+  chart_pattern_narrative?: string;
   has_unfilled_gap?: boolean;
   unfilled_gap_type?: 'BULLISH_GAP' | 'BEARISH_GAP' | 'NONE';
   unfilled_gap_target?: number | null;
+  anticipation_horizon_bars?: number;
+  anticipation_horizon_hours?: number;
 };
 
 export function calculateFractals(high: number[], low: number[]) {
@@ -669,6 +684,18 @@ export function getContextSnapshot(
       volume_surge: false,
       volume_regime: 'NORMAL',
       nearest_hvn: null,
+      rsi_divergence: 'NONE',
+      rsi_divergence_narrative: undefined,
+      macd_divergence: 'NONE',
+      macd_divergence_narrative: undefined,
+      trend_channel: null,
+      chart_pattern: 'NONE',
+      chart_pattern_narrative: undefined,
+      has_unfilled_gap: false,
+      unfilled_gap_type: 'NONE',
+      unfilled_gap_target: null,
+      anticipation_horizon_bars: 20,
+      anticipation_horizon_hours: 10,
     };
   }
 
@@ -788,6 +815,11 @@ export function getContextSnapshot(
     else if (isEveningStar(prev2, prev, curr)) candlestick_pattern = 'EVENING_STAR';
     else if (isBullishRejection(prev, curr)) candlestick_pattern = 'BULLISH_REJECTION_PINBAR';
     else if (isBearishRejection(prev, curr)) candlestick_pattern = 'BEARISH_REJECTION_PINBAR';
+    else if (isPiercingLine(prev, curr)) candlestick_pattern = 'PIERCING_LINE';
+    else if (isDarkCloudCover(prev, curr)) candlestick_pattern = 'DARK_CLOUD_COVER';
+    else if (isBullishHarami(prev, curr)) candlestick_pattern = 'BULLISH_HARAMI';
+    else if (isBearishHarami(prev, curr)) candlestick_pattern = 'BEARISH_HARAMI';
+    else if (isDoji(curr)) candlestick_pattern = 'DOJI_INDECISION';
   }
 
   // Session & Asian Range Calculations
@@ -795,9 +827,12 @@ export function getContextSnapshot(
   const asianRange = computeAsianRange(timestamps, high, low, close);
   const mean_reversion_target = volProfile.poc || (current_bb_upper !== null && current_bb_lower !== null ? Number(((current_bb_upper + current_bb_lower) / 2).toFixed(5)) : null);
 
-  // Trading Central Divergence & Gap Detection
+  // Trading Central Chartist, Divergence & Gap Detection
   const divResult = detectDivergence(high, low, close, rsi14);
+  const macdDivResult = detectMacdDivergence(high, low, close, macdResult.map((m: any) => m.histogram));
   const gapResult = detectPriceGaps(open, close, high, low);
+  const channelResult = detectTrendChannels(high, low, close);
+  const patternResult = detectGeometricPatterns(high, low, close);
 
   return {
     timestamp,
@@ -852,9 +887,16 @@ export function getContextSnapshot(
     // Trading Central Institutional Elements
     rsi_divergence: divResult.divergence,
     rsi_divergence_narrative: divResult.description,
+    macd_divergence: macdDivResult.divergence,
+    macd_divergence_narrative: macdDivResult.description,
+    trend_channel: channelResult.type !== 'NONE' ? channelResult : null,
+    chart_pattern: patternResult.pattern,
+    chart_pattern_narrative: patternResult.narrative || undefined,
     has_unfilled_gap: gapResult.has_unfilled_gap,
     unfilled_gap_type: gapResult.gap_type,
     unfilled_gap_target: gapResult.gap_close_price,
+    anticipation_horizon_bars: 20,
+    anticipation_horizon_hours: 10,
   };
 }
 
@@ -906,6 +948,484 @@ export function isBearishRejection(prev: any, curr: any) {
   const upperWick = curr.h - Math.max(curr.o, curr.c);
   const isStar    = upperWick > body * 1.5 && curr.c < curr.o;
   return isStar;
+}
+
+export function isDoji(curr: any) {
+  const body = Math.abs(curr.c - curr.o);
+  const range = curr.h - curr.l;
+  return range > 0 && body <= range * 0.10;
+}
+
+export function isBullishHarami(prev: any, curr: any) {
+  return (
+    prev.c < prev.o &&
+    curr.c > curr.o &&
+    curr.o > prev.c &&
+    curr.c < prev.o
+  );
+}
+
+export function isBearishHarami(prev: any, curr: any) {
+  return (
+    prev.c > prev.o &&
+    curr.c < curr.o &&
+    curr.o < prev.c &&
+    curr.c > prev.o
+  );
+}
+
+export function isPiercingLine(prev: any, curr: any) {
+  const prevMidpoint = (prev.o + prev.c) / 2;
+  return (
+    prev.c < prev.o &&
+    curr.c > curr.o &&
+    curr.o < prev.l &&
+    curr.c > prevMidpoint &&
+    curr.c < prev.o
+  );
+}
+
+export function isDarkCloudCover(prev: any, curr: any) {
+  const prevMidpoint = (prev.o + prev.c) / 2;
+  return (
+    prev.c > prev.o &&
+    curr.c < curr.o &&
+    curr.o > prev.h &&
+    curr.c < prevMidpoint &&
+    curr.c > prev.o
+  );
+}
+
+// ============================================================
+// CHARTIST TREND CHANNELS & TRENDLINES (Trading Central Methodology)
+// Uses swing fractals and linear regression to identify parallel
+// support and resistance trendlines forming ascending/descending channels.
+// ============================================================
+export interface TrendChannelResult {
+  type: 'ASCENDING_CHANNEL' | 'DESCENDING_CHANNEL' | 'HORIZONTAL_CHANNEL' | 'NONE';
+  upper_line: number;
+  lower_line: number;
+  midline: number;
+  slope: number;
+  channel_position: 'UPPER_BOUNDARY' | 'LOWER_BOUNDARY' | 'MID_CHANNEL' | 'OUTSIDE';
+  channel_description: string;
+}
+
+export function detectTrendChannels(
+  high: number[],
+  low: number[],
+  close: number[],
+  lookback = 40
+): TrendChannelResult {
+  const defaultResult: TrendChannelResult = {
+    type: 'NONE',
+    upper_line: 0,
+    lower_line: 0,
+    midline: 0,
+    slope: 0,
+    channel_position: 'OUTSIDE',
+    channel_description: 'No coherent channel established'
+  };
+
+  const n = close.length;
+  if (n < 15) return defaultResult;
+
+  const start = Math.max(0, n - lookback);
+  const sliceH = high.slice(start);
+  const sliceL = low.slice(start);
+  const sliceC = close.slice(start);
+  const m = sliceC.length;
+
+  let { bullish_fractals, bearish_fractals } = calculateFractals(sliceH, sliceL);
+  
+  // Fallback to 3-bar swing pivots if 5-bar fractals are sparse
+  if (bearish_fractals.length < 2) {
+    const swingHighs: { index: number; price: number }[] = [];
+    for (let i = 1; i < sliceH.length - 1; i++) {
+      if (sliceH[i] >= sliceH[i-1] && sliceH[i] >= sliceH[i+1]) {
+        swingHighs.push({ index: i, price: sliceH[i] });
+      }
+    }
+    if (swingHighs.length >= 2) bearish_fractals = swingHighs;
+  }
+
+  if (bullish_fractals.length < 2) {
+    const swingLows: { index: number; price: number }[] = [];
+    for (let i = 1; i < sliceL.length - 1; i++) {
+      if (sliceL[i] <= sliceL[i-1] && sliceL[i] <= sliceL[i+1]) {
+        swingLows.push({ index: i, price: sliceL[i] });
+      }
+    }
+    if (swingLows.length >= 2) bullish_fractals = swingLows;
+  }
+
+  if (bearish_fractals.length < 2 || bullish_fractals.length < 2) return defaultResult;
+
+  // Linear regression on swing highs (resistance line)
+  const xH = bearish_fractals.map(f => f.index);
+  const yH = bearish_fractals.map(f => f.price);
+  const nH = xH.length;
+  const sumXH = xH.reduce((a, b) => a + b, 0);
+  const sumYH = yH.reduce((a, b) => a + b, 0);
+  const sumX2H = xH.reduce((a, b) => a + b * b, 0);
+  const sumXYH = xH.reduce((acc, x, i) => acc + x * yH[i], 0);
+  const denomH = (nH * sumX2H - sumXH * sumXH) || 1;
+  const slopeH = (nH * sumXYH - sumXH * sumYH) / denomH;
+  const interceptH = (sumYH - slopeH * sumXH) / nH;
+
+  // Linear regression on swing lows (support line)
+  const xL = bullish_fractals.map(f => f.index);
+  const yL = bullish_fractals.map(f => f.price);
+  const nL = xL.length;
+  const sumXL = xL.reduce((a, b) => a + b, 0);
+  const sumYL = yL.reduce((a, b) => a + b, 0);
+  const sumX2L = xL.reduce((a, b) => a + b * b, 0);
+  const sumXYL = xL.reduce((acc, x, i) => acc + x * yL[i], 0);
+  const denomL = (nL * sumX2L - sumXL * sumXL) || 1;
+  const slopeL = (nL * sumXYL - sumXL * sumYL) / denomL;
+  const interceptL = (sumYL - slopeL * sumXL) / nL;
+
+  const currentIdx = m - 1;
+  const currentPrice = sliceC[currentIdx];
+  const upperLine = Number((slopeH * currentIdx + interceptH).toFixed(5));
+  const lowerLine = Number((slopeL * currentIdx + interceptL).toFixed(5));
+
+  if (upperLine <= lowerLine) return defaultResult;
+
+  const midline = Number(((upperLine + lowerLine) / 2).toFixed(5));
+  const channelHeight = upperLine - lowerLine;
+  const avgSlope = (slopeH + slopeL) / 2;
+  const normSlope = avgSlope / currentPrice;
+
+  let type: TrendChannelResult['type'] = 'NONE';
+  if (normSlope > 0.0003 && slopeH > 0 && slopeL > 0) {
+    type = 'ASCENDING_CHANNEL';
+  } else if (normSlope < -0.0003 && slopeH < 0 && slopeL < 0) {
+    type = 'DESCENDING_CHANNEL';
+  } else if (Math.abs(normSlope) <= 0.0003) {
+    type = 'HORIZONTAL_CHANNEL';
+  } else {
+    type = 'NONE';
+  }
+
+  let channel_position: TrendChannelResult['channel_position'] = 'MID_CHANNEL';
+  if (currentPrice >= upperLine - channelHeight * 0.15 && currentPrice <= upperLine + channelHeight * 0.15) {
+    channel_position = 'UPPER_BOUNDARY';
+  } else if (currentPrice <= lowerLine + channelHeight * 0.15 && currentPrice >= lowerLine - channelHeight * 0.15) {
+    channel_position = 'LOWER_BOUNDARY';
+  } else if (currentPrice > upperLine + channelHeight * 0.15 || currentPrice < lowerLine - channelHeight * 0.15) {
+    channel_position = 'OUTSIDE';
+  } else {
+    channel_position = 'MID_CHANNEL';
+  }
+
+  const desc = type !== 'NONE' 
+    ? `${type.replace('_', ' ')} detected (Upper $${upperLine}, Lower $${lowerLine}, Mid $${midline}). Price is currently at ${channel_position.replace('_', ' ')}.`
+    : 'No coherent channel established';
+
+  return {
+    type,
+    upper_line: upperLine,
+    lower_line: lowerLine,
+    midline,
+    slope: Number(avgSlope.toFixed(5)),
+    channel_position,
+    channel_description: desc
+  };
+}
+
+// ============================================================
+// GEOMETRIC REVERSAL & CONSOLIDATION PATTERNS (Trading Central)
+// Triangles, Wedges, Double Tops/Bottoms, Head & Shoulders, Rectangles
+// ============================================================
+export type GeometricChartPattern = 
+  | 'ASCENDING_TRIANGLE'
+  | 'DESCENDING_TRIANGLE'
+  | 'SYMMETRICAL_TRIANGLE'
+  | 'RISING_WEDGE'
+  | 'FALLING_WEDGE'
+  | 'DOUBLE_TOP'
+  | 'DOUBLE_BOTTOM'
+  | 'HEAD_AND_SHOULDERS'
+  | 'INVERSE_HEAD_AND_SHOULDERS'
+  | 'RECTANGLE_RANGE'
+  | 'NONE';
+
+export interface GeometricPatternResult {
+  pattern: GeometricChartPattern;
+  narrative: string;
+  key_level_1: number | null;
+  key_level_2: number | null;
+  breakout_target: number | null;
+}
+
+export function detectGeometricPatterns(
+  high: number[],
+  low: number[],
+  close: number[],
+  lookback = 45
+): GeometricPatternResult {
+  const defaultRes: GeometricPatternResult = {
+    pattern: 'NONE',
+    narrative: '',
+    key_level_1: null,
+    key_level_2: null,
+    breakout_target: null
+  };
+
+  const n = close.length;
+  if (n < 20) return defaultRes;
+
+  const start = Math.max(0, n - lookback);
+  const sliceH = high.slice(start);
+  const sliceL = low.slice(start);
+  const sliceC = close.slice(start);
+
+  const { bullish_fractals, bearish_fractals } = calculateFractals(sliceH, sliceL);
+  const currentPrice = sliceC[sliceC.length - 1];
+
+  // 1. Check Double Top / Double Bottom
+  if (bearish_fractals.length >= 2) {
+    const p1 = bearish_fractals[bearish_fractals.length - 2];
+    const p2 = bearish_fractals[bearish_fractals.length - 1];
+    const diffPct = Math.abs(p1.price - p2.price) / p1.price;
+    if (diffPct <= 0.0035 && p2.index - p1.index >= 4) {
+      const interveningLows = sliceL.slice(p1.index, p2.index + 1);
+      const neckline = Math.min(...interveningLows);
+      const height = p1.price - neckline;
+      if (height / currentPrice >= 0.005) {
+        return {
+          pattern: 'DOUBLE_TOP',
+          narrative: `Double Top Reversal: Peaks at $${p1.price} and $${p2.price} with neckline support at $${neckline}. Bearish target $${Number((neckline - height).toFixed(5))}.`,
+          key_level_1: Number(p1.price.toFixed(5)),
+          key_level_2: Number(neckline.toFixed(5)),
+          breakout_target: Number((neckline - height).toFixed(5))
+        };
+      }
+    }
+  }
+
+  if (bullish_fractals.length >= 2) {
+    const p1 = bullish_fractals[bullish_fractals.length - 2];
+    const p2 = bullish_fractals[bullish_fractals.length - 1];
+    const diffPct = Math.abs(p1.price - p2.price) / p1.price;
+    if (diffPct <= 0.0035 && p2.index - p1.index >= 4) {
+      const interveningHighs = sliceH.slice(p1.index, p2.index + 1);
+      const neckline = Math.max(...interveningHighs);
+      const height = neckline - p1.price;
+      if (height / currentPrice >= 0.005) {
+        return {
+          pattern: 'DOUBLE_BOTTOM',
+          narrative: `Double Bottom Reversal: Troughs at $${p1.price} and $${p2.price} with neckline resistance at $${neckline}. Bullish target $${Number((neckline + height).toFixed(5))}.`,
+          key_level_1: Number(p1.price.toFixed(5)),
+          key_level_2: Number(neckline.toFixed(5)),
+          breakout_target: Number((neckline + height).toFixed(5))
+        };
+      }
+    }
+  }
+
+  // 2. Check Head and Shoulders / Inverse Head and Shoulders
+  if (bearish_fractals.length >= 3) {
+    const left = bearish_fractals[bearish_fractals.length - 3];
+    const head = bearish_fractals[bearish_fractals.length - 2];
+    const right = bearish_fractals[bearish_fractals.length - 1];
+    if (head.price > left.price && head.price > right.price && Math.abs(left.price - right.price) / left.price <= 0.008) {
+      const interveningLows = sliceL.slice(left.index, right.index + 1);
+      const neckline = Math.min(...interveningLows);
+      const height = head.price - neckline;
+      return {
+        pattern: 'HEAD_AND_SHOULDERS',
+        narrative: `Head & Shoulders Top: Left Shoulder $${left.price}, Head $${head.price}, Right Shoulder $${right.price}. Neckline at $${neckline}. Target $${Number((neckline - height).toFixed(5))}.`,
+        key_level_1: Number(head.price.toFixed(5)),
+        key_level_2: Number(neckline.toFixed(5)),
+        breakout_target: Number((neckline - height).toFixed(5))
+      };
+    }
+  }
+
+  if (bullish_fractals.length >= 3) {
+    const left = bullish_fractals[bullish_fractals.length - 3];
+    const head = bullish_fractals[bullish_fractals.length - 2];
+    const right = bullish_fractals[bullish_fractals.length - 1];
+    if (head.price < left.price && head.price < right.price && Math.abs(left.price - right.price) / left.price <= 0.008) {
+      const interveningHighs = sliceH.slice(left.index, right.index + 1);
+      const neckline = Math.max(...interveningHighs);
+      const height = neckline - head.price;
+      return {
+        pattern: 'INVERSE_HEAD_AND_SHOULDERS',
+        narrative: `Inverse Head & Shoulders Bottom: Left Shoulder $${left.price}, Head $${head.price}, Right Shoulder $${right.price}. Neckline at $${neckline}. Target $${Number((neckline + height).toFixed(5))}.`,
+        key_level_1: Number(head.price.toFixed(5)),
+        key_level_2: Number(neckline.toFixed(5)),
+        breakout_target: Number((neckline + height).toFixed(5))
+      };
+    }
+  }
+
+  // 3. Check Triangles & Wedges via multi-pivot slopes
+  if (bearish_fractals.length >= 2 && bullish_fractals.length >= 2) {
+    const h1 = bearish_fractals[bearish_fractals.length - 2];
+    const h2 = bearish_fractals[bearish_fractals.length - 1];
+    const l1 = bullish_fractals[bullish_fractals.length - 2];
+    const l2 = bullish_fractals[bullish_fractals.length - 1];
+
+    const hDiffPct = (h2.price - h1.price) / h1.price;
+    const lDiffPct = (l2.price - l1.price) / l1.price;
+
+    const flatThreshold = 0.0025;
+
+    // Ascending Triangle: Flat Highs + Higher Lows
+    if (Math.abs(hDiffPct) <= flatThreshold && lDiffPct > flatThreshold) {
+      const height = h1.price - l1.price;
+      return {
+        pattern: 'ASCENDING_TRIANGLE',
+        narrative: `Ascending Triangle: Flat Resistance at $${h1.price} with rising Higher Lows ($${l1.price} -> $${l2.price}). Bullish breakout continuation pattern with target $${Number((h1.price + height).toFixed(5))}.`,
+        key_level_1: Number(h1.price.toFixed(5)),
+        key_level_2: Number(l2.price.toFixed(5)),
+        breakout_target: Number((h1.price + height).toFixed(5))
+      };
+    }
+
+    // Descending Triangle: Flat Lows + Lower Highs
+    if (Math.abs(lDiffPct) <= flatThreshold && hDiffPct < -flatThreshold) {
+      const height = h1.price - l1.price;
+      return {
+        pattern: 'DESCENDING_TRIANGLE',
+        narrative: `Descending Triangle: Flat Support at $${l1.price} with falling Lower Highs ($${h1.price} -> $${h2.price}). Bearish breakdown continuation pattern with target $${Number((l1.price - height).toFixed(5))}.`,
+        key_level_1: Number(l1.price.toFixed(5)),
+        key_level_2: Number(h2.price.toFixed(5)),
+        breakout_target: Number((l1.price - height).toFixed(5))
+      };
+    }
+
+    // Symmetrical Triangle: Lower Highs + Higher Lows
+    if (hDiffPct < -flatThreshold && lDiffPct > flatThreshold) {
+      const height = h1.price - l1.price;
+      return {
+        pattern: 'SYMMETRICAL_TRIANGLE',
+        narrative: `Symmetrical Triangle: Converging Lower Highs ($${h1.price} -> $${h2.price}) and Higher Lows ($${l1.price} -> $${l2.price}). Volatility compression preceding breakout.`,
+        key_level_1: Number(h2.price.toFixed(5)),
+        key_level_2: Number(l2.price.toFixed(5)),
+        breakout_target: Number((currentPrice + height * 0.8).toFixed(5))
+      };
+    }
+
+    // Rising Wedge: Both sloping up, but lows rising faster than highs (bearish reversal)
+    if (hDiffPct > flatThreshold && lDiffPct > flatThreshold && lDiffPct > hDiffPct * 1.3) {
+      return {
+        pattern: 'RISING_WEDGE',
+        narrative: `Rising Wedge (Bearish Exhaustion): Price making higher highs with narrowing upward compression. Classic reversal pattern.`,
+        key_level_1: Number(h2.price.toFixed(5)),
+        key_level_2: Number(l2.price.toFixed(5)),
+        breakout_target: Number(l1.price.toFixed(5))
+      };
+    }
+
+    // Falling Wedge: Both sloping down, but highs falling faster than lows (bullish reversal)
+    if (hDiffPct < -flatThreshold && lDiffPct < -flatThreshold && Math.abs(hDiffPct) > Math.abs(lDiffPct) * 1.3) {
+      return {
+        pattern: 'FALLING_WEDGE',
+        narrative: `Falling Wedge (Bullish Exhaustion): Price making lower lows with narrowing downward compression. Classic reversal pattern.`,
+        key_level_1: Number(h2.price.toFixed(5)),
+        key_level_2: Number(l2.price.toFixed(5)),
+        breakout_target: Number(h1.price.toFixed(5))
+      };
+    }
+
+    // Rectangle Range: Both Highs and Lows flat
+    if (Math.abs(hDiffPct) <= flatThreshold && Math.abs(lDiffPct) <= flatThreshold) {
+      return {
+        pattern: 'RECTANGLE_RANGE',
+        narrative: `Rectangle Consolidation: Bound between Resistance $${h1.price} and Support $${l1.price}.`,
+        key_level_1: Number(h1.price.toFixed(5)),
+        key_level_2: Number(l1.price.toFixed(5)),
+        breakout_target: null
+      };
+    }
+  }
+
+  return defaultRes;
+}
+
+// ============================================================
+// MACD INDICATOR DIVERGENCE ENGINE (Trading Central Methodology)
+// Identifies Regular & Hidden divergences between Price & MACD Histogram
+// ============================================================
+export interface MacdDivergenceResult {
+  divergence: 'REGULAR_BULLISH' | 'REGULAR_BEARISH' | 'HIDDEN_BULLISH' | 'HIDDEN_BEARISH' | 'NONE';
+  description: string;
+}
+
+export function detectMacdDivergence(
+  high: number[],
+  low: number[],
+  close: number[],
+  macdHistogram: (number | undefined)[],
+  lookback = 35
+): MacdDivergenceResult {
+  const defaultRes: MacdDivergenceResult = { divergence: 'NONE', description: '' };
+  if (!close || !macdHistogram || close.length < 15 || macdHistogram.length < 15) return defaultRes;
+
+  const validHisto: number[] = macdHistogram.map(h => (typeof h === 'number' && !isNaN(h) ? h : 0));
+  const sliceLow = low.slice(-lookback);
+  const sliceHigh = high.slice(-lookback);
+  const sliceHisto = validHisto.slice(-lookback);
+
+  const swingLows: { idx: number; price: number; hist: number }[] = [];
+  for (let i = 2; i < sliceLow.length - 2; i++) {
+    if (
+      sliceLow[i] <= sliceLow[i-1] && sliceLow[i] <= sliceLow[i-2] &&
+      sliceLow[i] <= sliceLow[i+1] && sliceLow[i] <= sliceLow[i+2]
+    ) {
+      swingLows.push({ idx: i, price: sliceLow[i], hist: sliceHisto[i] });
+    }
+  }
+
+  const swingHighs: { idx: number; price: number; hist: number }[] = [];
+  for (let i = 2; i < sliceHigh.length - 2; i++) {
+    if (
+      sliceHigh[i] >= sliceHigh[i-1] && sliceHigh[i] >= sliceHigh[i-2] &&
+      sliceHigh[i] >= sliceHigh[i+1] && sliceHigh[i] >= sliceHigh[i+2]
+    ) {
+      swingHighs.push({ idx: i, price: sliceHigh[i], hist: sliceHisto[i] });
+    }
+  }
+
+  if (swingLows.length >= 2) {
+    const p1 = swingLows[swingLows.length - 2];
+    const p2 = swingLows[swingLows.length - 1];
+    if (p2.price < p1.price && p2.hist > p1.hist + 0.0001) {
+      return {
+        divergence: 'REGULAR_BULLISH',
+        description: `Regular Bullish MACD Divergence: Price printed Lower Low ($${p1.price} -> $${p2.price}) while MACD Histogram rose (${p1.hist.toFixed(4)} -> ${p2.hist.toFixed(4)}). Signals exhaustion of selling momentum.`
+      };
+    }
+    if (p2.price > p1.price && p2.hist < p1.hist - 0.0001) {
+      return {
+        divergence: 'HIDDEN_BULLISH',
+        description: `Hidden Bullish MACD Divergence: Price printed Higher Low ($${p1.price} -> $${p2.price}) while MACD Histogram fell (${p1.hist.toFixed(4)} -> ${p2.hist.toFixed(4)}). Signals bullish trend continuation.`
+      };
+    }
+  }
+
+  if (swingHighs.length >= 2) {
+    const p1 = swingHighs[swingHighs.length - 2];
+    const p2 = swingHighs[swingHighs.length - 1];
+    if (p2.price > p1.price && p2.hist < p1.hist - 0.0001) {
+      return {
+        divergence: 'REGULAR_BEARISH',
+        description: `Regular Bearish MACD Divergence: Price printed Higher High ($${p1.price} -> $${p2.price}) while MACD Histogram fell (${p1.hist.toFixed(4)} -> ${p2.hist.toFixed(4)}). Signals exhaustion of buying momentum.`
+      };
+    }
+    if (p2.price < p1.price && p2.hist > p1.hist + 0.0001) {
+      return {
+        divergence: 'HIDDEN_BEARISH',
+        description: `Hidden Bearish MACD Divergence: Price printed Lower High ($${p1.price} -> $${p2.price}) while MACD Histogram rose (${p1.hist.toFixed(4)} -> ${p2.hist.toFixed(4)}). Signals bearish trend continuation.`
+      };
+    }
+  }
+
+  return defaultRes;
 }
 
 // ============================================================
