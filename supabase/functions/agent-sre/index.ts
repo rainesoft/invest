@@ -1,0 +1,408 @@
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "npm:@supabase/supabase-js@2.108.2";
+
+/**
+ * ╔══════════════════════════════════════════════════════════════════════════╗
+ * ║           AGENT SRE — Autonomous Site Reliability Engineering            ║
+ * ║  Scheduled via pg_cron (Hourly at :15).                                 ║
+ * ╚══════════════════════════════════════════════════════════════════════════╝
+ *
+ * Autonomously audits system telemetry, detects pipeline anomalies/crashes,
+ * executes self-healing database reconciliations, dispatches Telegram alerts
+ * on critical incidents, and logs audit heartbeats.
+ */
+
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const CRON_SECRET = Deno.env.get("CRON_SECRET") ?? "";
+const TG_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
+const TG_CHAT = Deno.env.get("TELEGRAM_CHAT_ID") ?? "";
+
+async function notifyTelegram(htmlText: string) {
+  if (!TG_TOKEN || !TG_CHAT) return;
+  try {
+    const url = `https://api.telegram.org/bot${TG_TOKEN}/sendMessage`;
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: TG_CHAT,
+        text: htmlText,
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+      }),
+    });
+  } catch (e) {
+    console.error("[Agent SRE] Telegram dispatch failed:", e);
+  }
+}
+
+async function insertAudit(supabase: any, entry: { action: string; entity_type?: string; entity_id?: string; payload_json?: Record<string, any> }) {
+  try {
+    const { data: last } = await supabase
+      .from("audit_log")
+      .select("hash")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const prevHash = last?.hash ?? "";
+    const data = new TextEncoder().encode(prevHash + JSON.stringify(entry));
+    const buf = await crypto.subtle.digest("SHA-256", data);
+    const hash = Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+
+    const record: any = {
+      actor_type: "SYSTEM",
+      action: entry.action,
+      entity_type: entry.entity_type || "system",
+      payload_json: entry.payload_json || {},
+      hash,
+    };
+    if (entry.entity_id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry.entity_id)) {
+      record.entity_id = entry.entity_id;
+    }
+
+    const { error: insErr } = await supabase.from("audit_log").insert(record);
+    if (insErr) {
+      console.error("[Agent SRE] Failed to insert audit log:", insErr);
+    }
+  } catch (err) {
+    console.error("[Agent SRE] Failed to insert audit log:", err);
+  }
+}
+
+serve(async (req) => {
+  try {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+      return new Response(JSON.stringify({ error: "Missing Supabase configuration" }), { status: 500 });
+    }
+
+    const authHeader = req.headers.get("Authorization");
+    const cronSecretHeader = req.headers.get("x-cron-secret");
+    const isAuthorized =
+      authHeader === `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` ||
+      (cronSecretHeader && CRON_SECRET && cronSecretHeader === CRON_SECRET);
+
+    if (!isAuthorized) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
+    }
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    let payload: any = {};
+    try {
+      const text = await req.text();
+      if (text && text.trim().length > 0) {
+        payload = JSON.parse(text);
+      }
+    } catch (_) {}
+
+    // --- GLOBAL ABORT EMERGENCY CIRCUIT BREAKER ---
+    if (payload.action === "GLOBAL_ABORT") {
+      console.log("🚨 [Agent SRE] GLOBAL_ABORT Triggered!");
+      await supabase.from("system_settings").update({ value: "false" }).eq("key", "auto_trading_enabled");
+      await supabase.from("user_risk_settings").update({ auto_trade_enabled: false }).neq("user_id", "dummy");
+      const tgMessage = `🚨 <b>BLACK SWAN / GLOBAL ABORT TRIGGERED</b> 🚨\n\nAuto-trading has been <b>PAUSED</b> globally across all PAMM accounts.\n\n⚠️ <i>Manual Assessment Required:</i> Administrator must log in and manually assess/close all active exposure!`;
+      await notifyTelegram(tgMessage);
+      await insertAudit(supabase, {
+        action: "KILL_SWITCH_TRIGGERED",
+        payload_json: { reason: "External GLOBAL_ABORT payload received by agent-sre" }
+      });
+      return new Response(JSON.stringify({ status: "success", message: "Global abort triggered. Auto-trading paused." }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const now = new Date();
+    const oneHourAgoIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const issues: string[] = [];
+    const autoRemediations: string[] = [];
+
+    // ─────────────────────────────────────────────────────────────
+    // PROBE 1: Background Cron Failures (check_cron_failures RPC)
+    // ─────────────────────────────────────────────────────────────
+    let cronFailuresCount = 0;
+    const { data: cronFailures, error: cronRpcError } = await supabase.rpc("check_cron_failures");
+    if (cronRpcError) {
+      issues.push(`⚠️ <b>Cron Health RPC Error:</b> ${cronRpcError.message}`);
+    } else if (cronFailures && cronFailures.length > 0) {
+      cronFailuresCount = cronFailures.length;
+      const grouped: Record<string, number> = {};
+      let sampleMsg = "";
+      for (const cf of cronFailures) {
+        grouped[cf.jobname] = (grouped[cf.jobname] || 0) + 1;
+        if (!sampleMsg) sampleMsg = cf.return_message;
+      }
+      const desc = Object.entries(grouped).map(([j, c]) => `• <code>${j}</code>: ${c} failures`).join("\n");
+      issues.push(`🚨 <b>Cron Jobs Failed (${cronFailuresCount} in last hour):</b>\n${desc}\n<i>Sample:</i> <code>${(sampleMsg || "").slice(0, 200)}</code>`);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // PROBE 2: Database Webhook & HTTP Response Errors
+    // ─────────────────────────────────────────────────────────────
+    const { data: httpErrors, error: httpFetchError } = await supabase
+      .from("net._http_response")
+      .select("id, status_code, error_msg, created")
+      .or(`status_code.gte.400,error_msg.not.is.null`)
+      .gte("created", oneHourAgoIso)
+      .limit(10);
+
+    if (!httpFetchError && httpErrors && httpErrors.length > 0) {
+      issues.push(`⚠️ <b>HTTP / Webhook Errors (${httpErrors.length} in last hour):</b> Status ${httpErrors[0].status_code || "ERR"}: ${httpErrors[0].error_msg || "HTTP Error"}`);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // PROBE 3: Edge Function Agent Crashes
+    // ─────────────────────────────────────────────────────────────
+    const { data: agentCrashes, error: crashError } = await supabase
+      .from("audit_log")
+      .select("id, payload_json, created_at")
+      .eq("action", "AGENT_CRASH")
+      .gte("created_at", oneHourAgoIso);
+
+    if (!crashError && agentCrashes && agentCrashes.length > 0) {
+      issues.push(`🚨 <b>Agent Crashes (${agentCrashes.length} in last hour):</b> Action AGENT_CRASH logged in audit_log.`);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // PROBE 4: Pipeline Integrity & Autonomous Self-Healing
+    // ─────────────────────────────────────────────────────────────
+
+    // 4A. Orphaned PUBLISHED Signals (> 5 mins)
+    const fiveMinsAgoIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const { data: orphanedPublished } = await supabase
+      .from("trade_opportunities")
+      .select("id, symbol, side, created_at")
+      .eq("status", "PUBLISHED")
+      .lte("created_at", fiveMinsAgoIso);
+
+    if (orphanedPublished && orphanedPublished.length > 0) {
+      issues.push(`⚠️ <b>Orphaned PUBLISHED Signals:</b> ${orphanedPublished.length} signals stuck in evaluation.`);
+    }
+
+    // 4B. Orphaned APPROVED Signals (Missing user_trades > 5 mins)
+    const { data: approvedOpps } = await supabase
+      .from("trade_opportunities")
+      .select("id, symbol, side, created_at")
+      .eq("status", "APPROVED")
+      .lte("created_at", fiveMinsAgoIso);
+
+    if (approvedOpps && approvedOpps.length > 0) {
+      for (const opp of approvedOpps) {
+        const { data: legs } = await supabase.from("user_trades").select("id").eq("opportunity_id", opp.id);
+        if (!legs || legs.length === 0) {
+          issues.push(`⚠️ <b>Orphaned APPROVED Signal:</b> ${opp.symbol} (${opp.id}) has no user_trades legs.`);
+        }
+      }
+    }
+
+    // 4C. Auto-Healing: Desynced Closed Trades (status = 'OPEN' with profit_usd IS NOT NULL)
+    const { data: desyncedTrades } = await supabase
+      .from("user_trades")
+      .select("id, symbol, profit_usd")
+      .eq("status", "OPEN")
+      .not("profit_usd", "is", null);
+
+    if (desyncedTrades && desyncedTrades.length > 0) {
+      for (const dt of desyncedTrades) {
+        const targetStatus = Number(dt.profit_usd) > 0 ? "WON" : "LOST";
+        await supabase.from("user_trades").update({ status: targetStatus }).eq("id", dt.id);
+        autoRemediations.push(`Reconciled desynced trade ${dt.symbol} (${dt.id}) to ${targetStatus} ($${dt.profit_usd})`);
+      }
+    }
+
+    // 4D. Auto-Healing: Stale Unfilled Orders (> 48h old with open_price IS NULL)
+    const fortyEightHoursAgoIso = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    const { data: staleUnfilled } = await supabase
+      .from("user_trades")
+      .select("id, symbol, side, opportunity_id, created_at")
+      .in("status", ["OPEN", "PENDING", "VPS_PENDING"])
+      .is("open_price", null)
+      .lte("created_at", fortyEightHoursAgoIso);
+
+    if (staleUnfilled && staleUnfilled.length > 0) {
+      for (const su of staleUnfilled) {
+        await supabase.from("user_trades").update({
+          status: "CLOSED",
+          error_message: "Order cancelled (Stale unfilled pending order > 48h by agent-sre)",
+          closed_at: now.toISOString()
+        }).eq("id", su.id);
+
+        if (su.opportunity_id) {
+          await supabase.from("trade_opportunities").update({
+            status: "EXPIRED",
+            r_multiple: 0,
+            closed_at: now.toISOString()
+          }).eq("id", su.opportunity_id).in("status", ["ACTIVE", "APPROVED"]);
+        }
+        autoRemediations.push(`Cancelled stale unfilled order ${su.symbol} ${su.side} (${su.id})`);
+      }
+    }
+
+    // 4E. Auto-Healing: Unreconciled Completed Opportunities (ACTIVE with 0 remaining open trades)
+    const twentyFourHoursAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: activeOpps } = await supabase
+      .from("trade_opportunities")
+      .select("id, symbol, created_at")
+      .in("status", ["ACTIVE", "APPROVED"])
+      .lte("created_at", twentyFourHoursAgoIso);
+
+    if (activeOpps && activeOpps.length > 0) {
+      for (const opp of activeOpps) {
+        const { data: openLegs } = await supabase
+          .from("user_trades")
+          .select("id")
+          .eq("opportunity_id", opp.id)
+          .in("status", ["OPEN", "PENDING", "VPS_PENDING", "VPS_PROCESSING"]);
+
+        if (!openLegs || openLegs.length === 0) {
+          await supabase.from("trade_opportunities").update({
+            status: "EXPIRED",
+            r_multiple: 0,
+            closed_at: now.toISOString()
+          }).eq("id", opp.id);
+          autoRemediations.push(`Expired completed opportunity ${opp.symbol} (${opp.id}) with 0 open trades`);
+        }
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // PROBE 5: MT5 VPS EA Heartbeat & Connectivity
+    // ─────────────────────────────────────────────────────────────
+    let vpsMinsAgo: number | null = null;
+    let isVpsAlive = false;
+    const { data: vpsRisk } = await supabase
+      .from("user_risk_settings")
+      .select("vps_last_heartbeat, is_live_execution_enabled")
+      .eq("is_master_account", true)
+      .single();
+
+    if (vpsRisk?.vps_last_heartbeat) {
+      const hbTime = new Date(vpsRisk.vps_last_heartbeat).getTime();
+      vpsMinsAgo = Math.max(0, (Date.now() - hbTime) / 60000);
+      isVpsAlive = vpsMinsAgo <= 1.0;
+      if (vpsMinsAgo > 3.0 && vpsRisk.is_live_execution_enabled) {
+        issues.push(`🔴 <b>MT5 VPS Bridge Disconnected:</b> Last heartbeat was ${vpsMinsAgo.toFixed(1)} mins ago.`);
+      }
+    } else {
+      issues.push(`⚠️ <b>MT5 VPS Bridge:</b> No heartbeat timestamp found for master account.`);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // PROBE 6: Market Data Freshness (market_data_pti)
+    // ─────────────────────────────────────────────────────────────
+    const { data: ptiCandles } = await supabase
+      .from("market_data_pti")
+      .select("symbol, timeframe, ts")
+      .eq("timeframe", "30m")
+      .order("ts", { ascending: false })
+      .limit(20);
+
+    const latestTs = ptiCandles?.[0]?.ts ? new Date(ptiCandles[0].ts).getTime() : 0;
+    const candleHoursAgo = latestTs > 0 ? (Date.now() - latestTs) / (1000 * 60 * 60) : null;
+    if (candleHoursAgo !== null && candleHoursAgo > 3.0) {
+      // Check day of week (0 = Sunday, 6 = Saturday)
+      const day = now.getUTCDay();
+      const isWeekend = day === 6 || (day === 0 && now.getUTCHours() < 21);
+      if (!isWeekend) {
+        issues.push(`⚠️ <b>Market Data Stale:</b> Latest 30m candle is ${candleHoursAgo.toFixed(1)}h old.`);
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // PROBE 7: Treasury Solvency
+    // ─────────────────────────────────────────────────────────────
+    const { data: treasurySetting } = await supabase
+      .from("system_settings")
+      .select("value")
+      .eq("key", "treasury_status")
+      .single();
+
+    let solvencyRatio = 1.0;
+    let isSolvent = true;
+    if (treasurySetting?.value) {
+      const val = typeof treasurySetting.value === "string" ? JSON.parse(treasurySetting.value) : treasurySetting.value;
+      solvencyRatio = Number(val.solvency_ratio || 1.0);
+      isSolvent = val.is_solvent !== false && solvencyRatio >= 1.0;
+      if (!isSolvent) {
+        issues.push(`🚨 <b>Treasury Insolvent:</b> Solvency ratio is ${solvencyRatio.toFixed(2)} (< 1.0).`);
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // TELEMETRY SUMMARY & INCIDENT ALERTING
+    // ─────────────────────────────────────────────────────────────
+    const isHealthy = issues.length === 0;
+    const reportPayload = {
+      timestamp: now.toISOString(),
+      is_healthy: isHealthy,
+      cron_failures: cronFailuresCount,
+      vps_latency_mins: vpsMinsAgo,
+      solvency_ratio: solvencyRatio,
+      market_data_latency_hours: candleHoursAgo,
+      issues_count: issues.length,
+      issues,
+      remediations_count: autoRemediations.length,
+      autoRemediations,
+    };
+
+    // 1. Insert Audit Log Heartbeat
+    await insertAudit(supabase, {
+      action: isHealthy ? "SRE_HEARTBEAT" : "SRE_HEALTH_ALERT",
+      payload_json: reportPayload,
+    });
+
+    if (autoRemediations.length > 0) {
+      await insertAudit(supabase, {
+        action: "SRE_AUTO_REMEDIATION",
+        payload_json: { remediations: autoRemediations },
+      });
+    }
+
+    // 2. Dispatch Telegram Incident Notification if issues or remediations occurred
+    if (!isHealthy || autoRemediations.length > 0) {
+      const tgLines = [
+        `🤖 <b>AGENT SRE — SYSTEM HEALTH REPORT</b>`,
+        `⏱ <i>${now.toUTCString()}</i>`,
+        ``,
+        isHealthy ? `🟢 <b>Status:</b> Healthy (Self-Healing Executed)` : `🔴 <b>Status:</b> Anomalies Detected (${issues.length})`,
+        ``,
+      ];
+
+      if (issues.length > 0) {
+        tgLines.push(`<b>Issues Detected:</b>`);
+        tgLines.push(...issues);
+        tgLines.push(``);
+      }
+
+      if (autoRemediations.length > 0) {
+        tgLines.push(`<b>Autonomous Remediations Applied:</b>`);
+        for (const rem of autoRemediations) {
+          tgLines.push(`• ✅ <i>${rem}</i>`);
+        }
+        tgLines.push(``);
+      }
+
+      tgLines.push(`<b>System Telemetry:</b>`);
+      tgLines.push(`• VPS Latency: <code>${vpsMinsAgo !== null ? `${vpsMinsAgo.toFixed(1)}m` : "N/A"}</code>`);
+      tgLines.push(`• Treasury Solvency: <code>${solvencyRatio.toFixed(2)}x</code>`);
+      tgLines.push(`• Candle Latency: <code>${candleHoursAgo !== null ? `${candleHoursAgo.toFixed(1)}h` : "N/A"}</code>`);
+
+      await notifyTelegram(tgLines.join("\n"));
+    }
+
+    console.log(`[Agent SRE] Execution complete. Healthy: ${isHealthy}. Issues: ${issues.length}. Remediations: ${autoRemediations.length}.`);
+
+    return new Response(JSON.stringify(reportPayload), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (error: any) {
+    console.error("[Agent SRE] Unhandled exception:", error);
+    await notifyTelegram(`🚨 <b>AGENT SRE CRASH:</b> <code>${error.message}</code>`);
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+});
