@@ -35,10 +35,10 @@ SELECT cron.schedule(
   $$
 );
 
--- 2. Crypto: 24/7 coverage with updates every 4 hours (6x/day) + 30m intraday
+-- 2. Crypto: 24/7 coverage with 8 updates per day (every 3 hours) + 30m intraday
 SELECT cron.schedule(
   'agent-swing-crypto',
-  '2 */4 * * *',
+  '2 */3 * * *',
   $$
     SELECT net.http_post(
       url := 'https://ktezlusdkqlfdwqrldtn.supabase.co/functions/v1/agent-swing',
