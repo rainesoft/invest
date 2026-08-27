@@ -3,9 +3,10 @@
 //|                                                      RaineInvest |
 //|                                     https://www.raineinvest.com/ |
 //+------------------------------------------------------------------+
-#property copyright "RaineInvest"
-#property link      "https://www.raineinvest.com/"
-#property version   "1.00"
+#property copyright   "RaineInvest"
+#property link        "https://www.raineinvest.com/"
+#property version     "1.00"
+#property description "RaineInvest Autonomous Institutional VPS Trading Bridge"
 
 // --- HARDCODED MASTER NODE CONFIGURATION ---
 string InpSupabaseURL = "https://ktezlusdkqlfdwqrldtn.supabase.co"; 
@@ -53,7 +54,7 @@ void RecoverActiveTickets()
    for(int i=0; i<PositionsTotal(); i++)
      {
       ulong ticket = PositionGetTicket(i);
-      if(PositionGetString(POSITION_COMMENT) == "RaineInvest AI" || PositionGetString(POSITION_COMMENT) == "RaineBank AI" || PositionGetInteger(POSITION_MAGIC) == 410673)
+      if(PositionGetString(POSITION_COMMENT) == "RaineInvest AI" || PositionGetString(POSITION_COMMENT) == "RaineInvest AI" || PositionGetInteger(POSITION_MAGIC) == 410673)
         {
          int size = ArraySize(activeTickets);
          ArrayResize(activeTickets, size+1);
@@ -63,7 +64,7 @@ void RecoverActiveTickets()
    for(int i=0; i<OrdersTotal(); i++)
      {
       ulong ticket = OrderGetTicket(i);
-      if(OrderGetString(ORDER_COMMENT) == "RaineInvest AI" || OrderGetString(ORDER_COMMENT) == "RaineBank AI" || OrderGetInteger(ORDER_MAGIC) == 410673)
+      if(OrderGetString(ORDER_COMMENT) == "RaineInvest AI" || OrderGetString(ORDER_COMMENT) == "RaineInvest AI" || OrderGetInteger(ORDER_MAGIC) == 410673)
         {
          int size = ArraySize(activeTickets);
          ArrayResize(activeTickets, size+1);
@@ -308,14 +309,13 @@ void ProcessTrades(string data)
          string orderType = parts[8];
          string action = parts[9];
          long ticket = StringToInteger(parts[10]);
-         
-         if (action == "EXECUTE") 
+      if (action == "EXECUTE") 
            {
             ExecuteTrade(id, symbol, side, volume, sl, tp, entryPrice, orderType);
            }
          else if (action == "MODIFY" && ticket > 0)
            {
-            ModifyTrade(ticket, sl, tp);
+            ModifyTrade(ticket, sl, tp, entryPrice);
            }
          else if (action == "CLOSE" && ticket > 0)
            {
@@ -326,9 +326,9 @@ void ProcessTrades(string data)
   }
 
 //+------------------------------------------------------------------+
-//| Modify Trade (Trailing Stop / TP Update)                         |
+//| Modify Trade (Positions & Pending Orders: SL/TP & Limit Price)   |
 //+------------------------------------------------------------------+
-void ModifyTrade(long ticket, double newSl, double newTp)
+void ModifyTrade(long ticket, double newSl, double newTp, double newEntryPrice = 0.0)
   {
    if(PositionSelectByTicket(ticket))
      {
@@ -366,11 +366,48 @@ void ModifyTrade(long ticket, double newSl, double newTp)
            }
         }
      }
+   else if(OrderSelect(ticket))
+     {
+      string symbol = OrderGetString(ORDER_SYMBOL);
+      int symDigits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+      
+      double currentPrice = NormalizeDouble(OrderGetDouble(ORDER_PRICE_OPEN), symDigits);
+      double currentSl = NormalizeDouble(OrderGetDouble(ORDER_SL), symDigits);
+      double currentTp = NormalizeDouble(OrderGetDouble(ORDER_TP), symDigits);
+      
+      double normNewPrice = (newEntryPrice > 0) ? NormalizeDouble(newEntryPrice, symDigits) : currentPrice;
+      double normNewSl = (newSl > 0) ? NormalizeDouble(newSl, symDigits) : currentSl;
+      double normNewTp = (newTp > 0) ? NormalizeDouble(newTp, symDigits) : currentTp;
+      
+      if (currentPrice != normNewPrice || currentSl != normNewSl || currentTp != normNewTp)
+        {
+         MqlTradeRequest request;
+         MqlTradeResult  result;
+         ZeroMemory(request);
+         ZeroMemory(result);
+         
+         request.action = TRADE_ACTION_MODIFY;
+         request.order = ticket;
+         request.symbol = symbol;
+         request.price = normNewPrice;
+         request.sl = normNewSl;
+         request.tp = normNewTp;
+         request.magic = 410673;
+         
+         if(OrderSend(request, result))
+           {
+            Print("Modified Pending Order ", ticket, " Price: ", request.price, " SL: ", request.sl, " TP: ", request.tp);
+           }
+         else
+           {
+            Print("Failed to modify pending order ", ticket, " Retcode: ", result.retcode, " Error: ", GetLastError());
+           }
+        }
+     }
   }
 
 //+------------------------------------------------------------------+
 //| Close Trade (Positions and Pending Orders)                       |
-//+------------------------------------------------------------------+
 void CloseTrade(string id, long ticket)
   {
    MqlTradeRequest request;
