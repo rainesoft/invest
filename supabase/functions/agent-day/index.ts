@@ -5,7 +5,7 @@ import { sma, rsi, detectRegime } from "../../../packages/strategy/index.ts";
 import { insertAuditLog } from "../../../packages/core/audit.ts";
 import { isMarketOpen } from "../../../packages/core/market.ts";
 import { netEdge, transactionCost, slippage } from "../../../packages/strategy/index.ts";
-import { getContextSnapshot, LogicContext, calculatePivotPoints, computeLiquiditySweepScore } from "../../../packages/strategy/indicators.ts";
+import { getContextSnapshot, LogicContext, calculatePivotPoints, computeLiquiditySweepScore, calculateInstitutionalTradingCentralLevels } from "../../../packages/strategy/indicators.ts";
 import { validateGlobalSignal } from "../../../packages/strategy/agent-risk.ts";
 import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews, detectCentralBankEvent, detectUpcomingFedEvent, computeMacroConfidenceBoost, fetchETFFlowSentiment } from "../../../packages/core/news.ts";
 import { isAutoTradingEnabled } from "../../../packages/core/settings.ts";
@@ -154,6 +154,13 @@ CRITICAL RULES:
 13. SESSION KILLZONES & ASIAN RANGE SWEEPS:
     - If asian_sweep === 'SWEPT_HIGH' during London or NY Open Killzone, evaluate an 'ASIAN_RANGE_SWEEP' short reversal targeting Asian Low / VAL.
     - If asian_sweep === 'SWEPT_LOW', evaluate an 'ASIAN_RANGE_SWEEP' long reversal targeting Asian High / VAH.
+14. RSI DIVERGENCES & UNFILLED PRICE GAPS (TRADING CENTRAL METHODOLOGY):
+    - If snapshot.rsi_divergence is 'REGULAR_BULLISH' or 'REGULAR_BEARISH', treat it as institutional exhaustion / reversal confirmation (+10 confidence).
+    - If snapshot.rsi_divergence is 'HIDDEN_BULLISH' or 'HIDDEN_BEARISH', treat it as trend continuation confirmation (+5 confidence).
+    - If snapshot.has_unfilled_gap is true, prioritize the unfilled gap level (snapshot.unfilled_gap_target) as a primary institutional liquidity magnet (Target 1).
+15. 20-BAR ANTICIPATION HORIZON & TIME-TO-LIVE (TTL):
+    - All 30m intraday setups are strictly valid for a maximum horizon of 20 periods (10 hours).
+    - If current market price gives R:R < 1.70 to Target 2, do NOT reject: calculate a pullback Limit Order at the nearest structural level to enforce an institutional >= 1:1.75 R:R.
 
 Historical Memory:
 ${historicalMemory || "None"}
@@ -1325,6 +1332,17 @@ serve(async (req) => {
               }
             }
 
+            const tp1 = evaluation.execution_parameters?.take_profit_1 || Number((entry_price + (take_profit - entry_price) * 0.5).toFixed(5));
+            const tp2 = take_profit;
+            const tcLevels = calculateInstitutionalTradingCentralLevels(
+              snapshot.current_price,
+              stop_loss,
+              tp1,
+              tp2,
+              dbSide as "LONG" | "SHORT",
+              1.70
+            );
+
             const { data, error } = await supabase
               .from("trade_opportunities")
               .insert({
@@ -1336,11 +1354,14 @@ serve(async (req) => {
                 entry_plan_json: {
                   price: entry_price,
                   order_type: order_type,
-                  scaled_entries: evaluation.execution_parameters?.scaled_entries || null
+                  scaled_entries: evaluation.execution_parameters?.scaled_entries || null,
+                  max_holding_bars: 20,
+                  horizon_hours: 10,
+                  trading_central_levels: tcLevels,
                 },
                 stop_plan_json: { stop: stop_loss, initial: stop_loss, atr: snapshot.atr_14 },
-                take_profit_json: { tp: take_profit },
-                risk_summary: `RSI ${snapshot.rsi_14}`,
+                take_profit_json: { tp: take_profit, tp1, tp2 },
+                risk_summary: `RSI ${snapshot.rsi_14}${snapshot.rsi_divergence && snapshot.rsi_divergence !== 'NONE' ? ` | Div: ${snapshot.rsi_divergence}` : ''}`,
                 confidence: confidence_score,
                 ai_summary: institutional_rationale,
                 ai_risks: "Managed by AI Risk Officer",
@@ -1360,11 +1381,27 @@ serve(async (req) => {
               // Clean up any active sniper watchlists for this symbol to prevent duplicate execution
               await supabase.from("trade_watchlists").update({ status: 'CANCELLED' }).eq('symbol', symbol).eq('status', 'WATCHING');
               
-              // order_type is now pre-calculated and saved to the database!
-
-              // Execution is now entirely delegated to the exness-executor webhook, 
-              // which automatically listens for INSERTs with status: 'APPROVED'.
-
+              // Upsert bifurcated scenario tree into market_context (Trading Central standard)
+              await supabase
+                .from("market_context")
+                .upsert({
+                  symbol,
+                  agent_persona: "INTRADAY_TRADER",
+                  macro_bias: dbSide === "LONG" ? "BULLISH" : "BEARISH",
+                  invalidation_price: stop_loss,
+                  narrative: `[Intraday Trade: ${dbSide} (Conf: ${confidence_score}%)] Entry: $${entry_price} | Pivot/SL: $${stop_loss} | TP: $${take_profit}. ${institutional_rationale}`,
+                  key_levels: {
+                    pivot_point: stop_loss,
+                    preferred_scenario: {
+                      direction: dbSide,
+                      entry: entry_price,
+                      targets: [tp1, tp2],
+                      invalidation: stop_loss,
+                    },
+                    alternative_scenario: tcLevels.alternative_scenario,
+                  },
+                  expires_at: new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString(),
+                }, { onConflict: "symbol,agent_persona" });
 
               results.push({ 
                 symbol, 
@@ -1380,7 +1417,7 @@ serve(async (req) => {
                 action: "TRADE_SIGNAL_APPROVED",
                 entity_type: "research",
                 entity_id: data.id,
-                payload_json: { symbol, rationale: institutional_rationale, execution: { order_type, entry_price, stop_loss, take_profit } },
+                payload_json: { symbol, rationale: institutional_rationale, execution: { order_type, entry_price, stop_loss, take_profit, max_holding_bars: 20 } },
               });
             } else if (error) {
               console.error(`[Layer C: Execution Desk] FATAL DB ERROR for ${symbol}: ${error.message}`);
