@@ -45,23 +45,29 @@ In addition to Engulfing, Morning/Evening Stars, and Rejection Pinbars, our reco
 ### 4. Opening & Weekend Price Gaps (`detectPriceGaps`)
 Identifies unfilled Weekend and Session Opening Gaps ($\ge 0.15\%$). Unfilled gaps serve as high-probability institutional liquidity magnets and primary Take Profit targets (TP1).
 
-### 5. Institutional Risk/Reward Standard ($\ge 1:1.70$ on Target 2)
+### 5. 3-Point Fibonacci Projections & Retracements (`calculateFibonacciProjections`)
+In addition to 2-point Fibonacci Retracements ($23.6\% - 78.6\%$) and 2-point Extensions ($127.2\% - 261.8\%$), our engine computes **3-point Fibonacci Expansions/Projections** ($\text{Swing A} \rightarrow \text{Swing B} \text{ projected from Retracement Point C}$):
+$$\text{Bullish Target} = C + \text{Ratio} \times (B - A)$$
+$$\text{Bearish Target} = C - \text{Ratio} \times (A - B)$$
+Ratios evaluated: $61.8\%$, $100.0\%$ (Measured Move / Wave C equality), $127.2\%$, $161.8\%$ (Extended Wave 3), $200.0\%$, and $261.8\%$.
+
+### 6. Institutional Risk/Reward Standard ($\ge 1:1.70$ on Target 2)
 - All setups require a minimum **$1:1.70$ Risk/Reward ratio calculated against Target 2 (TP2)**.
 - **Adaptive Limit Entry Optimizer:** If current market price yields $\text{R:R} < 1.70$, the agents do not discard the trade. Instead, they mathematically solve for the exact pullback Limit Order entry:
   $$\text{Entry} = \frac{\text{TP2} + 1.75 \times \text{Pivot}}{2.75}$$
 
-### 6. Bar-Close Invalidation & Dual-Layer Stop Protection
+### 7. Bar-Close Invalidation & Dual-Layer Stop Protection
 - **Bar-Close Stop Loss:** Invalidation is governed at the confirmed CLOSE of a candle (30m for `agent-day`, 1D for `agent-swing`). Intra-bar wicks are permitted to sweep liquidity without prematurely invalidating the thesis.
 - **Catastrophic Emergency Stop:** A hard MT5 broker-side stop ($2.0\times$ ATR behind the Pivot) safeguards the account against black swan gap events.
 
-### 7. 20-Period Anticipation Horizon (Time-to-Live Engine)
+### 8. 20-Period Anticipation Horizon (Time-to-Live Engine)
 Technical setups maintain peak predictive power up to **20 periods**:
 - **Intraday (30m):** Horizon = $20 \times 30\text{m} = \mathbf{10\text{ Hours}}$.
 - **Daily Swing (1D):** Horizon = $20 \times 1\text{D} = \mathbf{20\text{ Trading Days (480 Hours)}}$.
 - Limit orders unfilled after 20 bars are automatically expired. Active positions stagnant after 20 bars are tightened to Breakeven.
 
-### 8. Bifurcated Scenario Modeling
-Every analysis populates `market_context` with both the **Preferred Scenario** and the **Contingent Alternative Scenario** (the reversal trigger condition and downside targets if a bar closes beyond the Pivot Point).
+### 9. Bifurcated Contingent Alternative Scenario Auto-Execution
+Every analysis populates `market_context` with both the **Preferred Scenario** and the **Contingent Alternative Scenario**. If a trade experiences a confirmed candle close beyond the Pivot Point, [`agent-trade`](file:///Users/quagrained/workspace/raine/invest/supabase/functions/agent-trade) immediately closes the position and autonomously stages the inverted Alternative Scenario trade with zero execution lag.
 
 ---
 

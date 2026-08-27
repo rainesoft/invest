@@ -66,15 +66,20 @@ async function run() {
   // 1. Run Event-Driven Macro News Scout
   await callAgent('agent-news');
 
-  // 2. Run Intraday M30 Scalper
+  // 2. Run Intraday M30 Scalper (24 Global Assets)
   await callAgent('agent-day', {
-    symbols: ["BTCUSD", "EURUSD", "GBPUSD", "USDJPY", "EURJPY", "GBPJPY", "AUDUSD", "NZDUSD", "AUDJPY", "CADJPY", "EURGBP", "XAUUSD", "XAGUSD", "UKOIL", "US30", "NAS100"]
+    symbols: [
+      "BTCUSD", "ETHUSD", "XAUUSD", "US30", "NAS100", "SPX500", "EURUSD", 
+      "GBPUSD", "AUDUSD", "USDCAD", "USDCHF", "UKOIL", "USOIL", "XAGUSD", 
+      "USDJPY", "GBPJPY", "EURJPY", "GER30", "JP225", "NVDA", "AAPL", "MSFT", "TSLA"
+    ]
   });
 
   // 3. Run Swing Trader in chunks to avoid 150s Edge Function timeouts
-  await callAgent('agent-swing', { symbols: ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "EURJPY", "GBPJPY", "AUDJPY", "CADJPY", "EURGBP"] });
-  await callAgent('agent-swing', { symbols: ["BTCUSD"] });
-  await callAgent('agent-swing', { symbols: ["US30", "NAS100", "XAUUSD", "XAGUSD", "UKOIL"] });
+  await callAgent('agent-swing', { symbols: ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "EURJPY", "GBPJPY"] });
+  await callAgent('agent-swing', { symbols: ["BTCUSD", "ETHUSD"] });
+  await callAgent('agent-swing', { symbols: ["US30", "NAS100", "SPX500", "GER30", "JP225", "XAUUSD", "XAGUSD", "UKOIL", "USOIL"] });
+  await callAgent('agent-swing', { symbols: ["NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META"] });
 
   // 4. Summarize Opportunities generated in this run
   console.log(`\n========================================`);
