@@ -8,7 +8,7 @@ import { isMarketOpen } from "../../../packages/core/market.ts";
 
 import { revalidateOpportunity } from "../../../packages/strategy/revalidation.ts";
 
-import { getContextSnapshot, LogicContext, isBullishEngulfing, isBearishRejection, computeHtfFibAlignment, calibrateProbability, computeLiquiditySweepScore } from "../../../packages/strategy/indicators.ts";
+import { getContextSnapshot, LogicContext, isBullishEngulfing, isBearishRejection, computeHtfFibAlignment, calibrateProbability, computeLiquiditySweepScore, calculateInstitutionalTradingCentralLevels } from "../../../packages/strategy/indicators.ts";
 import { validateGlobalSignal } from "../../../packages/strategy/agent-risk.ts";
 import OpenAI from "npm:openai";
 import { z } from "npm:zod";
@@ -325,7 +325,14 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
 13. SMART MONEY ORDER FLOW & VOLUME PROFILE CONFLUENCE:
     - HIGH-VOLUME NODES (HVN) & POC: An Order Block or Fibonacci level is 2x higher conviction if it aligns with the Point of Control (poc_price) or nearest High-Volume Node (nearest_hvn).
     - BREAKOUT VOLUME VALIDATION: S-Tier MACRO_MOMENTUM_BREAKOUT setups require expanding volume (volume_surge: true or volume_ratio >= 1.4). If breakout volume is ANEMIC (< 0.8x), reject the setup as a fakeout liquidity trap.
-    - VALUE AREA VALUE: Pullbacks to Value Area Low (val_price) in a Bullish Trend, or Value Area High (vah_price) in a Bearish Trend, provide asymmetric risk entries.`;
+    - VALUE AREA VALUE: Pullbacks to Value Area Low (val_price) in a Bullish Trend, or Value Area High (vah_price) in a Bearish Trend, provide asymmetric risk entries.
+14. RSI DIVERGENCES & UNFILLED GAPS (TRADING CENTRAL METHODOLOGY):
+    - If snapshot.rsi_divergence is 'REGULAR_BULLISH' or 'REGULAR_BEARISH', treat it as institutional macro reversal confirmation (+10 confidence).
+    - If snapshot.rsi_divergence is 'HIDDEN_BULLISH' or 'HIDDEN_BEARISH', treat it as trend continuation confirmation (+5 confidence).
+    - If snapshot.has_unfilled_gap is true, prioritize the unfilled gap level (snapshot.unfilled_gap_target) as an institutional magnetic target.
+15. 20-BAR SWING HORIZON & ASYMMETRIC R:R (TARGET 2 >= 1:1.70):
+    - Daily swing setups operate on a maximum horizon of 20 bars (20 trading days).
+    - Target 2 (TP2) is your primary benchmark for institutional R:R (minimum 1:1.70). If current price yields < 1.70 R:R, calculate an optimal pullback Limit Order at the nearest Fib level.`;
 
   console.log(`[Responses API] Submitting ${symbol} analysis...`);
   
@@ -1636,42 +1643,48 @@ serve(async (req) => {
             return;
           }
 
-          const rrToTp2 = Math.abs(tp2 - entry) / Math.abs(entry - sl);
-          let requiredRR = 1.5;
-          if (["XAGUSD", "UKOIL"].includes(symbol)) {
-            requiredRR = confidence >= 95 ? 0.75 : 1.0; // Lower threshold due to high volatility and wider stops
-          } else if (tier === "S-Tier" || tier === "A-Tier") {
-            if (confidence >= 90) {
-              const isHighlyLiquid = ["EURUSD", "USDJPY", "BTCUSD"].includes(symbol);
-              requiredRR = isHighlyLiquid ? 0.5 : 0.8; // Relaxed for extremely high conviction setups on liquid pairs
-            }
-            else if (confidence >= 80) requiredRR = 1.0;
-          }
+          const tcLevels = calculateInstitutionalTradingCentralLevels(
+            currentPrice,
+            sl,
+            tp1,
+            tp2,
+            isLong ? "LONG" : "SHORT",
+            1.70
+          );
 
           if (rrToTp2 < requiredRR - 0.1) {
-            const msg = `R:R to TP2 is 1:${rrToTp2.toFixed(2)}, below required 1:${requiredRR} for ${tier}`;
-            sendEvent({ type: "progress", message: `[${symbol}] REJECTED: ${msg}` });
-            const rejectedObj = {
-              symbol,
-              side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
-              timeframe: timeframe.toLowerCase(),
-              status: "REJECTED",
-              source: "agent-swing",
-              entry_plan_json: { price: entry, order_type, scaled_entries: null },
-              stop_plan_json: { stop: sl, initial: sl, atr: snapshot.atr_14 },
-              take_profit_json: { tp: tp2, tp1, tp2, tp3 },
-              ai_summary: `[SWING][${tier}] ${safeRationale}`,
-              ai_risks: `Rejected by Swing Desk: ${msg}`,
-              confidence: adjustedConfidence,
-              trace_id: traceId,
-            };
-            if (pendingNewsId) {
-              await supabase.from("trade_opportunities").update(rejectedObj).eq("id", pendingNewsId);
+            // Adaptive Trading Central Limit Entry Optimization:
+            const isReachable = Math.abs(tcLevels.suggested_entry_price - currentPrice) <= ((snapshot.atr_14 || Math.abs(currentPrice - sl)) * 2.5);
+            if ((tier === "S-Tier" || tier === "A-Tier" || confidence >= 80) && isReachable) {
+              entry = tcLevels.suggested_entry_price;
+              order_type = isLong ? "BUY LIMIT" : "SELL LIMIT";
+              evaluation.execution_parameters.suggested_entry_price = entry;
+              safeRationale += ` [Trading Central Limit Optimizer: Adjusted entry to pullback limit @ $${entry} to enforce institutional 1:1.75 R:R to TP2]`;
             } else {
-              await supabase.from("trade_opportunities").insert(rejectedObj);
+              const msg = `R:R to TP2 is 1:${rrToTp2.toFixed(2)}, below required 1:${requiredRR} for ${tier}`;
+              sendEvent({ type: "progress", message: `[${symbol}] REJECTED: ${msg}` });
+              const rejectedObj = {
+                symbol,
+                side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
+                timeframe: timeframe.toLowerCase(),
+                status: "REJECTED",
+                source: "agent-swing",
+                entry_plan_json: { price: entry, order_type, scaled_entries: null, max_holding_bars: 20, horizon_days: 20 },
+                stop_plan_json: { stop: sl, initial: sl, atr: snapshot.atr_14 },
+                take_profit_json: { tp: tp2, tp1, tp2, tp3 },
+                ai_summary: `[SWING][${tier}] ${safeRationale}`,
+                ai_risks: `Rejected by Swing Desk: ${msg}`,
+                confidence: adjustedConfidence,
+                trace_id: traceId,
+              };
+              if (pendingNewsId) {
+                await supabase.from("trade_opportunities").update(rejectedObj).eq("id", pendingNewsId);
+              } else {
+                await supabase.from("trade_opportunities").insert(rejectedObj);
+              }
+              rejections.push({ symbol, reason: msg, layer: "Execution Desk" });
+              return;
             }
-            rejections.push({ symbol, reason: msg, layer: "Execution Desk" });
-            return;
           }
 
           // === APPROVED — SAVE TO DB ===
@@ -1698,6 +1711,9 @@ serve(async (req) => {
                 price: entry,
                 order_type,
                 scaled_entries: null,
+                max_holding_bars: 20,
+                horizon_days: 20,
+                trading_central_levels: tcLevels,
               },
               stop_plan_json: {
                 stop: sl,
@@ -1710,7 +1726,7 @@ serve(async (req) => {
                 tp2,
                 tp3,
               },
-              risk_summary: `RSI ${snapshot.rsi_14} | ATR ${snapshot.atr_14}`,
+              risk_summary: `RSI ${snapshot.rsi_14}${snapshot.rsi_divergence && snapshot.rsi_divergence !== 'NONE' ? ` | Div: ${snapshot.rsi_divergence}` : ''} | ATR ${snapshot.atr_14}`,
               confidence: adjustedConfidence,
               ai_summary: aiSummary,
               ai_risks: "Managed by agent-risk",
@@ -1747,6 +1763,35 @@ serve(async (req) => {
             type: "progress",
             message: `[${symbol}] ✅ SWING SIGNAL APPROVED — ${tier} | Entry: $${entry.toLocaleString()} | SL: $${sl.toLocaleString()} | TP2: $${tp2.toLocaleString()} | R:R 1:${rrToTp2.toFixed(1)}`,
           });
+
+          // Update market_context with the approved macro prime and bifurcated scenario tree
+          await supabase
+            .from("market_context")
+            .update({
+              invalidation_price: sl,
+              macro_bias: evaluation.recommended_direction === "LONG" ? "BULLISH"
+                        : evaluation.recommended_direction === "SHORT" ? "BEARISH" : "NEUTRAL",
+              narrative: `[Daily Macro Prime: ${evaluation.recommended_direction} (Conf: ${adjustedConfidence}%)] Entry: $${entry} | SL/Pivot: $${sl} | TP2: $${tp2}. ${safeRationale}`,
+              key_levels: {
+                fib_levels: fib.levels,
+                fib_extensions: fib.extensions,
+                swing_high: fib.swing_high,
+                swing_low: fib.swing_low,
+                nearest_fibs: nearestFibs,
+                direction: fib.direction,
+                pivot_point: sl,
+                preferred_scenario: {
+                  direction: evaluation.recommended_direction,
+                  entry,
+                  targets: [tp1, tp2, tp3].filter(Boolean),
+                  invalidation: sl,
+                },
+                alternative_scenario: tcLevels.alternative_scenario,
+              }
+            })
+            .eq("symbol", symbol)
+            .eq("agent_persona", "SWING_TRADER")
+            .gt("expires_at", new Date().toISOString());
 
           await insertAuditLog(supabase, {
             actor_type: "SYSTEM",
