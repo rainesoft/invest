@@ -147,7 +147,7 @@ WHERE t.status = 'ACTIVE'
   AND t.created_at < NOW() - INTERVAL '24 hours'
   AND NOT EXISTS (
     SELECT 1 FROM user_trades u
-    WHERE u.opportunity_id = t.id AND u.status = 'OPEN'
+    WHERE u.opportunity_id = t.id AND u.status IN ('OPEN', 'PENDING', 'VPS_PENDING', 'VPS_PROCESSING')
   )
 ORDER BY t.created_at ASC;
 
@@ -162,7 +162,7 @@ WHERE t.status IN ('ACTIVE', 'APPROVED')
   )
   AND NOT EXISTS (
     SELECT 1 FROM user_trades u
-    WHERE u.opportunity_id = t.id AND u.status IN ('OPEN', 'PENDING', 'VPS_PENDING')
+    WHERE u.opportunity_id = t.id AND u.status IN ('OPEN', 'PENDING', 'VPS_PENDING', 'VPS_PROCESSING')
   )
 ORDER BY t.created_at DESC;
 

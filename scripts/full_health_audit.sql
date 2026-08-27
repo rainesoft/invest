@@ -126,7 +126,7 @@ SELECT jsonb_pretty(jsonb_build_object(
       SELECT 'Stale ACTIVE (>24h, no open trades)' as issue_type, t.id, t.symbol, t.side, t.status, t.created_at
       FROM trade_opportunities t
       WHERE t.status = 'ACTIVE' AND t.created_at < NOW() - INTERVAL '24 hours'
-        AND NOT EXISTS (SELECT 1 FROM user_trades u WHERE u.opportunity_id = t.id AND u.status = 'OPEN')
+        AND NOT EXISTS (SELECT 1 FROM user_trades u WHERE u.opportunity_id = t.id AND u.status IN ('OPEN', 'PENDING', 'VPS_PENDING', 'VPS_PROCESSING'))
       UNION ALL
       SELECT 'Unreconciled Completed Opps' as issue_type, t.id, t.symbol, t.side, t.status, t.created_at
       FROM trade_opportunities t
