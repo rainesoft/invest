@@ -125,23 +125,28 @@ async function evaluateOpportunity(symbol: string, snapshot: LogicContext & { ag
 CRITICAL RULES:
 
 0. TOP-DOWN MACRO TIDE & ORDER OF OPERATIONS (CRITICAL PRIORITY):
-   - STEP 1 (HTF Macro Tide): Inspect snapshot.htf_trend, snapshot.htf_pivot, and snapshot.agent_context (Swing Trader context). If the Daily 1D trend is strongly BEARISH (e.g., Bearish Engulfing candle or price below Daily Pivot), you MUST NOT seek counter-trend Longs on 30m. Look strictly for Short continuation or Pullback Sell Limits at resistance. If Daily 1D trend is strongly BULLISH, look strictly for Longs or Pullback Buy Limits at support.
-   - STEP 2 (Intraday Pivot Regime): If Current Price > htf_pivot, your regime is BULLISH. If Current Price < htf_pivot, your regime is BEARISH.
-   - STEP 3 (Indicator Confluence): Check MACD (macd_line, macd_signal, macd_histogram) and moving averages (ema_20 and ema_50). If Regime is BEARISH, ensure MACD is negative and price is below MA 50 before shorting. If Regime is BULLISH, ensure MACD is positive and price is above MA 50 before longing.
+   - STEP 1 (HTF Macro Tide & Swing Priming): Inspect snapshot.htf_trend, snapshot.htf_pivot, and snapshot.agent_context (Swing Trader context). If snapshot.agent_context contains a Daily Swing prime or active Swing narrative, prioritize intraday pullbacks into those Daily Fibonacci/Order Block levels. If the Daily 1D trend is strongly BEARISH, look strictly for Short continuation or Pullback Sell Limits at resistance. If Daily 1D trend is strongly BULLISH, look strictly for Longs or Pullback Buy Limits at support.
+   - STEP 2 (Intraday Pivot Regime): If Current Price > htf_pivot, your default trend regime is BULLISH. If Current Price < htf_pivot, your default trend regime is BEARISH. If trend_alignment is 'CHOP' or ADX < 20, pivot directional bias transitions to RANGE-BOUND MEAN-REVERSION (Rule 9).
+   - STEP 3 (Indicator Confluence): Check MACD and moving averages (ema_20 and ema_50). For trend breakouts, ensure MACD agrees with direction. For Range Boundary Fades, MACD histogram exhaustion / divergence confirms the fade.
 
-1. PIVOT DIRECTIONAL BIAS: You are trading the 30-minute Intraday timeframe. You MUST align your direction with the Pivot Regime. Do NOT force a LONG trade if the price is below the Daily Pivot (htf_pivot), regardless of the 1D macro trend. If price breaks below the Pivot, it is a SHORT setup.
-2. TARGETS (ASYMMETRIC RISK): If originating a LONG trade, target the second liquidity pool (Resistance 2 or VWAP Upper 2) as your primary suggested_take_profit to ensure high R:R. If originating a SHORT trade, target Support 2 or VWAP Lower 2 as your primary take_profit.
-3. INVALIDATION (SAFE STOPS): Your stop loss MUST be placed safely outside the ATR buffer and behind major HTF structural pivots. Do NOT place overly tight stops just to maximize R:R. A safe stop with a 1.5+ R:R is far superior to a tight stop that gets hunted.
-4. CONFLICT RESOLUTION: If indicators are completely conflicting (e.g., Price > Pivot but MACD deeply negative and price < MA200), invoke 'reject_trade' to stay flat.
-5. NO MEAN REVERSION AGAINST PIVOT: Do not buy a dip if it breaks below the pivot. A break below the pivot is a trend reversal, not a pullback.
+1. PIVOT DIRECTIONAL BIAS & RANGE TRADING:
+   - For TREND-FOLLOWING setups: You MUST align direction with the Pivot Regime (Long only if Price > Pivot; Short only if Price < Pivot).
+   - For RANGE-BOUND / MEAN-REVERSION setups (Rule 9): You are explicitly authorized to fade the range boundaries (Long at Support 1 / Value Area Low with Target at POC/Pivot; Short at Resistance 1 / Value Area High with Target at POC/Pivot).
+2. TARGETS (ASYMMETRIC RISK): If originating a LONG trade, target the second liquidity pool (Resistance 2 or VWAP Upper 2) or POC/VAH for range trades to ensure high R:R (>= 1.5). If originating a SHORT trade, target Support 2 or VWAP Lower 2 or POC/VAL.
+3. INVALIDATION (SAFE STOPS): Your stop loss MUST be placed safely outside the ATR buffer (>= 1.0x ATR) and behind major HTF structural pivots/range wicks. Do NOT place overly tight stops just to maximize R:R. A safe stop with a 1.5+ R:R is far superior to a tight stop that gets hunted.
+4. CONFLICT RESOLUTION: If indicators are completely conflicting and neither a trend breakout nor a clear range boundary test is present, invoke 'reject_trade' to stay flat.
+5. PIVOT BREAKS: A sharp high-volume break through the pivot is a trend transition, not a pullback.
 6. REQUIRED PARAMETERS: You MUST provide a numeric suggested_entry_price, suggested_stop_loss, and suggested_take_profit for ANY trade setup. Do not return nulls for these fields.
-7. ASYMMETRIC R:R & ADAPTIVE LIMIT ORDERS (NEVER REJECT SOLELY FOR LOW R:R AT MARKET): If the market structure and directional bias are strong (A-Tier/S-Tier) but current market price is hovering near resistance/support (yielding R:R < 1.5 at market), DO NOT REJECT. Instead, calculate and issue a BUY LIMIT or SELL LIMIT at the nearest value area (50 EMA, Session VWAP, or Daily Pivot) to guarantee an institutional R:R >= 1.75.
+7. ASYMMETRIC R:R & ADAPTIVE LIMIT ORDERS (NEVER REJECT SOLELY FOR LOW R:R AT MARKET): If the market structure and directional bias are strong (A-Tier/S-Tier) but current market price is hovering near resistance/support (yielding R:R < 1.5 at market), DO NOT REJECT. Instead, calculate and issue a BUY LIMIT or SELL LIMIT at the nearest value area (50 EMA, Session VWAP, or Daily Pivot/Fibonacci zone) to guarantee an institutional R:R >= 1.75.
 8. HIGH-LEVERAGE ASSETS (VOLATILITY): Indices (US30, NAS100, GER30) and Metals (XAGUSD) have massive volatility wicks. You MUST use wider structural stops for these assets to survive normal market noise.
-9. REGIME-ADAPTIVE STRATEGY ROUTING:
-   - When volume_regime === 'ANEMIC' or volume_ratio < 0.8: MOMENTUM_BREAKOUT is strictly forbidden. You MUST evaluate MEAN_REVERSION, ASIAN_RANGE_SWEEP, BOUNDARY_REJECTION_SCALP, or limit orders at POC (poc_price) / VWAP.
-   - When ADX < 20 or trend_alignment is 'CHOP', you are EXPLICITLY AUTHORIZED to originate a MEAN_REVERSION or RANGE_BOUNDARY trade. Buy near Value Area Low (val_price) / Support with target at POC. Sell near Value Area High (vah_price) / Resistance with target at POC.
+9. REGIME-ADAPTIVE STRATEGY ROUTING (RANGE-BOUND MEAN-REVERSION PLAYBOOK):
+   - When trend_alignment is 'CHOP', ADX < 20, or volume_regime === 'ANEMIC': MOMENTUM_BREAKOUT is strictly forbidden. You MUST switch to the Institutional Range-Bound Playbook:
+     * RANGE LONG (Mean-Reversion): When price tests Support 1, Value Area Low (val_price), or sweeps Session Low with a rejection candle, originate a 'RANGE_BOUNDARY_FADE' or 'MEAN_REVERSION' BUY LIMIT/MARKET. Stop loss placed safely below the swing low wick (>= 1.0x ATR or below S1), Target 1 at POC (poc_price) / Session VWAP, Target 2 at VAH (vah_price) / Resistance 1 (R:R >= 1.75).
+     * RANGE SHORT (Mean-Reversion): When price tests Resistance 1, Value Area High (vah_price), or sweeps Session High with a rejection candle, originate a 'RANGE_BOUNDARY_FADE' or 'MEAN_REVERSION' SELL LIMIT/MARKET. Stop loss placed safely above the swing high wick (>= 1.0x ATR or above R1), Target 1 at POC (poc_price) / Session VWAP, Target 2 at VAL (val_price) / Support 1 (R:R >= 1.75).
 10. PROXIMITY & BOUNDARY REJECTION SCALPS: Do not reject a trade for being close to resistance/support if a clear candlestick rejection pinbar or engulfing pattern is present. Originate a 'BOUNDARY_REJECTION_SCALP' with tight SL behind the boundary wick and target at Pivot / VWAP.
-11. ASSET-CLASS NORMALIZATION FOR DISTANCE CHECKS: For high-nominal Indices (US30, NAS100, GER30) and Crypto (BTCUSD), a distance of >= 0.02% (or >= 0.25x ATR) represents substantial structural breathing room. Do not apply the Forex 0.10% rule to indices or crypto.
+11. VOLATILITY-NORMALIZED DISTANCE CHECKS (DYNAMIC ATR SCALING):
+    - For ALL asset classes (Forex, Indices, Crypto, Commodities): Minimum structural breathing room is calculated dynamically against ATR as: Distance >= 0.20x ATR(14) (or >= 0.02% on indices).
+    - If price distance to the level exceeds 0.20x ATR, there IS sufficient structural breathing room. Do NOT reject on distance if this condition is met.
 12. SMART MONEY ORDER FLOW & VWAP VALUE DISCIPLINE:
     - VWAP PULLBACKS: In a BULLISH regime, optimal long entries occur when price is testing Session VWAP, POC, or bouncing off the lower VWAP band (lower1). Do NOT chase breakout longs if price is already at EXTREME_OVERBOUGHT (> upper2).
     - BREAKOUT VOLUME REQUIREMENT: For MOMENTUM_BREAKOUT or Stop orders (Buy Stop / Sell Stop), you MUST verify that volume_surge is true or volume_ratio >= 1.4. If volume is LOW or ANEMIC, reject the breakout as a false trap or place a LIMIT order pullback at the POC (poc_price) / HVN (nearest_hvn).
@@ -171,8 +176,8 @@ ${JSON.stringify(snapshot, null, 2)}`,
             strategy_applied: { type: "string" },
             suggested_entry_price: { type: "number" },
             suggested_stop_loss: { type: "number" },
-            take_profit_1: { type: "number", description: "Target 1 (e.g., S1 or R1)" },
-            take_profit_2: { type: "number", description: "Target 2 (e.g., S2 or R2)" },
+            take_profit_1: { type: "number", description: "Target 1 (e.g., S1 or R1 or POC)" },
+            take_profit_2: { type: "number", description: "Target 2 (e.g., S2 or R2 or VAH/VAL)" },
             rationale: { type: "string" },
             order_type: { type: "string" },
             direction: { type: "string" },
@@ -195,7 +200,7 @@ ${JSON.stringify(snapshot, null, 2)}`,
           type: "object",
           properties: {
             thought_process: { type: "string", description: "Step-by-step reasoning for the rejection. You MUST explicitly state why the MACRO SENSITIVITY (Rule 4) override did not apply before rejecting." },
-            rejection_math_proof: { type: "string", description: "You MUST calculate the boundary percentage distance step-by-step here BEFORE outputting the reason. For Indices (US30/NAS100), >= 0.02% or 0.25x ATR is valid room. Do NOT output a lazy INFLECTION_POINT_WAIT without proving the math first." },
+            rejection_math_proof: { type: "string", description: "You MUST calculate the boundary percentage and ATR distance step-by-step here BEFORE outputting the reason. Distance >= 0.20x ATR (or >= 0.02% on indices) represents valid structural room. Do NOT output a lazy INFLECTION_POINT_WAIT without proving the math first." },
             distance_to_level_percent: { type: "number", description: "The calculated percentage distance from the current price to the nearest Fib/Structural level. Must be calculated BEFORE invoking INFLECTION_POINT_WAIT." },
             reason: { type: "string" }
           },
@@ -1031,10 +1036,11 @@ serve(async (req) => {
             console.log(`[Layer B: Cognitive Guard] AI Response for ${symbol}: Valid Setup = ${is_valid}, Direction = ${evaluation.recommended_direction}`);
             console.log(`[Layer B] AI Rationale: ${institutional_rationale}`);
 
-            // --- OVERRIDE: ADX FILTER FOR MEAN REVERSION ---
-            if (is_valid && evaluation.strategy_applied === "MEAN_REVERSION" && snapshot.adx_14 && snapshot.adx_14 > 25) {
+            // --- OVERRIDE: ADX FILTER FOR MEAN REVERSION & BOUNDARY FADES ---
+            const meanReversionStrategies = ["MEAN_REVERSION", "RANGE_BOUNDARY_FADE", "BOUNDARY_REJECTION_SCALP", "ASIAN_RANGE_SWEEP"];
+            if (is_valid && meanReversionStrategies.includes(evaluation.strategy_applied) && snapshot.adx_14 && snapshot.adx_14 >= 22) {
                is_valid = false;
-               institutional_rationale = `Execution Desk Rejected: Attempted Mean Reversion in high-momentum environment (ADX > 25).`;
+               institutional_rationale = `Execution Desk Rejected: Cannot fade high-momentum trend (ADX ${snapshot.adx_14.toFixed(1)} >= 22). Mean reversion strictly requires low-momentum consolidation (ADX < 20).`;
             }
 
             if (!is_valid || confidence_score < 70) {
@@ -1132,8 +1138,38 @@ serve(async (req) => {
             // Append actual math to AI rationale
             institutional_rationale += ` Execution Math: Structural target set at ${take_profit} yielding a 1:${rrRatio.toFixed(1)} Risk:Reward ratio.`;
 
-            // AI is now a pure signal generator. We don't calculate user-specific volume or riskAmount here.
-            
+            // === ASSET-CLASS CONTRACT MULTIPLIER & MAX DOLLAR RISK GOVERNOR ===
+            // Prevent raw trade origination from exceeding the 10% account blowout cap ($150 on $1,500 capital)
+            // on large contract assets (e.g., XAGUSD with 5000 contract size, UKOIL with 1000 contract size).
+            const assetContractSizes: Record<string, number> = {
+              XAGUSD: 5000,
+              UKOIL: 1000,
+              XAUUSD: 100,
+              US30: 1,
+              NAS100: 1,
+              SPX500: 1,
+              GER30: 1,
+              BTCUSD: 1,
+              EURUSD: 100000,
+              GBPUSD: 100000,
+              USDJPY: 100000,
+            };
+            const contractSize = assetContractSizes[symbol] || 1;
+            const minLot = 0.01;
+            const maxPermissibleCapitalRisk = 150.0; // 10% cap on $1,500 base capital
+            const maxAllowableStopDistance = maxPermissibleCapitalRisk / (minLot * contractSize);
+
+            if (maxAllowableStopDistance > 0 && risk > maxAllowableStopDistance) {
+              const rawRisk = risk * minLot * contractSize;
+              console.log(`[${symbol}] [Origination Risk Governor] Raw risk ($${rawRisk.toFixed(2)}) exceeds $150 cap. Anchoring entry to structural discount ($${entry_price} → ${dbSide === "LONG" ? (stop_loss + maxAllowableStopDistance).toFixed(3) : (stop_loss - maxAllowableStopDistance).toFixed(3)}).`);
+              
+              entry_price = dbSide === "LONG"
+                ? Number((stop_loss + maxAllowableStopDistance).toFixed(3))
+                : Number((stop_loss - maxAllowableStopDistance).toFixed(3));
+              risk = Math.abs(entry_price - stop_loss);
+              institutional_rationale += ` [Origination Risk Governor: Entry anchored to $${entry_price} so 0.01 lot dollar risk ($${maxPermissibleCapitalRisk.toFixed(2)}) stays strictly within the 10% capital cap]`;
+            }
+
             const expectedReturnPct = Math.abs(take_profit - entry_price) / entry_price;
             
             const stopLossPercentage = risk / entry_price;

@@ -1407,20 +1407,32 @@ serve(async (req) => {
           aiSl = Number(aiSl.toFixed(5));
           
           if (aiSl) {
+            const isHighConfidencePrime = evaluation.confidence_score >= 80;
             supabase
               .from("market_context")
               .update({
                 invalidation_price: aiSl,
                 macro_bias: evaluation.recommended_direction === "LONG" ? "BULLISH"
                           : evaluation.recommended_direction === "SHORT" ? "BEARISH" : "NEUTRAL",
-                narrative: safeRationale,
+                narrative: `[Daily Macro Prime: ${evaluation.recommended_direction} (Conf: ${evaluation.confidence_score}%)] Entry: $${entry} | SL: $${aiSl} | TP: $${evaluation.execution_parameters?.take_profit_2 || evaluation.execution_parameters?.take_profit_1}. ${safeRationale}`,
+                key_levels: {
+                  ...(isHighConfidencePrime ? {
+                    daily_macro_prime: {
+                      direction: evaluation.recommended_direction,
+                      entry,
+                      invalidation: aiSl,
+                      confidence: evaluation.confidence_score,
+                      timeframe: timeframe.toLowerCase(),
+                    }
+                  } : {})
+                }
               })
               .eq("symbol", symbol)
               .eq("agent_persona", "SWING_TRADER")
               .gt("expires_at", new Date().toISOString())
               .then(({ error }) => {
                 if (error) console.warn(`[Market Context] [Trace: ${traceId}] Backfill failed for ${symbol}: ${error.message}`);
-                else console.log(`[Market Context] [Trace: ${traceId}] Invalidation price backfilled for ${symbol}: ${aiSl}`);
+                else console.log(`[Market Context] [Trace: ${traceId}] Daily macro prime backfilled for ${symbol}: ${aiSl} (${evaluation.recommended_direction}, Conf: ${evaluation.confidence_score}%)`);
               });
           }
 
@@ -1528,6 +1540,52 @@ serve(async (req) => {
             if (tp2) tp2 = Number((tp2 + entryShift).toFixed(5));
             if (tp3) tp3 = Number((tp3 + entryShift).toFixed(5));
             console.log(`[${symbol}] Entry too close to live price (Dist: ${Math.abs(entryShift).toFixed(5)}). Converted to ${order_type} to prevent Error 10016. SL/TP adjusted.`);
+          }
+
+          // === COMMODITY & HIGH-BETA VOLATILITY DISCIPLINE (PULLBACK LIMIT MANDATE) ===
+          // High-beta commodities (UKOIL, XAGUSD, XAUUSD, US30) experience aggressive intraday mean-reversion.
+          // Forbid aggressive market order chasing; force passive Limit orders at structural discount levels.
+          const volatileCommodities = ["UKOIL", "XAGUSD", "XAUUSD", "US30", "NAS100"];
+          if (volatileCommodities.includes(symbol) && order_type.includes("MARKET")) {
+            const limitOffset = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.35) : (currentPrice * 0.005);
+            entry = isLong ? Number((currentPrice - limitOffset).toFixed(5)) : Number((currentPrice + limitOffset).toFixed(5));
+            order_type = isLong ? "BUY LIMIT" : "SELL LIMIT";
+            evaluation.execution_parameters.suggested_entry_price = entry;
+            safeRationale += ` [Commodity Volatility Discipline: Market entry converted to pullback Limit @ $${entry} to prevent wick-chasing]`;
+          }
+
+          // === ASSET-CLASS CONTRACT MULTIPLIER & MAX DOLLAR RISK GOVERNOR ===
+          // Prevent raw trade origination from exceeding the 10% account blowout cap ($150 on $1,500 capital)
+          // on large contract assets (e.g., XAGUSD with 5000 contract size, UKOIL with 1000 contract size).
+          const assetContractSizes: Record<string, number> = {
+            XAGUSD: 5000,
+            UKOIL: 1000,
+            XAUUSD: 100,
+            US30: 1,
+            NAS100: 1,
+            SPX500: 1,
+            GER30: 1,
+            BTCUSD: 1,
+            EURUSD: 100000,
+            GBPUSD: 100000,
+            USDJPY: 100000,
+          };
+          const contractSize = assetContractSizes[symbol] || 1;
+          const minLot = 0.01;
+          const maxPermissibleCapitalRisk = 150.0; // 10% cap on $1,500 standard base portfolio
+          const maxAllowableStopDistance = maxPermissibleCapitalRisk / (minLot * contractSize);
+
+          if (maxAllowableStopDistance > 0 && Math.abs(entry - sl) > maxAllowableStopDistance) {
+            const rawRisk = Math.abs(entry - sl) * minLot * contractSize;
+            console.log(`[${symbol}] [Origination Risk Governor] Raw risk ($${rawRisk.toFixed(2)}) exceeds $150 cap. Anchoring entry to structural discount ($${entry} → ${isLong ? (sl + maxAllowableStopDistance).toFixed(5) : (sl - maxAllowableStopDistance).toFixed(5)}).`);
+            
+            // Re-anchor limit entry so total dollar risk is strictly capped at $150
+            entry = isLong
+              ? Number((sl + maxAllowableStopDistance).toFixed(5))
+              : Number((sl - maxAllowableStopDistance).toFixed(5));
+            order_type = isLong ? "BUY LIMIT" : "SELL LIMIT";
+            evaluation.execution_parameters.suggested_entry_price = entry;
+            safeRationale += ` [Origination Risk Governor: Entry anchored to $${entry} so 0.01 lot dollar risk ($${maxPermissibleCapitalRisk.toFixed(2)}) stays strictly within the 10% capital cap]`;
           }
 
           // === TAKE PROFIT DIRECTION & MONOTONIC R-MULTIPLE SANITIZATION ===
