@@ -58,7 +58,7 @@ serve(async (req) => {
     // Fetch subsequent candles for this symbol from market_data_pti
     const { data: candles } = await supabase
       .from("market_data_pti")
-      .select("ts, h, l")
+      .select("ts, o, h, l, c")
       .eq("symbol", symbol)
       .eq("timeframe", timeframe)
       .gt("ts", created_at)
@@ -68,76 +68,75 @@ serve(async (req) => {
       continue; // No new market data yet
     }
 
-    let outcome: 'WON' | 'LOST' | null = null;
+    let outcome: 'WON' | 'LOST' | 'EXPIRED' | null = null;
     let rMultiple = 0;
     let closedAt = null;
     let state: 'PENDING' | 'ACTIVE' = 'PENDING';
 
     // Calculate actual risk in price units to compute real R-multiple
     const riskPerUnit = Math.abs(entryPrice - stopLoss);
+    const catastrophicBuffer = riskPerUnit * 2.0;
 
-    for (const candle of candles) {
+    for (let i = 0; i < candles.length; i++) {
+      const candle = candles[i];
+
+      // Enforce 20-Period Anticipation Horizon: Expire setup if 20 bars elapsed without conclusion
+      if (i >= 20 && outcome === null) {
+        outcome = 'EXPIRED';
+        closedAt = candle.ts;
+        break;
+      }
+
       if (side === 'BULLISH' || side === 'LONG') {
         if (state === 'PENDING') {
-          // Has price dropped to or below our Buy Limit/Stop?
-          // (For simplicity, if candle low is <= entry and candle high is >= entry, it triggered).
-          if (candle.l <= entryPrice && candle.h >= entryPrice || 
+          // Has price reached our Entry?
+          if ((candle.l <= entryPrice && candle.h >= entryPrice) || 
               (entry_plan_json.type?.includes("Limit") ? candle.l <= entryPrice : candle.h >= entryPrice)) {
             state = 'ACTIVE';
           }
         }
 
         if (state === 'ACTIVE') {
-          // Conservative Resolution: If candle spans both TP and SL, assume LOSS
-          if (candle.l <= stopLoss && candle.h >= takeProfit) {
-            outcome = 'LOST';
-            rMultiple = riskPerUnit > 0 ? -((entryPrice - stopLoss) / riskPerUnit) : -1.0;
-            closedAt = candle.ts;
-            break;
-          }
-          // Did the candle hit SL?
-          if (candle.l <= stopLoss) {
-            outcome = 'LOST';
-            rMultiple = riskPerUnit > 0 ? -((entryPrice - stopLoss) / riskPerUnit) : -1.0;
-            closedAt = candle.ts;
-            break;
-          }
-          // Did the candle hit TP?
-          else if (candle.h >= takeProfit) {
+          // 1. Did the candle hit TP? (Take Profit is a limit order -> wick touch triggers WON)
+          if (candle.h >= takeProfit) {
             outcome = 'WON';
             rMultiple = riskPerUnit > 0 ? (takeProfit - entryPrice) / riskPerUnit : 2.0;
+            closedAt = candle.ts;
+            break;
+          }
+          // 2. Bar-Close Stop Loss (Trading Central Institutional Rule):
+          // Evaluated strictly on confirmed bar close (candle.c), allowing intra-bar wicks to breathe
+          // Catastrophic safety threshold (2x ATR beyond stop) also triggers
+          else if (candle.c <= stopLoss || (candle.l <= stopLoss - catastrophicBuffer)) {
+            outcome = 'LOST';
+            rMultiple = riskPerUnit > 0 ? -((entryPrice - stopLoss) / riskPerUnit) : -1.0;
             closedAt = candle.ts;
             break;
           }
         }
       } else if (side === 'BEARISH' || side === 'SHORT') {
         if (state === 'PENDING') {
-          // Has price risen to or above our Sell Limit/Stop?
-          if (candle.h >= entryPrice && candle.l <= entryPrice ||
+          // Has price reached our Entry?
+          if ((candle.h >= entryPrice && candle.l <= entryPrice) ||
               (entry_plan_json.type?.includes("Limit") ? candle.h >= entryPrice : candle.l <= entryPrice)) {
             state = 'ACTIVE';
           }
         }
 
         if (state === 'ACTIVE') {
-          // Conservative Resolution: If candle spans both TP and SL, assume LOSS
-          if (candle.h >= stopLoss && candle.l <= takeProfit) {
-            outcome = 'LOST';
-            rMultiple = riskPerUnit > 0 ? -((stopLoss - entryPrice) / riskPerUnit) : -1.0;
-            closedAt = candle.ts;
-            break;
-          }
-          // Did the candle hit SL?
-          if (candle.h >= stopLoss) {
-            outcome = 'LOST';
-            rMultiple = riskPerUnit > 0 ? -((stopLoss - entryPrice) / riskPerUnit) : -1.0;
-            closedAt = candle.ts;
-            break;
-          }
-          // Did the candle hit TP?
-          else if (candle.l <= takeProfit) {
+          // 1. Did the candle hit TP? (Take Profit is a limit order -> wick touch triggers WON)
+          if (candle.l <= takeProfit) {
             outcome = 'WON';
             rMultiple = riskPerUnit > 0 ? (entryPrice - takeProfit) / riskPerUnit : 2.0;
+            closedAt = candle.ts;
+            break;
+          }
+          // 2. Bar-Close Stop Loss (Trading Central Institutional Rule):
+          // Evaluated strictly on confirmed bar close (candle.c), allowing intra-bar wicks to breathe
+          // Catastrophic safety threshold (2x ATR beyond stop) also triggers
+          else if (candle.c >= stopLoss || (candle.h >= stopLoss + catastrophicBuffer)) {
+            outcome = 'LOST';
+            rMultiple = riskPerUnit > 0 ? -((stopLoss - entryPrice) / riskPerUnit) : -1.0;
             closedAt = candle.ts;
             break;
           }
