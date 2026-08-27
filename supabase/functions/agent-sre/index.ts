@@ -256,14 +256,45 @@ serve(async (req) => {
           .in("status", ["OPEN", "PENDING", "VPS_PENDING", "VPS_PROCESSING"]);
 
         if (!openLegs || openLegs.length === 0) {
-          await supabase.from("trade_opportunities").update({
-            status: "EXPIRED",
-            r_multiple: 0,
-            closed_at: now.toISOString()
-          }).eq("id", opp.id);
-          autoRemediations.push(`Expired completed opportunity ${opp.symbol} (${opp.id}) with 0 open trades`);
+          const { data: allLegs } = await supabase
+            .from("user_trades")
+            .select("id, status, profit_usd, risk_amount")
+            .eq("opportunity_id", opp.id);
+
+          if (!allLegs || allLegs.length === 0) {
+            await supabase.from("trade_opportunities").update({
+              status: "EXPIRED",
+              r_multiple: 0,
+              closed_at: now.toISOString()
+            }).eq("id", opp.id);
+            autoRemediations.push(`Expired completed opportunity ${opp.symbol} (${opp.id}) with 0 trades created`);
+          } else {
+            const totalNetProfit = allLegs.reduce((acc: number, l: any) => acc + (Number(l.profit_usd) || 0), 0);
+            const totalRisk = allLegs.reduce((acc: number, l: any) => acc + (Number(l.risk_amount) || 0), 0);
+            const oppOutcome = totalNetProfit > 0 ? "WON" : (totalNetProfit < 0 ? "LOST" : "EXPIRED");
+            const rMultiple = totalRisk > 0 ? Number((totalNetProfit / totalRisk).toFixed(2)) : (totalNetProfit > 0 ? 1.0 : (totalNetProfit < 0 ? -1.0 : 0));
+
+            await supabase.from("trade_opportunities").update({
+              status: oppOutcome,
+              r_multiple: rMultiple,
+              closed_at: now.toISOString()
+            }).eq("id", opp.id);
+            autoRemediations.push(`Reconciled completed opportunity ${opp.symbol} (${opp.id}) to ${oppOutcome} (Net: $${totalNetProfit.toFixed(2)}, R: ${rMultiple}R)`);
+          }
         }
       }
+    }
+
+    // 4F. Broker Execution Failures in Last Hour (MT5 Codes 10014, 10015, 10016, 10019)
+    const { data: recentFailedTrades } = await supabase
+      .from("user_trades")
+      .select("id, symbol, side, error_message, created_at")
+      .eq("status", "FAILED")
+      .gte("created_at", oneHourAgoIso);
+
+    if (recentFailedTrades && recentFailedTrades.length > 0) {
+      const sample = recentFailedTrades[0];
+      issues.push(`🚨 <b>Broker Execution Errors (${recentFailedTrades.length} in last hour):</b> ${sample.symbol} ${sample.side} failed with <code>${sample.error_message || "Unknown error"}</code>.`);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -275,7 +306,7 @@ serve(async (req) => {
       .from("user_risk_settings")
       .select("vps_last_heartbeat, is_live_execution_enabled")
       .eq("is_master_account", true)
-      .single();
+      .maybeSingle();
 
     if (vpsRisk?.vps_last_heartbeat) {
       const hbTime = new Date(vpsRisk.vps_last_heartbeat).getTime();
@@ -316,7 +347,7 @@ serve(async (req) => {
       .from("system_settings")
       .select("value")
       .eq("key", "treasury_status")
-      .single();
+      .maybeSingle();
 
     let solvencyRatio = 1.0;
     let isSolvent = true;
