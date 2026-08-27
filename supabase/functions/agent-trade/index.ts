@@ -1014,7 +1014,16 @@ serve(async (req) => {
           }
 
           if (!newSl) {
-            if (priceMoveInR >= 2.0) {
+            if (priceMoveInR >= 3.0) {
+              const lockSl = isLong
+                ? Number((entryPrice + (riskDist * 2.0)).toFixed(5))
+                : Number((entryPrice - (riskDist * 2.0)).toFixed(5));
+              const isImprovement = isLong ? lockSl > currentSl : lockSl < currentSl;
+              if (isImprovement) {
+                newSl = lockSl;
+                actionName = `LOCK_IN_2R (profit +${priceMoveInR.toFixed(1)}R)`;
+              }
+            } else if (priceMoveInR >= 2.0) {
               const lockSl = isLong
                 ? Number((entryPrice + riskDist).toFixed(5))
                 : Number((entryPrice - riskDist).toFixed(5));
@@ -1022,6 +1031,15 @@ serve(async (req) => {
               if (isImprovement) {
                 newSl = lockSl;
                 actionName = `LOCK_IN_1R (profit +${priceMoveInR.toFixed(1)}R)`;
+              }
+            } else if (priceMoveInR >= 1.0) {
+              const lockSl = isLong
+                ? Number((entryPrice + (riskDist * 0.5)).toFixed(5))
+                : Number((entryPrice - (riskDist * 0.5)).toFixed(5));
+              const isImprovement = isLong ? lockSl > currentSl : lockSl < currentSl;
+              if (isImprovement) {
+                newSl = lockSl;
+                actionName = `LOCK_IN_HALF_R (profit +${priceMoveInR.toFixed(1)}R)`;
               }
             } else if (priceMoveInR >= 0.50) {
               const beSl = Number(entryPrice.toFixed(5));
@@ -1168,7 +1186,7 @@ serve(async (req) => {
     // Prepare execution parameters
     const entryPlan = signal.entry_plan_json || {};
     const stopPlan = signal.stop_plan_json || {};
-    const defaultEntryPrice = entryPlan.price || entryPlan.entry_price || entryPlan.limit_price;
+    let defaultEntryPrice = entryPlan.price || entryPlan.entry_price || entryPlan.limit_price;
     const scaledEntries = entryPlan.scaled_entries && Array.isArray(entryPlan.scaled_entries) && entryPlan.scaled_entries.length > 0
       ? entryPlan.scaled_entries
       : [{ price: defaultEntryPrice, weight: 1.0 }];
@@ -1669,15 +1687,43 @@ serve(async (req) => {
         volume = Math.min(hardLotCeiling, volume);
         volume = Math.max(volumeStep, Math.floor(volume / volumeStep) * volumeStep);
         
-        const riskAmount = pointsAtRisk * volume * pointValueUsd;
+        let effectivePointsAtRisk = pointsAtRisk;
+        let riskAmount = effectivePointsAtRisk * volume * pointValueUsd;
         
-        // --- ACCOUNT BLOWOUT PROTECTION ---
-        // If the minimum lot creates a risk that exceeds 10% of capital, reject it to prevent margin distress.
+        // --- ACCOUNT BLOWOUT PROTECTION & SMART LIMIT ENTRY OPTIMIZATION ---
+        // If the minimum lot creates a risk that exceeds 10% of capital, check if this is an S/A-Tier Limit order
+        // that can be pulled deeper into the structural discount zone to satisfy the 10% hard cap safely.
         const maxPermissibleRisk = Number(user.portfolio_capital) * 0.10;
         if (riskAmount > maxPermissibleRisk) {
+          const isLimitOrder = aiOrderType.includes("LIMIT");
+          const isHighConfidence = (signal.confidence || 0) >= 80;
+          const maxPointsAtRisk = maxPermissibleRisk / (volumeStep * pointValueUsd);
+          
+          if (isLimitOrder && isHighConfidence && maxPointsAtRisk > 0 && pointsAtRisk <= maxPointsAtRisk * 2.5) {
+            const isLong = signal.side === "LONG" || signal.side === "BUY";
+            const optimizedEntryPrice = isLong
+              ? Number((stopLoss + maxPointsAtRisk).toFixed(5))
+              : Number((stopLoss - maxPointsAtRisk).toFixed(5));
+
+            console.log(`[Smart Order Sizing] Optimizing S-Tier ${signal.symbol} Limit Entry: Pulling entry closer to SL ($${entryPrice} → $${optimizedEntryPrice}) to satisfy 10% cap ($${maxPermissibleRisk.toFixed(2)}).`);
+            
+            scaledEntry.price = optimizedEntryPrice;
+            defaultEntryPrice = optimizedEntryPrice;
+            effectivePointsAtRisk = maxPointsAtRisk;
+            riskAmount = effectivePointsAtRisk * volumeStep * pointValueUsd;
+            
+            // Backfill the optimized entry price into signal record and database for tracking
+            if (signal.entry_plan_json) {
+              signal.entry_plan_json.price = optimizedEntryPrice;
+              await supabase.from("trade_opportunities").update({
+                entry_plan_json: signal.entry_plan_json,
+              }).eq("id", signal.id);
+            }
+          } else {
             console.log(`[Risk Manager] Blocking User ${user.user_id}: allocated volume (${volume}) creates $${riskAmount.toFixed(2)} risk, violating 10% hard cap ($${maxPermissibleRisk.toFixed(2)}).`);
             blockedByRiskManager = true;
             continue;
+          }
         }
 
         // Only send to Master Broker if auto-execution is on for the user and they aren't paper trading
