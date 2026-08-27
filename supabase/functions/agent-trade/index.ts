@@ -1,13 +1,15 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
 import { isAutoTradingEnabled } from "../../../packages/core/settings.ts";
+import { isMarketOpen } from "../../../packages/core/market.ts";
 import { fetchPaperBars } from "../../../packages/execution/index.ts";
 import { getContextSnapshot } from "../../../packages/strategy/indicators.ts";
-
 import { insertAuditLog } from "../../../packages/core/audit.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+const TG_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
+const TG_CHAT = Deno.env.get("TELEGRAM_CHAT_ID") ?? "";
 
 const META_API_TOKEN = Deno.env.get("META_API_TOKEN");
 const META_API_ACCOUNT_ID = Deno.env.get("META_API_ACCOUNT_ID");
@@ -17,21 +19,267 @@ interface WebhookPayload {
   type?: "INSERT" | "UPDATE";
   table?: "trade_opportunities";
   record?: any;
-  action?: "MANUAL_EXECUTION" | "RUNNER_HANDOFF" | "MANAGE_POSITIONS";
+  old_record?: any;
+  action?: "MANUAL_EXECUTION" | "RUNNER_HANDOFF" | "MANAGE_POSITIONS" | "WEEKEND_DEFENSE" | "AUTO_EJECT" | "MODIFY_ORDER" | "EXECUTE_PENDING" | "PROCESS_RETRIES";
   user_id?: string;
   opportunity_id?: string;
+}
+
+async function notifyTelegram(htmlText: string) {
+  if (!TG_TOKEN || !TG_CHAT) return;
+  try {
+    const url = `https://api.telegram.org/bot${TG_TOKEN}/sendMessage`;
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: TG_CHAT, text: htmlText, parse_mode: "HTML", disable_web_page_preview: true }),
+    });
+  } catch (e) {
+    console.error("[Agent Trade] Telegram dispatch failed:", e);
+  }
+}
+
+async function executePendingOrders(supabase: any) {
+  const { data: pendingTrades, error: fetchError } = await supabase
+    .from("user_trades")
+    .select(`
+      id,
+      user_id,
+      opportunity_id,
+      symbol,
+      side,
+      volume,
+      trade_type,
+      created_at,
+      trade_opportunities (
+        entry_plan_json,
+        stop_plan_json,
+        take_profit_json
+      ),
+      user_risk_settings!inner (
+        sync_trailing_stops,
+        is_live_execution_enabled,
+        vps_last_heartbeat,
+        active_broker
+      )
+    `)
+    .eq("status", "PENDING");
+
+  if (fetchError || !pendingTrades || pendingTrades.length === 0) {
+    return { status: "success", message: "No pending orders", executed: 0 };
+  }
+
+  const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.london.agiliumtrade.ai";
+  const groupedBySymbol = pendingTrades.reduce((acc: any, trade: any) => {
+    acc[trade.symbol] = acc[trade.symbol] || [];
+    acc[trade.symbol].push(trade);
+    return acc;
+  }, {});
+
+  let executedCount = 0;
+
+  for (const symbol in groupedBySymbol) {
+    const bars = await fetchPaperBars(symbol, "1m", 1, supabase);
+    if (bars.length === 0) continue;
+    const currentPrice = bars[0].c;
+    const tradesForSymbol = groupedBySymbol[symbol];
+
+    for (const trade of tradesForSymbol) {
+      const opp = trade.trade_opportunities;
+      if (!opp || !opp.entry_plan_json) continue;
+
+      const entryPrice = opp.entry_plan_json.price || opp.entry_plan_json.entry_price || opp.entry_plan_json.limit_price;
+      const orderType = (opp.entry_plan_json.order_type || "").toUpperCase();
+      let triggered = false;
+
+      if (orderType.includes("BUY LIMIT")) triggered = currentPrice <= entryPrice;
+      else if (orderType.includes("SELL LIMIT")) triggered = currentPrice >= entryPrice;
+      else if (orderType.includes("BUY STOP")) triggered = currentPrice >= entryPrice;
+      else if (orderType.includes("SELL STOP")) triggered = currentPrice <= entryPrice;
+      else triggered = true;
+
+      const ageHours = (Date.now() - new Date(trade.created_at).getTime()) / (1000 * 60 * 60);
+      if (ageHours > 12 && !triggered) {
+        await supabase.from("user_trades").update({ status: "EXPIRED" }).eq("id", trade.id);
+        continue;
+      }
+
+      if (triggered) {
+        await supabase.from("user_trades").update({ status: "PROCESSING" }).eq("id", trade.id);
+
+        const stopLoss = opp.stop_plan_json?.stop;
+        const tpRaw = opp.take_profit_json?.tp;
+        const tp1Raw = opp.take_profit_json?.tp1;
+        const tp2Raw = opp.take_profit_json?.tp2;
+        const tp3Raw = opp.take_profit_json?.tp3;
+        const riskDistance = (entryPrice > 0 && stopLoss) ? Math.abs(entryPrice - stopLoss) : 0;
+        const actionType = trade.side === "LONG" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL";
+        const isLong = trade.side === "LONG" || trade.side === "BUY";
+
+        let targetTP = tpRaw;
+        if (trade.trade_type === "QUICK_EXIT") {
+          targetTP = tp1Raw || (isLong ? entryPrice + riskDistance : entryPrice - riskDistance);
+        } else if (trade.trade_type === "SWING") {
+          targetTP = tp2Raw || tpRaw || (isLong ? entryPrice + riskDistance * 2.0 : entryPrice - riskDistance * 2.0);
+        } else if (trade.trade_type === "RUNNER") {
+          targetTP = tp3Raw || (isLong ? entryPrice + riskDistance * 3.5 : entryPrice - riskDistance * 3.5);
+        }
+
+        // Strict Direction Validation
+        if (entryPrice > 0 && riskDistance > 0) {
+          const tpInvalid = isLong ? (targetTP <= entryPrice) : (targetTP >= entryPrice);
+          if (tpInvalid) {
+            const mult = trade.trade_type === "RUNNER" ? 3.5 : (trade.trade_type === "SWING" ? 2.0 : 1.0);
+            targetTP = isLong ? Number((entryPrice + (riskDistance * mult)).toFixed(5)) : Number((entryPrice - (riskDistance * mult)).toFixed(5));
+          }
+        }
+
+        const getDecimals = (sym: string) => {
+          if (["US30", "NAS100", "SPX500", "GER30", "BTCUSD", "XAUUSD", "XAGUSD", "UKOIL"].includes(sym)) return 2;
+          if (sym.endsWith("JPY")) return 3;
+          return 5;
+        };
+        const decimals = getDecimals(trade.symbol);
+        if (targetTP) targetTP = Number(targetTP.toFixed(decimals));
+        const safeSl = stopLoss ? Number(stopLoss.toFixed(decimals)) : undefined;
+
+        const tradePayload: any = {
+          actionType,
+          symbol: trade.symbol,
+          volume: trade.volume,
+          stopLoss: safeSl,
+          stopLossUnits: safeSl ? "ABSOLUTE_PRICE" : undefined,
+          takeProfit: targetTP,
+          takeProfitUnits: targetTP ? "ABSOLUTE_PRICE" : undefined,
+          clientId: trade.id,
+        };
+
+        if (trade.trade_type === "RUNNER" && trade.user_risk_settings?.sync_trailing_stops) {
+          const atrRaw = opp.stop_plan_json?.atr;
+          if (atrRaw && stopLoss) {
+            let trailingDist = Number((atrRaw * 2.0).toFixed(5));
+            if (trailingDist > riskDistance * 2.0) trailingDist = Number((riskDistance * 1.5).toFixed(5));
+            tradePayload.trailingStopLoss = { distance: { distance: trailingDist, units: "RELATIVE_PRICE" } };
+          }
+        }
+
+        if (trade.user_risk_settings?.is_live_execution_enabled) {
+          const vpsHeartbeatMs = trade.user_risk_settings?.vps_last_heartbeat ? new Date(trade.user_risk_settings.vps_last_heartbeat).getTime() : 0;
+          const isVpsAlive = (Date.now() - vpsHeartbeatMs) < 60000;
+          const routeToVps = trade.user_risk_settings?.active_broker === "MT5_VPS" && isVpsAlive;
+
+          if (routeToVps) {
+            await supabase.from("user_trades").update({ status: "VPS_PENDING" }).eq("id", trade.id);
+            executedCount++;
+          } else {
+            try {
+              const metaToken = Deno.env.get("META_API_TOKEN") || "";
+              const metaAccountId = Deno.env.get("META_API_ACCOUNT_ID") || "";
+              const metaApiUrl = `${baseUrl}/users/current/accounts/${metaAccountId}/trade`;
+              const res = await fetch(metaApiUrl, {
+                method: "POST",
+                headers: { "auth-token": metaToken, "Content-Type": "application/json" },
+                body: JSON.stringify(tradePayload),
+              });
+              if (!res.ok) {
+                const errorText = await res.text();
+                await supabase.from("user_trades").update({ status: "FAILED", error_message: errorText }).eq("id", trade.id);
+              } else {
+                const data = await res.json();
+                await supabase.from("user_trades").update({ status: "OPEN", meta_api_order_id: data.orderId || "EXECUTED" }).eq("id", trade.id);
+                executedCount++;
+              }
+            } catch (e: any) {
+              await supabase.from("user_trades").update({ status: "FAILED", error_message: e.message }).eq("id", trade.id);
+            }
+          }
+        } else {
+          await supabase.from("user_trades").update({ status: "PAPER_OPEN" }).eq("id", trade.id);
+          executedCount++;
+        }
+      }
+    }
+  }
+
+  return { status: "success", evaluated: pendingTrades.length, executed: executedCount };
+}
+
+async function processRetryQueue(supabase: any) {
+  const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.london.agiliumtrade.ai";
+  const MAX_RETRIES = 3;
+
+  const { data: queueItems, error: queueError } = await supabase
+    .from("meta_api_retry_queue")
+    .select("*, user_risk_settings(meta_api_token)")
+    .eq("status", "PENDING")
+    .lte("next_retry_at", new Date().toISOString());
+
+  if (queueError || !queueItems || queueItems.length === 0) {
+    return { status: "success", message: "Queue empty", processed: 0, results: [] };
+  }
+
+  console.log(`[Agent Trade] Processing ${queueItems.length} retry queue items...`);
+  const results = [];
+
+  for (const item of queueItems) {
+    const userToken = item.user_risk_settings?.meta_api_token || Deno.env.get("META_API_TOKEN");
+    if (!userToken) {
+      await supabase.from("meta_api_retry_queue").update({ status: "DEAD_LETTER", last_error: "Missing user token" }).eq("id", item.id);
+      results.push({ id: item.id, status: "DEAD_LETTER", error: "Missing user token" });
+      continue;
+    }
+
+    const apiUrl = `${baseUrl}/users/current/accounts/${item.meta_api_account_id}/trade`;
+    try {
+      const response = await fetch(apiUrl, {
+        method: "POST",
+        headers: { "auth-token": userToken, "Content-Type": "application/json" },
+        body: JSON.stringify(item.api_payload),
+      });
+
+      if (response.ok) {
+        await supabase.from("meta_api_retry_queue").update({ status: "SUCCESS", last_error: null }).eq("id", item.id);
+        results.push({ id: item.id, status: "SUCCESS" });
+      } else {
+        const errText = await response.text();
+        throw new Error(errText);
+      }
+    } catch (e: any) {
+      const newRetryCount = item.retry_count + 1;
+      if (newRetryCount >= MAX_RETRIES) {
+        await supabase.from("meta_api_retry_queue").update({ status: "DEAD_LETTER", retry_count: newRetryCount, last_error: e.message }).eq("id", item.id);
+        results.push({ id: item.id, status: "DEAD_LETTER", error: e.message });
+      } else {
+        const backoffMinutes = Math.pow(2, newRetryCount);
+        const nextRetry = new Date();
+        nextRetry.setMinutes(nextRetry.getMinutes() + backoffMinutes);
+        await supabase.from("meta_api_retry_queue").update({ retry_count: newRetryCount, next_retry_at: nextRetry.toISOString(), last_error: e.message }).eq("id", item.id);
+        results.push({ id: item.id, status: "PENDING_RETRY", next_retry: nextRetry.toISOString() });
+      }
+    }
+  }
+
+  return { status: "success", processed: results.length, results };
 }
 
 serve(async (req) => {
   try {
     const payload: WebhookPayload = await req.json();
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-  const autoTrading = await isAutoTradingEnabled(supabase);
-  if (!autoTrading) {
-    console.log("[Agent Guard] Skipped: Auto-trading is disabled.");
-    return new Response(JSON.stringify({ ok: true, message: "Auto-trading is paused" }), { headers: { "content-type": "application/json" } });
-  }
 
+    const isDefensiveAction =
+      payload.action === "MANAGE_POSITIONS" ||
+      payload.action === "WEEKEND_DEFENSE" ||
+      payload.action === "AUTO_EJECT" ||
+      payload.action === "EXECUTE_PENDING" ||
+      payload.action === "PROCESS_RETRIES" ||
+      (payload.type === "UPDATE" && payload.record?.status === "REJECTED");
+
+    const autoTrading = await isAutoTradingEnabled(supabase);
+    if (!autoTrading && !isDefensiveAction) {
+      console.log("[Agent Guard] Skipped: Auto-trading is disabled.");
+      return new Response(JSON.stringify({ ok: true, message: "Auto-trading is paused" }), { headers: { "content-type": "application/json" } });
+    }
 
     // --- SECURITY AUTHORIZATION CHECK ---
     const webhookSecret = req.headers.get("x-webhook-secret");
@@ -63,6 +311,196 @@ serve(async (req) => {
       return new Response("Unauthorized: Missing credentials", { status: 401 });
     }
     // --- END SECURITY CHECK ---
+
+    // --- AUTO-EJECT LOGIC (Signal Invalidation Webhook) ---
+    const isAutoEjectWebhook = payload.type === "UPDATE" && payload.table === "trade_opportunities" && payload.record?.status === "REJECTED";
+    if (payload.action === "AUTO_EJECT" || isAutoEjectWebhook) {
+      const signal = payload.record || (payload.opportunity_id ? (await supabase.from("trade_opportunities").select("*").eq("id", payload.opportunity_id).single()).data : null);
+      const oldSignal = payload.old_record;
+
+      if (!signal) return new Response("No signal record provided for auto-eject", { status: 400 });
+      if (oldSignal && oldSignal.status === "REJECTED") {
+        return new Response("Signal is not newly rejected. Ignoring.", { status: 200 });
+      }
+
+      const { data: openTrades, error: tradesError } = await supabase
+        .from("user_trades")
+        .select("*")
+        .eq("opportunity_id", signal.id)
+        .in("status", ["PENDING", "ACTIVE", "OPEN", "PAPER_OPEN", "VPS_PENDING", "VPS_PROCESSING"]);
+
+      if (tradesError || !openTrades || openTrades.length === 0) {
+        return new Response("No active trades found for this signal. Nothing to eject.", { status: 200 });
+      }
+
+      console.log(`🚨 [Auto-Eject] AI downgraded signal ${signal.symbol}. ${openTrades.length} open trades found.`);
+
+      const { data: vpsSettings } = await supabase.from("user_risk_settings").select("vps_last_heartbeat").eq("is_master_account", true).single();
+      const lastHeartbeat = vpsSettings?.vps_last_heartbeat ? new Date(vpsSettings.vps_last_heartbeat).getTime() : 0;
+      const isVpsAlive = (Date.now() - lastHeartbeat) < 60000;
+
+      let closedCount = 0;
+      let errorCount = 0;
+
+      for (const trade of openTrades) {
+        if (!trade.meta_api_order_id) continue;
+        try {
+          if (isVpsAlive) {
+            await supabase.from("user_trades").update({ status: "VPS_CLOSE", error_message: "AI Auto-Eject Triggered" }).eq("meta_api_order_id", trade.meta_api_order_id);
+            closedCount++;
+          } else if (META_API_TOKEN && META_API_ACCOUNT_ID) {
+            const closeRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+              method: "POST",
+              headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+              body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: trade.meta_api_order_id })
+            });
+            if (closeRes.ok) {
+              await supabase.from("user_trades").update({ status: "CLOSED", error_message: "AI Auto-Eject (MetaAPI)" }).eq("meta_api_order_id", trade.meta_api_order_id);
+              closedCount++;
+            } else {
+              errorCount++;
+            }
+          }
+        } catch (e) {
+          errorCount++;
+        }
+      }
+
+      const tgMessage = `⚠️ <b>AI AUTO-EJECT TRIGGERED (${signal.symbol})</b> ⚠️\n\nThe AI has dynamically downgraded and REJECTED an active signal.\n\n<i>${signal.ai_risks || "AI invalidated the setup."}</i>\n\n<b>Action Taken:</b> Automatically liquidated ${closedCount} open trades via ${isVpsAlive ? "MT5 VPS" : "MetaAPI"} to flatten exposure. ${errorCount > 0 ? `(${errorCount} errors during execution)` : ""}`;
+      await notifyTelegram(tgMessage);
+      await insertAuditLog(supabase, { actor_type: "SYSTEM", action: "AUTO_EJECT_EXECUTED", entity_type: "research", entity_id: signal.id, payload_json: { reason: "Signal rejected by agent-risk. Trades automatically liquidated.", closedCount, errorCount, route: isVpsAlive ? "VPS" : "MetaAPI" } });
+
+      return new Response(`Auto-eject executed via ${isVpsAlive ? "VPS" : "MetaAPI"}. ${closedCount} trades closed.`, { status: 200 });
+    }
+
+    // --- WEEKEND / END-OF-SESSION ROLL-OVER DEFENSE ---
+    if (payload.action === "WEEKEND_DEFENSE") {
+      console.log("🛡️ [Weekend Defense] Executing Roll-over sweep...");
+
+      const { data: vpsSettings } = await supabase.from("user_risk_settings").select("vps_last_heartbeat").eq("is_master_account", true).single();
+      const lastHeartbeat = vpsSettings?.vps_last_heartbeat ? new Date(vpsSettings.vps_last_heartbeat).getTime() : 0;
+      const isVpsAlive = (Date.now() - lastHeartbeat) < 60000;
+
+      const DRY_RUN = Deno.env.get("WEEKEND_DEFENSE_DRY_RUN") === "true";
+
+      const { data: openTrades, error } = await supabase
+        .from("user_trades")
+        .select("id, meta_api_order_id, symbol, side, status, user_id, open_price")
+        .eq("status", "OPEN")
+        .not("meta_api_order_id", "is", null);
+
+      if (error || !openTrades || openTrades.length === 0) {
+        await notifyTelegram("🛡️ <b>Weekend Defense:</b> No open trades to protect. All clear!");
+        return new Response("No open trades to defend.", { status: 200 });
+      }
+
+      // Exempt Crypto from weekend defense because Crypto trades 24/7
+      const vulnerableTrades = openTrades.filter(t => t.symbol ? !isMarketOpen(t.symbol) : true);
+      const uniqueOrders = [...new Set(vulnerableTrades.map(t => t.meta_api_order_id))];
+      console.log(`[Weekend Defense] Found ${uniqueOrders.length} unique master orders to evaluate. Routing via ${isVpsAlive ? "VPS" : "MetaAPI"}.`);
+
+      let closedCount = 0, movedToBeCount = 0, errorCount = 0;
+      const closedSymbols: string[] = [];
+      const beSymbols: string[] = [];
+
+      for (const orderId of uniqueOrders) {
+        try {
+          const tradeData = openTrades.find(t => t.meta_api_order_id === orderId);
+          if (!tradeData) continue;
+
+          let position = null;
+          if (!isVpsAlive && META_API_TOKEN && META_API_ACCOUNT_ID) {
+            const posRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/positions/${orderId}`, { headers: { "auth-token": META_API_TOKEN } });
+            if (!posRes.ok) {
+              await supabase.from("user_trades").update({ status: "CLOSED" }).eq("meta_api_order_id", orderId).eq("status", "OPEN");
+              continue;
+            }
+            position = await posRes.json();
+            if (position.error) { errorCount++; continue; }
+          }
+
+          const profit = position ? (Number(position.profit) || 0) : 0;
+          const openPrice = position ? Number(position.openPrice) : (Number(tradeData.open_price) || 0);
+          const symbol = tradeData.symbol;
+
+          if (isVpsAlive || profit <= 0) {
+            console.log(`[Weekend Defense] ${symbol} (${orderId}) CLOSING via ${isVpsAlive ? "VPS" : "MetaAPI"}.`);
+            if (!DRY_RUN) {
+              if (isVpsAlive) {
+                await supabase.from("user_trades").update({ status: "VPS_CLOSE", error_message: "Weekend Defense Liquidation" }).eq("meta_api_order_id", orderId);
+                closedSymbols.push(`${symbol} (via VPS)`);
+                closedCount++;
+              } else if (META_API_TOKEN && META_API_ACCOUNT_ID) {
+                const closeRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                  method: "POST",
+                  headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                  body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: orderId })
+                });
+                if (closeRes.ok) {
+                  await supabase.from("user_trades").update({ status: "CLOSED", error_message: "Weekend Defense (MetaAPI)" }).eq("meta_api_order_id", orderId);
+                  closedSymbols.push(`${symbol} ($${profit.toFixed(2)})`);
+                  closedCount++;
+                } else { errorCount++; }
+              }
+            } else {
+              closedSymbols.push(`${symbol} [DRY]`);
+              closedCount++;
+            }
+          } else if (!isVpsAlive && profit > 0 && META_API_TOKEN && META_API_ACCOUNT_ID) {
+            console.log(`[Weekend Defense] ${symbol} (${orderId}) profit $${profit.toFixed(2)}. Moving SL to BE (${openPrice}).`);
+            if (!DRY_RUN) {
+              const modRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                method: "POST",
+                headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                body: JSON.stringify({ actionType: "POSITION_MODIFY", positionId: orderId, stopLoss: openPrice, takeProfit: position.takeProfit })
+              });
+              if (modRes.ok) {
+                beSymbols.push(`${symbol} (+$${profit.toFixed(2)})`);
+                movedToBeCount++;
+              } else { errorCount++; }
+            } else {
+              beSymbols.push(`${symbol} (+$${profit.toFixed(2)}) [DRY]`);
+              movedToBeCount++;
+            }
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 300));
+        } catch (err: any) {
+          console.error(`[Weekend Defense] Error processing ${orderId}:`, err);
+          errorCount++;
+        }
+      }
+
+      const report = { status: DRY_RUN ? "DRY_RUN_COMPLETE" : "EXECUTION_COMPLETE", evaluated: uniqueOrders.length, closed_at_market: closedCount, sl_moved_to_be: movedToBeCount, errors: errorCount };
+      const tgLines = [
+        `🛡️ <b>Weekend Defense Complete${DRY_RUN ? " (DRY RUN)" : ""}</b>`,
+        ``,
+        `📊 <b>Summary (${uniqueOrders.length} positions evaluated):</b>`,
+        closedCount > 0 ? `❌ Closed ${closedCount} losers: ${closedSymbols.join(", ")}` : `✅ No losing positions`,
+        movedToBeCount > 0 ? `🔒 SL → Break-Even on ${movedToBeCount}: ${beSymbols.join(", ")}` : `ℹ️ No profitable positions to protect`,
+        errorCount > 0 ? `⚠️ ${errorCount} errors — check logs` : "",
+        ``,
+        `<i>Capital is protected for the weekend.</i>`
+      ].filter(Boolean).join("\n");
+      await notifyTelegram(tgLines);
+      await insertAuditLog(supabase, { actor_type: "SYSTEM", action: "WEEKEND_DEFENSE_EXECUTED", entity_type: "system", entity_id: "global", payload_json: report });
+
+      return new Response(JSON.stringify(report), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+
+    // --- PENDING ORDER PRICE TRIGGER MONITORING ---
+    if (payload.action === "EXECUTE_PENDING") {
+      console.log("[Agent Trade] Evaluating pending limit/stop orders...");
+      const result = await executePendingOrders(supabase);
+      return new Response(JSON.stringify(result), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+
+    // --- BROKER RETRY QUEUE WORKER ---
+    if (payload.action === "PROCESS_RETRIES") {
+      console.log("[Agent Trade] Processing MetaAPI retry queue...");
+      const result = await processRetryQueue(supabase);
+      return new Response(JSON.stringify(result), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
 
     // --- RUNNER HANDOFF LOGIC ---
     if ((payload as any).action === "RUNNER_HANDOFF") {
@@ -140,6 +578,11 @@ serve(async (req) => {
     // --- POSITION MANAGER LOGIC ---
     if ((payload as any).action === "MANAGE_POSITIONS") {
       console.log("[Position Manager] Starting sweep...");
+
+      // Autonomously evaluate pending limit orders and process broker retry queue
+      await executePendingOrders(supabase).catch((err) => console.error("[Position Manager] Pending orders error:", err));
+      await processRetryQueue(supabase).catch((err) => console.error("[Position Manager] Retry queue error:", err));
+
       if (!META_API_TOKEN || !META_API_ACCOUNT_ID) {
         return new Response("Missing MetaAPI credentials", { status: 500 });
       }
@@ -147,7 +590,7 @@ serve(async (req) => {
       const { data: openTrades, error } = await supabase
         .from("user_trades")
         .select(`
-          id, meta_api_order_id, symbol, side, status, trade_type, user_id,
+          id, meta_api_order_id, symbol, side, status, trade_type, user_id, open_price, created_at, opportunity_id,
           trade_opportunities (
             timeframe, entry_plan_json, stop_plan_json, take_profit_json
           )
@@ -202,22 +645,24 @@ serve(async (req) => {
           const allPositions = await allPosRes.json();
           for (const pos of allPositions) {
              const posId = pos.id;
-             if (!knownMap.has(posId)) {
-                console.log(`[Position Manager] Reverse-Sync: Found orphaned broker trade ${posId} (${pos.symbol}). Recovering...`);
-                // Recover the trade in the database
-                await supabase.from("user_trades").update({ status: "OPEN" }).eq("meta_api_order_id", posId);
-                
-                // Fetch the recovered trade to manage it in this cycle
-                const { data: recoveredTrade } = await supabase
-                  .from("user_trades")
-                  .select(`id, meta_api_order_id, symbol, side, status, trade_type, user_id, trade_opportunities(timeframe, entry_plan_json, stop_plan_json, take_profit_json)`)
-                  .eq("meta_api_order_id", posId)
-                  .single();
-                  
-                if (recoveredTrade) {
-                   orderMap.set(posId, recoveredTrade);
-                }
-             }
+              if (!knownMap.has(posId)) {
+                 console.log(`[Position Manager] Reverse-Sync: Found orphaned broker trade ${posId} (${pos.symbol}). Recovering...`);
+                 // Recover the trade in the database
+                 await supabase.from("user_trades").update({ status: "OPEN", open_price: pos.openPrice || null }).eq("meta_api_order_id", posId);
+                 
+                 // Fetch the recovered trade to manage it in this cycle
+                 const { data: recoveredTrade } = await supabase
+                   .from("user_trades")
+                   .select(`id, meta_api_order_id, symbol, side, status, trade_type, user_id, open_price, created_at, opportunity_id, trade_opportunities(timeframe, entry_plan_json, stop_plan_json, take_profit_json)`)
+                   .eq("meta_api_order_id", posId)
+                   .single();
+                   
+                 if (recoveredTrade) {
+                    orderMap.set(posId, recoveredTrade);
+                 }
+              } else if (pos.openPrice && knownMap.get(posId)?.open_price === null) {
+                 await supabase.from("user_trades").update({ open_price: pos.openPrice }).eq("meta_api_order_id", posId);
+              }
           }
         }
 
@@ -366,7 +811,19 @@ serve(async (req) => {
              }
              if (isGCd) continue;
           } else {
-             // NOT a pending order. Check positions.
+             // NOT a pending order. Check position.
+             
+             // If open_price is null and the order is > 24 hours old, it is a stale unfilled order that was missed or cancelled
+             const tradeAgeHours = trade.created_at ? (Date.now() - new Date(trade.created_at).getTime()) / (1000 * 60 * 60) : 0;
+             if (trade.open_price === null && tradeAgeHours >= 24) {
+               console.log(`[Position Manager] Garbage Collection: Stale unfilled trade ${trade.id} (${trade.symbol}, ${tradeAgeHours.toFixed(1)}h old, open_price=null). Marking CLOSED.`);
+               await supabase.from("user_trades").update({ status: "CLOSED", error_message: "Order cancelled (Stale unfilled pending order > 24h)" }).eq("id", trade.id);
+               if (trade.opportunity_id) {
+                 await supabase.from("trade_opportunities").update({ status: "EXPIRED", closed_at: new Date().toISOString() }).eq("id", trade.opportunity_id).in("status", ["ACTIVE", "APPROVED"]);
+               }
+               continue;
+             }
+             
              if (isVpsAlive) {
                  // For VPS EXCLUSION, we bypass MetaAPI polling as the VPS EA locally manages position existence.
                  // We mock the position object with live PTI data so that AI invalidation and trailing stop math can execute.
