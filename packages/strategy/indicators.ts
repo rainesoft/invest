@@ -84,6 +84,7 @@ export type LogicContext = {
   unfilled_gap_target?: number | null;
   anticipation_horizon_bars?: number;
   anticipation_horizon_hours?: number;
+  fibonacci_projections?: FibonacciProjectionsResult | null;
 };
 
 export function calculateFractals(high: number[], low: number[]) {
@@ -833,6 +834,7 @@ export function getContextSnapshot(
   const gapResult = detectPriceGaps(open, close, high, low);
   const channelResult = detectTrendChannels(high, low, close);
   const patternResult = detectGeometricPatterns(high, low, close);
+  const fibProjResult = calculateFibonacciProjections(high, low, close);
 
   return {
     timestamp,
@@ -897,6 +899,7 @@ export function getContextSnapshot(
     unfilled_gap_target: gapResult.gap_close_price,
     anticipation_horizon_bars: 20,
     anticipation_horizon_hours: 10,
+    fibonacci_projections: fibProjResult.has_valid_abc ? fibProjResult : null,
   };
 }
 
@@ -1865,5 +1868,132 @@ export function calculateInstitutionalTradingCentralLevels(
     },
   };
 }
+
+// ============================================================
+// 3-POINT FIBONACCI PROJECTIONS / EXPANSIONS (Trading Central Methodology)
+// Measures Swing A -> B and projects from Pullback Point C:
+// Target = C + Ratio * (B - A) for Bullish Expansion
+// Target = C - Ratio * (A - B) for Bearish Expansion
+// Standard Institutional Ratios: 61.8%, 100.0% (Equality), 127.2%, 161.8%, 200.0%, 261.8%
+// ============================================================
+export interface FibonacciProjection {
+  label: string;
+  ratio: number;
+  price: number;
+}
+
+export interface FibonacciProjectionsResult {
+  has_valid_abc: boolean;
+  direction: 'BULLISH_EXPANSION' | 'BEARISH_EXPANSION' | 'NONE';
+  point_a: number | null;
+  point_b: number | null;
+  point_c: number | null;
+  projections: FibonacciProjection[];
+  narrative: string;
+}
+
+export function calculateFibonacciProjections(
+  high: number[],
+  low: number[],
+  close: number[],
+  lookback = 60
+): FibonacciProjectionsResult {
+  const defaultResult: FibonacciProjectionsResult = {
+    has_valid_abc: false,
+    direction: 'NONE',
+    point_a: null,
+    point_b: null,
+    point_c: null,
+    projections: [],
+    narrative: 'No completed 3-point ABC swing formation established'
+  };
+
+  const n = close.length;
+  if (n < 15) return defaultResult;
+
+  const start = Math.max(0, n - lookback);
+  const sliceH = high.slice(start);
+  const sliceL = low.slice(start);
+  const sliceC = close.slice(start);
+
+  const { bullish_fractals, bearish_fractals } = calculateFractals(sliceH, sliceL);
+
+  // Check for most recent Bullish ABC (Swing Low A -> Swing High B -> Pullback Low C)
+  if (bullish_fractals.length >= 2 && bearish_fractals.length >= 1) {
+    const lastBullish = bullish_fractals[bullish_fractals.length - 1]; // Candidate C
+    const priorBullish = bullish_fractals[bullish_fractals.length - 2]; // Candidate A
+
+    // Find intermediate swing high B between A and C
+    const intermediateBearish = bearish_fractals.filter(
+      b => b.index > priorBullish.index && b.index < lastBullish.index
+    );
+
+    if (intermediateBearish.length > 0) {
+      const bHigh = intermediateBearish.sort((a, b) => b.price - a.price)[0];
+      const aLow = priorBullish;
+      const cLow = lastBullish;
+
+      if (bHigh.price > aLow.price && cLow.price > aLow.price && cLow.price < bHigh.price) {
+        const waveAB = bHigh.price - aLow.price;
+        const ratios = [0.618, 1.0, 1.272, 1.618, 2.0, 2.618];
+        const projections: FibonacciProjection[] = ratios.map(r => ({
+          label: `${(r * 100).toFixed(1)}% Proj`,
+          ratio: r,
+          price: Number((cLow.price + waveAB * r).toFixed(5))
+        }));
+
+        return {
+          has_valid_abc: true,
+          direction: 'BULLISH_EXPANSION',
+          point_a: Number(aLow.price.toFixed(5)),
+          point_b: Number(bHigh.price.toFixed(5)),
+          point_c: Number(cLow.price.toFixed(5)),
+          projections,
+          narrative: `Bullish 3-Point Fib Expansion: Swing A ($${aLow.price}) -> Swing B ($${bHigh.price}) projected from Pullback C ($${cLow.price}). 100% Measured Target: $${(cLow.price + waveAB).toFixed(5)}, 161.8% Target: $${(cLow.price + waveAB * 1.618).toFixed(5)}.`
+        };
+      }
+    }
+  }
+
+  // Check for most recent Bearish ABC (Swing High A -> Swing Low B -> Pullback High C)
+  if (bearish_fractals.length >= 2 && bullish_fractals.length >= 1) {
+    const lastBearish = bearish_fractals[bearish_fractals.length - 1]; // Candidate C
+    const priorBearish = bearish_fractals[bearish_fractals.length - 2]; // Candidate A
+
+    // Find intermediate swing low B between A and C
+    const intermediateBullish = bullish_fractals.filter(
+      b => b.index > priorBearish.index && b.index < lastBearish.index
+    );
+
+    if (intermediateBullish.length > 0) {
+      const bLow = intermediateBullish.sort((a, b) => a.price - b.price)[0];
+      const aHigh = priorBearish;
+      const cHigh = lastBearish;
+
+      if (bLow.price < aHigh.price && cHigh.price < aHigh.price && cHigh.price > bLow.price) {
+        const waveAB = aHigh.price - bLow.price;
+        const ratios = [0.618, 1.0, 1.272, 1.618, 2.0, 2.618];
+        const projections: FibonacciProjection[] = ratios.map(r => ({
+          label: `${(r * 100).toFixed(1)}% Proj`,
+          ratio: r,
+          price: Number((cHigh.price - waveAB * r).toFixed(5))
+        }));
+
+        return {
+          has_valid_abc: true,
+          direction: 'BEARISH_EXPANSION',
+          point_a: Number(aHigh.price.toFixed(5)),
+          point_b: Number(bLow.price.toFixed(5)),
+          point_c: Number(cHigh.price.toFixed(5)),
+          projections,
+          narrative: `Bearish 3-Point Fib Expansion: Swing A ($${aHigh.price}) -> Swing B ($${bLow.price}) projected from Pullback C ($${cHigh.price}). 100% Measured Target: $${(cHigh.price - waveAB).toFixed(5)}, 161.8% Target: $${(cHigh.price - waveAB * 1.618).toFixed(5)}.`
+        };
+      }
+    }
+  }
+
+  return defaultResult;
+}
+
 
 
