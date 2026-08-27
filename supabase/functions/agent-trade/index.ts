@@ -921,7 +921,63 @@ serve(async (req) => {
                  }
              }
           }
-          // --- END INVALIDATION CHECK ---
+          // --- END AI OPPOSING SIGNAL INVALIDATION CHECK ---
+
+          // --- 1B. 20-BAR ANTICIPATION HORIZON / TIME-TO-LIVE (Trading Central Methodology) ---
+          const tradeCreatedAt = new Date(trade.created_at || opp.created_at).getTime();
+          const ageMs = Date.now() - tradeCreatedAt;
+          const tf = opp.timeframe?.toLowerCase() || "30m";
+          const barDurationMs = tf === "1d" ? 24 * 60 * 60 * 1000 : (tf === "4h" ? 4 * 60 * 60 * 1000 : 30 * 60 * 1000);
+          const barsElapsed = ageMs / barDurationMs;
+
+          if (isPendingOrder && barsElapsed >= 20) {
+            console.log(`[Position Manager] 20-Bar Horizon Expired for pending order ${orderId} on ${trade.symbol} (${barsElapsed.toFixed(1)} bars elapsed). Cancelling.`);
+            const payload = { actionType: "ORDER_CANCEL", orderId };
+            if (!isVpsAlive) {
+              try {
+                await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                  method: "POST",
+                  headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                  body: JSON.stringify(payload),
+                });
+              } catch (e) {
+                console.warn(`[Position Manager] MetaAPI order cancel error:`, e);
+              }
+            }
+            await supabase.from("user_trades").update({ status: "CLOSED", error_message: "Expired: 20-Bar Anticipation Horizon reached" }).eq("meta_api_order_id", orderId);
+            moves.push({ symbol: trade.symbol, action: "20-Bar Horizon Pending Order Expiration", from: 0, to: 0 });
+            continue;
+          }
+
+          // --- 1C. BAR-CLOSE PIVOT INVALIDATION (Trading Central Methodology) ---
+          const ptiSnap = ptiMap.get(trade.symbol);
+          const pivotPoint = opp.stop_plan_json?.stop || opp.stop_plan_json?.initial;
+          if (!isPendingOrder && ptiSnap && ptiSnap.c && pivotPoint) {
+            const isLong = trade.side === "LONG";
+            const candleClosedBeyondPivot = isLong ? (ptiSnap.c < pivotPoint) : (ptiSnap.c > pivotPoint);
+            
+            if (candleClosedBeyondPivot) {
+              console.log(`[Position Manager] Bar-Close Pivot Invalidation triggered for ${trade.symbol}! Closed at ${ptiSnap.c} beyond Pivot ${pivotPoint}. Closing position ${orderId}.`);
+              const actionType = "POSITION_CLOSE_ID";
+              const payload = { actionType, positionId: orderId };
+              
+              if (isVpsAlive && trade.status !== "VPS_CLOSE") {
+                await supabase.from("user_trades").update({ status: "VPS_CLOSE", error_message: `Bar-Close Pivot Invalidation (Closed at ${ptiSnap.c} beyond Pivot ${pivotPoint})` }).eq("meta_api_order_id", orderId);
+                moves.push({ symbol: trade.symbol, action: "Bar-Close Pivot Invalidation (VPS Routed)", from: 0, to: 0 });
+              } else if (trade.status !== "CLOSED") {
+                const closeRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                  method: "POST",
+                  headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                  body: JSON.stringify(payload),
+                });
+                if (closeRes.ok) {
+                  await supabase.from("user_trades").update({ status: "CLOSED", error_message: `Bar-Close Pivot Invalidation (Closed at ${ptiSnap.c} beyond Pivot ${pivotPoint})` }).eq("meta_api_order_id", orderId);
+                  moves.push({ symbol: trade.symbol, action: "Bar-Close Pivot Invalidation", from: 0, to: 0 });
+                }
+              }
+              continue;
+            }
+          }
 
           if (isPendingOrder) {
              continue; // Skip all remaining trailing stop/leveraging logic for pending orders
@@ -1047,6 +1103,13 @@ serve(async (req) => {
               if (isImprovement) {
                 newSl = beSl;
                 actionName = `BREAK_EVEN (profit +${priceMoveInR.toFixed(1)}R)`;
+              }
+            } else if (barsElapsed >= 20 && profit > 0) {
+              const beSl = Number(entryPrice.toFixed(5));
+              const isImprovement = isLong ? beSl > currentSl : beSl < currentSl;
+              if (isImprovement) {
+                newSl = beSl;
+                actionName = `20_BAR_THESIS_DECAY_BE (aged ${barsElapsed.toFixed(1)} bars)`;
               }
             }
           }
