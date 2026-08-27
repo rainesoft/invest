@@ -40,7 +40,7 @@ export async function POST(req: Request) {
 
     const adminSecret = process.env.ADMIN_SECRET_KEY || "SUPER_SECRET_ADMIN_KEY";
     
-    const edgeFunctionUrl = `${NEXT_PUBLIC_SUPABASE_URL}/functions/v1/clear-deposit`;
+    const edgeFunctionUrl = `${NEXT_PUBLIC_SUPABASE_URL}/functions/v1/agent-treasury`;
     
     const res = await fetch(edgeFunctionUrl, {
       method: 'POST',
@@ -48,7 +48,7 @@ export async function POST(req: Request) {
         'Content-Type': 'application/json',
         'x-admin-secret': adminSecret
       },
-      body: JSON.stringify({ deposit_id: requestId })
+      body: JSON.stringify({ action: 'CLEAR_DEPOSIT', deposit_id: requestId })
     });
 
     const data = await res.json().catch(() => ({}));
