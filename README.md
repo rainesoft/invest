@@ -44,13 +44,9 @@ its performance to scale a retail and institutional subscriber base.
   iterates through subscribed users upon an approved S-Tier or A-Tier AI signal, calculating individualized lot allocations based on user-level parameters (`user_risk_settings`) while enforcing global safety gates (`system_settings`). For full mathematical sizing and calibration specifications, see the [PAMM Risk Management Guide](docs/PAMM%20Risk%20Management.md).
 - **Master Execution:** Trades are exclusively executed on the Master Account,
   and distributed automatically to PAMM followers at the broker level.
-- **Post-Mortem Engine (`resolve-outcomes`):** Autonomously tracks live trades
-  against a price action simulator. If a trade hits a Stop Loss, it leverages
-  OpenAI to automatically generate a post-mortem analysis of the failure based
-  on the last 10 candles.
-- **Treasury Management (`cron-treasury-snapshot`):** Continuously monitors the
-  overall Solvency Ratio of the system by cross-referencing Master Broker
-  account equities against total customer liabilities.
+- **Outcome Resolution & Post-Mortem (`resolve-outcomes` & `agent-post-mortem`):** Autonomously tracks live trades against market action, grading predictive accuracy and running Chief Risk Officer (CRO) weekly deep-dives.
+- **Treasury Management (`agent-treasury`):** Continuously calculates and monitors the aggregate Solvency Ratio (Assets / Liability), syncs Exness master balances, clears deposits, and executes PAMM internal transfers.
+- **Site Reliability Engineering (`agent-sre`):** Autonomous hourly watchdog auditing 7 core diagnostic probes, auto-reconciling desynced trades, garbage-collecting stale orders, and managing emergency global circuit breakers.
 
 ---
 
@@ -81,24 +77,15 @@ RaineInvest operates two distinct revenue models for its PAMM fund:
 
 ## ⚙️ The Automation Flywheel
 
-The system is engineered to run completely hands-off, managing its own
-execution, monitoring, and marketing.
+The system is engineered to run completely hands-off, managing its own execution, monitoring, and marketing.
 
-- **Telegram Broadcast:** A `pg_net` database trigger pushes new `APPROVED`
-  S-Tier and A-Tier signals directly to the RaineInvest retail Telegram channel
-  instantly via MarkdownV2 formatting, explicitly ignoring rejected trades.
-- **The Retail Lifecycle (Email Drip):** Using the **Resend API**, an automated
-  cron job nurtures Performance Plan users:
-  - **Day 0:** Welcome email.
-  - **Day 3:** "Fee Savings Report" highlighting how much they would have saved
-    in performance fees on winning trades by upgrading.
+- **Telegram Broadcast (`telegram-broadcast`):** A `pg_net` database trigger pushes new `APPROVED` S-Tier and A-Tier signals directly to the RaineInvest retail Telegram channel instantly via HTML formatting, explicitly ignoring rejected trades.
+- **The Retail Lifecycle Hub (`email-campaigns`):** Using the **Resend API**, an automated engine manages user communication:
+  - **Day 0:** Welcome to the Vault onboarding email (triggered instantly on `auth.users` insert).
+  - **Day 3:** "Cost of the Delay" showcase email featuring recent winning setups.
   - **Day 7:** Direct Paystack checkout upsell to Autopilot Pro.
-- **The Watchdog (`system-health-ping`):** Monitors the database timestamps. If
-  the primary engine stalls, it isolates the failure and emails the CIO
-  directly, keeping errors away from the retail Telegram.
-- **Metrics Amplification (The Auto-Brag):** Every Friday, the engine audits its
-  own 7-day performance (Net R-Multiple, Win Rate) and pushes pre-formatted
-  marketing copy to the CIO for native LinkedIn/X publishing.
+- **Autonomous Watchdog (`agent-sre`):** Runs every hour at `:15` to audit 7 diagnostic subsystems, auto-remedy trade desyncs, and trigger Telegram alerts if anomalies occur.
+- **Weekly Intelligence & Social Reporting (`agent-post-mortem`):** Audits 7-day net R-multiple, win rate, and realized PnL, feeds structured metrics to GPT-4o for institutional review, and pushes formatted social summaries to Telegram.
 
 ---
 
