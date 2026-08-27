@@ -31,7 +31,7 @@ Whenever the user requests a "system health check", you should:
    - Stale `ACTIVE` trade opportunities older than 24 hours without live `OPEN` positions are safely expired to `status = 'EXPIRED'` (complying with `trade_opportunities_status_check` constraint).
    - Completed trades (`WON`/`LOST`/`CLOSED`) have their parent `trade_opportunities` reconciled (`WON` for positive net PnL, `LOST` for negative net PnL, `EXPIRED` for cancelled/missed entries) rather than lingering in `ACTIVE`.
    - `vps-poll` receives fresh MT5 heartbeats (within 60s) and streams live 30m candles (`market_data_pti`).
-   - Hourly autonomous SRE watchdog `agent-sre` executed via `agent-sre-poll` audits all 7 subsystem probes, auto-heals status desyncs, and records `SRE_HEARTBEAT`.
+   - Hourly autonomous SRE watchdog `agent-sre` executed via `agent-sre-poll` audits all 8 subsystem probes (including broker error catching & net PnL opportunity grading), auto-heals status desyncs, and records `SRE_HEARTBEAT`.
 4. If anomalies or status desyncs are detected, apply the reconciliation SQL from Section 3G and Section 3H of `docs/System Health Checklist.md` and report findings to the user.
 
 ## Resources
