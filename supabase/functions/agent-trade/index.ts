@@ -975,6 +975,94 @@ serve(async (req) => {
                   moves.push({ symbol: trade.symbol, action: "Bar-Close Pivot Invalidation", from: 0, to: 0 });
                 }
               }
+
+              // --- 1D. CONTINGENT ALTERNATIVE SCENARIO AUTO-EXECUTION (Trading Central Methodology) ---
+              // When the preferred thesis is invalidated by a confirmed candle close beyond the Pivot,
+              // immediately stage the alternative scenario to capture the directional reversal breakout.
+              try {
+                const altScenario = opp.entry_plan_json?.trading_central_levels?.alternative_scenario;
+                if (altScenario && altScenario.direction && altScenario.target_1 && altScenario.target_2) {
+                  const altSide = altScenario.direction;
+                  const altEntry = Number(ptiSnap.c.toFixed(5));
+                  const altSl = Number(pivotPoint.toFixed(5));
+                  const altTp1 = Number(altScenario.target_1.toFixed(5));
+                  const altTp2 = Number(altScenario.target_2.toFixed(5));
+                  const altRisk = Math.abs(altEntry - altSl);
+                  const altReward = Math.abs(altTp2 - altEntry);
+                  const altRr = altRisk > 0 ? altReward / altRisk : 0;
+
+                  // Verify the alternative setup maintains institutional R:R >= 1.50
+                  if (altRr >= 1.50) {
+                    const tenMinsAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+                    const { data: existingFlip } = await supabase
+                      .from("trade_opportunities")
+                      .select("id")
+                      .eq("symbol", trade.symbol)
+                      .eq("side", altSide)
+                      .gte("created_at", tenMinsAgo)
+                      .limit(1);
+
+                    if (!existingFlip || existingFlip.length === 0) {
+                      console.log(`[Position Manager] Auto-Origination: Triggering Alternative Scenario for ${trade.symbol} (${altSide}) targeting TP1: ${altTp1}, TP2: ${altTp2}.`);
+                      
+                      const flipRationale = `[Trading Central Contingent Flip] Preferred ${trade.side} thesis invalidated on bar close beyond Pivot ($${pivotPoint}). Autonomously activated Alternative Scenario: ${altSide} towards TP1 $${altTp1} and TP2 $${altTp2}. Invalidation/Pivot set at $${altSl}.`;
+
+                      const { data: newFlipOpp } = await supabase
+                        .from("trade_opportunities")
+                        .insert({
+                          symbol: trade.symbol,
+                          side: altSide,
+                          timeframe: opp.timeframe || "30m",
+                          status: "APPROVED",
+                          source: opp.source || "agent-day",
+                          entry_plan_json: {
+                            price: altEntry,
+                            order_type: altSide === "LONG" ? "BUY MARKET" : "SELL MARKET",
+                            max_holding_bars: 20,
+                            horizon_hours: opp.timeframe === "1d" ? 480 : 10,
+                          },
+                          stop_plan_json: { stop: altSl, initial: altSl },
+                          take_profit_json: { tp: altTp2, tp1: altTp1, tp2: altTp2 },
+                          risk_summary: `Contingent Flip | R:R 1:${altRr.toFixed(1)}`,
+                          confidence: 82,
+                          ai_summary: flipRationale,
+                          ai_risks: "Managed by AI Risk Officer (Contingent Alternative Flip)",
+                          model_id: "agent-trade-contingent-flip",
+                        })
+                        .select("id")
+                        .single();
+
+                      if (newFlipOpp) {
+                        moves.push({
+                          symbol: trade.symbol,
+                          action: `Alternative Scenario Triggered (${altSide} @ ${altEntry})`,
+                          from: 0,
+                          to: altTp2,
+                        });
+                        await insertAuditLog(supabase, {
+                          actor_type: "SYSTEM",
+                          action: "ALTERNATIVE_SCENARIO_TRIGGERED",
+                          entity_type: "trade_opportunities",
+                          entity_id: newFlipOpp.id,
+                          payload_json: {
+                            symbol: trade.symbol,
+                            previous_side: trade.side,
+                            new_side: altSide,
+                            entry: altEntry,
+                            pivot_sl: altSl,
+                            tp1: altTp1,
+                            tp2: altTp2,
+                            rationale: flipRationale,
+                          },
+                        });
+                      }
+                    }
+                  }
+                }
+              } catch (flipErr: any) {
+                console.error(`[Position Manager] Error triggering alternative scenario for ${trade.symbol}:`, flipErr);
+              }
+
               continue;
             }
           }
