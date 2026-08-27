@@ -8,7 +8,7 @@ import { isMarketOpen } from "../../../packages/core/market.ts";
 
 import { revalidateOpportunity } from "../../../packages/strategy/revalidation.ts";
 
-import { getContextSnapshot, LogicContext, isBullishEngulfing, isBearishRejection, computeHtfFibAlignment, calibrateProbability, computeLiquiditySweepScore, calculateInstitutionalTradingCentralLevels } from "../../../packages/strategy/indicators.ts";
+import { getContextSnapshot, LogicContext, isBullishEngulfing, isBearishRejection, computeHtfFibAlignment, calibrateProbability, computeLiquiditySweepScore, calculateInstitutionalTradingCentralLevels, calculateFibonacciProjections, FibonacciProjection, FibonacciProjectionsResult } from "../../../packages/strategy/indicators.ts";
 import { validateGlobalSignal } from "../../../packages/strategy/agent-risk.ts";
 import OpenAI from "npm:openai";
 import { z } from "npm:zod";
@@ -34,6 +34,12 @@ export type FibLevels = {
     price: number;
     pct: number;
   }[];
+  projections?: {
+    label: string;
+    price: number;
+    pct: number;
+  }[];
+  projections_narrative?: string;
 };
 
 export function calculateFibonacciLevels(high: number[], low: number[], close: number[]): FibLevels {
@@ -102,12 +108,31 @@ export function calculateFibonacciLevels(high: number[], low: number[], close: n
     }));
   }
 
-  return { swing_high, swing_low, swing_range, direction, levels, extensions };
+  // 3-Point Fibonacci Projections / Expansions (Trading Central)
+  const projResult = calculateFibonacciProjections(high, low, close, lookbackBars);
+  const projections = projResult.has_valid_abc
+    ? projResult.projections.map((p) => ({
+        label: p.label,
+        price: p.price,
+        pct: p.ratio,
+      }))
+    : [];
+
+  return {
+    swing_high,
+    swing_low,
+    swing_range,
+    direction,
+    levels,
+    extensions,
+    projections,
+    projections_narrative: projResult.has_valid_abc ? projResult.narrative : undefined,
+  };
 }
 
 // Find the nearest Fib level acting as support/resistance for the current price
 export function findNearestFibLevels(fib: FibLevels, current_price: number, count = 3) {
-  const all = [...fib.levels, ...fib.extensions];
+  const all = [...fib.levels, ...fib.extensions, ...(fib.projections || [])];
   const sorted = all
     .map((l) => ({ ...l, distance: Math.abs(l.price - current_price) }))
     .sort((a, b) => a.distance - b.distance);
@@ -210,6 +235,9 @@ async function evaluateSwingOpportunity(
   const fibExtSummary = fib.extensions
     .map((l) => `  ${l.label} → $${l.price.toLocaleString()}`)
     .join("\n");
+  const fibProjSummary = fib.projections && fib.projections.length > 0
+    ? fib.projections.map((l) => `  ${l.label} → $${l.price.toLocaleString()}`).join("\n")
+    : "  No completed 3-point ABC swing formation established yet";
 
   const isWeekend = new Date().getDay() === 0 || new Date().getDay() === 6;
   const isCrypto = ["BTCUSD"].includes(symbol);
@@ -227,8 +255,12 @@ Direction Context: ${fib.direction}
 Retracement Levels (key zones to watch):
 ${fibSummary}
 
-Extension Levels (profit targets):
+Extension Levels (2-point targets):
 ${fibExtSummary}
+
+3-Point Projection / Expansion Levels (Swing A -> B from Retracement C):
+${fibProjSummary}
+${fib.projections_narrative ? `Narrative: ${fib.projections_narrative}` : ""}
 
 Current Price: ${snapshot.current_price?.toLocaleString()}
 Candlestick Pattern: ${snapshot.candlestick_pattern}
@@ -1661,11 +1693,16 @@ serve(async (req) => {
             return;
           }
 
+          const swingRisk = Math.abs(entry - sl);
+          const rewardTp2 = tp2 ? Math.abs(tp2 - entry) : 0;
+          const rrToTp2 = swingRisk > 0 ? Number((rewardTp2 / swingRisk).toFixed(2)) : 0;
+          const requiredRR = 1.70;
+
           const tcLevels = calculateInstitutionalTradingCentralLevels(
             currentPrice,
             sl,
-            tp1,
-            tp2,
+            tp1 || Number((entry + (isLong ? swingRisk : -swingRisk)).toFixed(5)),
+            tp2 || Number((entry + (isLong ? swingRisk * 2.0 : -swingRisk * 2.0)).toFixed(5)),
             isLong ? "LONG" : "SHORT",
             1.70
           );
