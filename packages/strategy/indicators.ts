@@ -62,6 +62,13 @@ export type LogicContext = {
   asian_low?: number | null;
   asian_sweep?: 'SWEPT_HIGH' | 'SWEPT_LOW' | 'NONE';
   mean_reversion_target?: number | null;
+
+  // Trading Central Institutional Elements
+  rsi_divergence?: 'REGULAR_BULLISH' | 'REGULAR_BEARISH' | 'HIDDEN_BULLISH' | 'HIDDEN_BEARISH' | 'NONE';
+  rsi_divergence_narrative?: string;
+  has_unfilled_gap?: boolean;
+  unfilled_gap_type?: 'BULLISH_GAP' | 'BEARISH_GAP' | 'NONE';
+  unfilled_gap_target?: number | null;
 };
 
 export function calculateFractals(high: number[], low: number[]) {
@@ -788,6 +795,10 @@ export function getContextSnapshot(
   const asianRange = computeAsianRange(timestamps, high, low, close);
   const mean_reversion_target = volProfile.poc || (current_bb_upper !== null && current_bb_lower !== null ? Number(((current_bb_upper + current_bb_lower) / 2).toFixed(5)) : null);
 
+  // Trading Central Divergence & Gap Detection
+  const divResult = detectDivergence(high, low, close, rsi14);
+  const gapResult = detectPriceGaps(open, close, high, low);
+
   return {
     timestamp,
     current_price,
@@ -837,6 +848,13 @@ export function getContextSnapshot(
     asian_low: asianRange.asian_low,
     asian_sweep: asianRange.asian_sweep,
     mean_reversion_target,
+
+    // Trading Central Institutional Elements
+    rsi_divergence: divResult.divergence,
+    rsi_divergence_narrative: divResult.description,
+    has_unfilled_gap: gapResult.has_unfilled_gap,
+    unfilled_gap_type: gapResult.gap_type,
+    unfilled_gap_target: gapResult.gap_close_price,
   };
 }
 
@@ -1053,4 +1071,279 @@ export function computeLiquiditySweepScore(
 
   return { pattern: null, htfAligned: false, directive: "" };
 }
+
+// ============================================================
+// RSI INDICATOR DIVERGENCE ENGINE (Trading Central Methodology)
+// Identifies Regular and Hidden divergences across recent swing pivots:
+// - Regular Bullish: Price Lower Low (LL) vs RSI Higher Low (HL) -> Reversal Long
+// - Regular Bearish: Price Higher High (HH) vs RSI Lower High (LH) -> Reversal Short
+// - Hidden Bullish:  Price Higher Low (HL) vs RSI Lower Low (LL) -> Continuation Long
+// - Hidden Bearish: Price Lower High (LH) vs RSI Higher High (HH) -> Continuation Short
+// ============================================================
+export type RsiDivergenceType = 
+  | "REGULAR_BULLISH" 
+  | "REGULAR_BEARISH" 
+  | "HIDDEN_BULLISH" 
+  | "HIDDEN_BEARISH" 
+  | "NONE";
+
+export interface DivergenceResult {
+  divergence: RsiDivergenceType;
+  description: string;
+  price_pivots: { p1: number; p2: number };
+  rsi_pivots: { r1: number; r2: number };
+}
+
+export function detectDivergence(
+  high: number[],
+  low: number[],
+  close: number[],
+  rsi: number[],
+  lookback = 35
+): DivergenceResult {
+  const defaultRes: DivergenceResult = {
+    divergence: "NONE",
+    description: "",
+    price_pivots: { p1: 0, p2: 0 },
+    rsi_pivots: { r1: 0, r2: 0 },
+  };
+
+  if (!close || !rsi || close.length < 15 || rsi.length < 15) return defaultRes;
+
+  const sliceLow = low.slice(-lookback);
+  const sliceHigh = high.slice(-lookback);
+  const sliceRsi = rsi.slice(-lookback);
+
+  // Find local swing lows (for bullish divergences)
+  const swingLows: { idx: number; price: number; rsi: number }[] = [];
+  for (let i = 2; i < sliceLow.length - 2; i++) {
+    if (
+      sliceLow[i] <= sliceLow[i - 1] &&
+      sliceLow[i] <= sliceLow[i - 2] &&
+      sliceLow[i] <= sliceLow[i + 1] &&
+      sliceLow[i] <= sliceLow[i + 2]
+    ) {
+      swingLows.push({ idx: i, price: sliceLow[i], rsi: sliceRsi[i] });
+    }
+  }
+
+  // Find local swing highs (for bearish divergences)
+  const swingHighs: { idx: number; price: number; rsi: number }[] = [];
+  for (let i = 2; i < sliceHigh.length - 2; i++) {
+    if (
+      sliceHigh[i] >= sliceHigh[i - 1] &&
+      sliceHigh[i] >= sliceHigh[i - 2] &&
+      sliceHigh[i] >= sliceHigh[i + 1] &&
+      sliceHigh[i] >= sliceHigh[i + 2]
+    ) {
+      swingHighs.push({ idx: i, price: sliceHigh[i], rsi: sliceRsi[i] });
+    }
+  }
+
+  // Check Bullish Divergences (last 2 swing lows)
+  if (swingLows.length >= 2) {
+    const p1 = swingLows[swingLows.length - 2];
+    const p2 = swingLows[swingLows.length - 1];
+
+    // Regular Bullish: Price Lower Low, RSI Higher Low
+    if (p2.price < p1.price && p2.rsi > p1.rsi + 1.5) {
+      return {
+        divergence: "REGULAR_BULLISH",
+        description: `Regular Bullish Divergence: Price printed Lower Low ($${p1.price} -> $${p2.price}) while RSI printed Higher Low (${p1.rsi.toFixed(1)} -> ${p2.rsi.toFixed(1)}). Signals institutional exhaustion of selling pressure.`,
+        price_pivots: { p1: p1.price, p2: p2.price },
+        rsi_pivots: { r1: p1.rsi, r2: p2.rsi },
+      };
+    }
+
+    // Hidden Bullish: Price Higher Low, RSI Lower Low
+    if (p2.price > p1.price && p2.rsi < p1.rsi - 1.5) {
+      return {
+        divergence: "HIDDEN_BULLISH",
+        description: `Hidden Bullish Divergence: Price printed Higher Low ($${p1.price} -> $${p2.price}) while RSI printed Lower Low (${p1.rsi.toFixed(1)} -> ${p2.rsi.toFixed(1)}). Signals bullish trend continuation.`,
+        price_pivots: { p1: p1.price, p2: p2.price },
+        rsi_pivots: { r1: p1.rsi, r2: p2.rsi },
+      };
+    }
+  }
+
+  // Check Bearish Divergences (last 2 swing highs)
+  if (swingHighs.length >= 2) {
+    const p1 = swingHighs[swingHighs.length - 2];
+    const p2 = swingHighs[swingHighs.length - 1];
+
+    // Regular Bearish: Price Higher High, RSI Lower High
+    if (p2.price > p1.price && p2.rsi < p1.rsi - 1.5) {
+      return {
+        divergence: "REGULAR_BEARISH",
+        description: `Regular Bearish Divergence: Price printed Higher High ($${p1.price} -> $${p2.price}) while RSI printed Lower High (${p1.rsi.toFixed(1)} -> ${p2.rsi.toFixed(1)}). Signals institutional exhaustion of buying momentum.`,
+        price_pivots: { p1: p1.price, p2: p2.price },
+        rsi_pivots: { r1: p1.rsi, r2: p2.rsi },
+      };
+    }
+
+    // Hidden Bearish: Price Lower High, RSI Higher High
+    if (p2.price < p1.price && p2.rsi > p1.rsi + 1.5) {
+      return {
+        divergence: "HIDDEN_BEARISH",
+        description: `Hidden Bearish Divergence: Price printed Lower High ($${p1.price} -> $${p2.price}) while RSI printed Higher High (${p1.rsi.toFixed(1)} -> ${p2.rsi.toFixed(1)}). Signals bearish trend continuation.`,
+        price_pivots: { p1: p1.price, p2: p2.price },
+        rsi_pivots: { r1: p1.rsi, r2: p2.rsi },
+      };
+    }
+  }
+
+  return defaultRes;
+}
+
+// ============================================================
+// PRICE GAP DETECTION ENGINE (Trading Central Methodology)
+// Identifies Weekend & Session Opening Gaps that act as institutional liquidity targets.
+// ============================================================
+export interface PriceGapInfo {
+  has_unfilled_gap: boolean;
+  gap_type: "BULLISH_GAP" | "BEARISH_GAP" | "NONE";
+  gap_open_price: number | null;
+  gap_close_price: number | null;
+  gap_distance: number;
+}
+
+export function detectPriceGaps(
+  open: number[],
+  close: number[],
+  high: number[],
+  low: number[],
+  lookback = 12
+): PriceGapInfo {
+  const defaultGap: PriceGapInfo = {
+    has_unfilled_gap: false,
+    gap_type: "NONE",
+    gap_open_price: null,
+    gap_close_price: null,
+    gap_distance: 0,
+  };
+
+  if (!open || !close || open.length < 5 || close.length < 5) return defaultGap;
+
+  const startIdx = Math.max(1, open.length - lookback);
+
+  for (let i = open.length - 1; i >= startIdx; i--) {
+    const prevClose = close[i - 1];
+    const currOpen = open[i];
+    const gapSize = currOpen - prevClose;
+    const gapPct = Math.abs(gapSize) / prevClose;
+
+    // Minimum gap threshold 0.15% to filter out normal spread noise
+    if (gapPct >= 0.0015) {
+      if (gapSize > 0) {
+        // Bullish Gap Up: prevClose < currOpen. Unfilled if low of all subsequent candles > prevClose
+        const subsequentLows = low.slice(i);
+        const minSubsequentLow = Math.min(...subsequentLows);
+        const isUnfilled = minSubsequentLow > prevClose;
+
+        if (isUnfilled) {
+          return {
+            has_unfilled_gap: true,
+            gap_type: "BULLISH_GAP",
+            gap_open_price: currOpen,
+            gap_close_price: prevClose,
+            gap_distance: Number(gapSize.toFixed(5)),
+          };
+        }
+      } else {
+        // Bearish Gap Down: currOpen < prevClose. Unfilled if high of all subsequent candles < prevClose
+        const subsequentHighs = high.slice(i);
+        const maxSubsequentHigh = Math.max(...subsequentHighs);
+        const isUnfilled = maxSubsequentHigh < prevClose;
+
+        if (isUnfilled) {
+          return {
+            has_unfilled_gap: true,
+            gap_type: "BEARISH_GAP",
+            gap_open_price: currOpen,
+            gap_close_price: prevClose,
+            gap_distance: Number(Math.abs(gapSize).toFixed(5)),
+          };
+        }
+      }
+    }
+  }
+
+  return defaultGap;
+}
+
+// ============================================================
+// TRADING CENTRAL RISK/REWARD & SCENARIO ENGINE
+// Enforces minimum 1:1.70 R:R against Target 2 (TP2).
+// Solves for the optimal pullback entry zone if market R:R < 1.70.
+// Generates the bifurcated alternative scenario beyond the Pivot.
+// ============================================================
+export interface TradingCentralLevels {
+  pivot_point: number;
+  direction: "LONG" | "SHORT";
+  tp1: number;
+  tp2: number;
+  current_rr_tp2: number;
+  min_rr_satisfied: boolean;
+  suggested_entry_price: number;
+  order_type: "BUY MARKET" | "SELL MARKET" | "BUY LIMIT" | "SELL LIMIT";
+  alternative_scenario: {
+    direction: "SHORT" | "LONG";
+    trigger_condition: string;
+    target_1: number;
+    target_2: number;
+  };
+}
+
+export function calculateInstitutionalTradingCentralLevels(
+  currentPrice: number,
+  pivotSl: number,
+  tp1: number,
+  tp2: number,
+  direction: "LONG" | "SHORT",
+  minRr = 1.70
+): TradingCentralLevels {
+  const isLong = direction === "LONG";
+  const riskDist = Math.abs(currentPrice - pivotSl);
+  const rewardTp2 = Math.abs(tp2 - currentPrice);
+  const currentRr = riskDist > 0 ? Number((rewardTp2 / riskDist).toFixed(2)) : 0;
+  const minRrSatisfied = currentRr >= minRr;
+
+  let suggestedEntry = currentPrice;
+  let orderType: "BUY MARKET" | "SELL MARKET" | "BUY LIMIT" | "SELL LIMIT" = isLong ? "BUY MARKET" : "SELL MARKET";
+
+  if (!minRrSatisfied && Math.abs(tp2 - pivotSl) > 0) {
+    // Solve for Entry where (TP2 - Entry) / (Entry - Pivot) = 1.75
+    // => Entry = Pivot + (TP2 - Pivot) / (1 + 1.75)
+    const totalSpan = Math.abs(tp2 - pivotSl);
+    const requiredRiskDist = totalSpan / (1 + minRr + 0.05); // 1.75 factor
+    suggestedEntry = isLong
+      ? Number((pivotSl + requiredRiskDist).toFixed(5))
+      : Number((pivotSl - requiredRiskDist).toFixed(5));
+    orderType = isLong ? "BUY LIMIT" : "SELL LIMIT";
+  }
+
+  // Alternative Scenario (Beyond Pivot)
+  const altDirection = isLong ? "SHORT" : "LONG";
+  const altSpan = Math.abs(currentPrice - pivotSl);
+  const altTp1 = isLong ? Number((pivotSl - altSpan).toFixed(5)) : Number((pivotSl + altSpan).toFixed(5));
+  const altTp2 = isLong ? Number((pivotSl - (altSpan * 1.8)).toFixed(5)) : Number((pivotSl + (altSpan * 1.8)).toFixed(5));
+
+  return {
+    pivot_point: pivotSl,
+    direction,
+    tp1,
+    tp2,
+    current_rr_tp2: currentRr,
+    min_rr_satisfied: minRrSatisfied,
+    suggested_entry_price: suggestedEntry,
+    order_type: orderType,
+    alternative_scenario: {
+      direction: altDirection,
+      trigger_condition: `A confirmed bar close ${isLong ? "below" : "above"} the Pivot Point ($${pivotSl}) invalidates the ${direction} thesis.`,
+      target_1: altTp1,
+      target_2: altTp2,
+    },
+  };
+}
+
 
