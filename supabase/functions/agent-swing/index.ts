@@ -248,22 +248,21 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
    - STEP 3: Only if distance is <= ${inflectionThresholdPct}% (current mode: ${fomcModeActive ? 'POST-EVENT VOLATILITY — threshold EXPANDED' : 'standard'}) and overrides are absent, you may consider an INFLECTION_POINT_WAIT rejection.
    - NEVER invoke a rejection guardrail without explicitly explaining why the Overrides in Step 1 did not apply.
 
-1. FIBONACCI & SMC CONFLUENCE:
+1. FIBONACCI, CHARTIST & SMC CONFLUENCE:
    An S-Tier (confidence >= 90) setup REQUIRES at least 3 of the following to align:
    - Price is at or within 1.5% of a key Fib level
    - SMART MONEY CONCEPTS (SMC): Price has mitigated a FVG or swept liquidity into an OB
+   - CHARTIST PATTERNS: Respecting Trend Channel boundaries (snapshot.trend_channel) or confirming Geometric Patterns (snapshot.chart_pattern: Triangles, Wedges, Double Tops/Bottoms, Head & Shoulders)
    - A daily/weekly structural support/resistance zone overlaps the Fib level
-   - RSI divergence or approaching oversold/overbought
+   - RSI or MACD divergence (snapshot.rsi_divergence / snapshot.macd_divergence) confirming exhaustion or trend continuation
    - Macro fundamentals explicitly support the direction
 
-2. DYNAMIC LTF STOP-LOSS COMPRESSION (CRITICAL FOR S-TIER):
-   - DO NOT use the Daily ATR or a wide Daily swing low for your Stop Loss.
-   - You MUST scan the LTF timeframe (1H or 30m) provided in the snapshot. Find the nearest SMC Order Block (ltf_bullish_ob_nearest / ltf_bearish_ob_nearest) or FVG.
-   - Anchor your Stop Loss directly behind the LTF Order Block. This compresses the risk by 80%, instantly transforming a 1:1 trade into a massive 1:5.0 S-Tier setup.
-   - For high-leverage assets like Indices (US30, NAS100) and Metals (XAGUSD, XAUUSD), you MUST tuck your Stop Loss extremely tightly behind the nearest Order Block or FVG to avoid triggering the 10% account blowout circuit breaker at the minimum lot size.
-   - CRITICAL REQUIREMENT: Calculate your R:R mathematically before returning your parameters. Your TP2 MUST be at least 1.2x your Stop Loss distance. If the nearest structural resistance is closer than 1.2R, you must invalidate the setup.
-   - LIMIT ORDERS FOR BETTER ENTRY: If the R:R at current market price fails the 1.2x requirement, you MUST calculate a deeper LIMIT order entry inside the FVG/OB and set 'suggested_entry_price' to that level to fix the math.
-   - EXACT PRICE FORMAT REQUIRED: You will output an 'atr_multiplier_sl' between 1.0 and 3.0 instead of a raw price. The Execution Desk will calculate the exact Stop Loss price dynamically using live volatility.
+2. DYNAMIC LTF STOP-LOSS COMPRESSION & BAR-CLOSE MANAGEMENT:
+   - Trading Central Invalidation Rule: Stop loss / Pivot point levels are managed at the confirmed CLOSE of a daily bar. Price may temporarily pierce the level intra-day without invalidating the preferred scenario.
+   - Scan the LTF timeframe (1H or 30m) provided in the snapshot. Find the nearest SMC Order Block (ltf_bullish_ob_nearest / ltf_bearish_ob_nearest) or FVG.
+   - Anchor your Stop Loss directly behind the LTF Order Block or structural swing pivot with >= 1.0x ATR buffer.
+   - CRITICAL REQUIREMENT: Calculate your R:R mathematically before returning your parameters. Your TP2 MUST be at least 1.70x your Stop Loss distance. If current market price gives R:R < 1.70, calculate an optimal pullback Limit Order at the nearest Fib discount level to enforce an institutional >= 1:1.75 R:R.
+   - EXACT PRICE FORMAT REQUIRED: Output suggested_entry_price, suggested_stop_loss, take_profit_1, take_profit_2, and take_profit_3.
 
 3. MACRO-BACKED MOMENTUM BREAKOUT STRATEGIES (IGNORING FIBS):
    - If the MACRO CONTEXT indicates an overwhelming fundamental trend (e.g., extremely bearish due to weak demand and supply increases), you are authorized to IGNORE Fibonacci retracements.
@@ -279,10 +278,10 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
    - If you detect a Liquidity Sweep where price pierced a Daily low/high and immediately closed back inside the range (wick rejection), flag this as an IMMEDIATE S-Tier reversal.
    - EXECUTION DIRECTIVE: Jump in before the retail market reacts. You MUST use a MARKET order with 'suggested_entry_price' set exactly to the 'current_price'.
 
-5. KELLY CRITERION OVERRIDE VS RIGID R:R:
+5. KELLY CRITERION & ASYMMETRIC EXPECTED VALUE:
    - Provide your honest 'probability_estimate' (1-99) of the trade hitting TP2.
-   - Standard requirement is 1:1.5 R:R for S-Tier.
-   - HOWEVER, if the trade has an exceptionally high Win Probability (e.g., 90%), the system applies a Kelly Criterion heuristic. For highly liquid assets (EURUSD, USDJPY, BTCUSD), an R:R as low as 1:0.5 is permitted for >90% probability setups, as the Expected Value remains massively positive.
+   - Standard requirement is minimum 1:1.70 R:R against Target 2 (TP2).
+   - If the trade has high conviction and Win Probability, verify that Expected Value remains positive: EV = (Probability * Reward) - (LossProb * Risk).
 
 6. DIRECTIONAL BIAS FILTERING (CONTRARIAN VALUE OVERRIDE):
    - If the Macro Sentiment actively contradicts your technical setup, generally DOWNGRADE the setup to B-Tier or REJECT.
@@ -290,10 +289,10 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
    - Do NOT apply this override if the macro news is catastrophic or extreme (scores of -8 to -10 or +8 to +10).
 
 7. TAKE PROFIT STRUCTURE — THREE TARGETS:
-   - TP1 (Conservative): Next Fib level or structure
-   - TP2 (Primary): Second major Fib level or structural zone
-   - TP3 (Runner): Fib extension or psychological round number
-   
+   - TP1 (Conservative): First Fib retracement/structure zone (50% target)
+   - TP2 (Primary): Second major Fib level (minimum 1:1.70 R:R benchmark)
+   - TP3 (Runner): Major Fib extension (127.2% / 161.8%) or psychological round number
+
 8. INFLECTION POINT AMBIGUITY GUARD (CRITICAL):
    - BEFORE invoking this guard, you MUST calculate the percentage distance between the Current Price and the nearest Fibonacci or Structural level. (Formula: abs(Current Price - Nearest Level) / Nearest Level * 100)
    - [CURRENT THRESHOLD = ${inflectionThresholdPct}%] ${fomcModeActive ? '[POST-EVENT VOLATILITY MODE ACTIVE: A central bank event fired recently. Threshold expanded to ' + inflectionThresholdPct + '% to account for wider ATR. Do NOT reject setups that are merely within the standard 0.5% zone — the market needs room to breathe.]' : 'Standard 0.5% threshold applies.'}
@@ -318,7 +317,7 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
     - You MUST actively deduct points for mixed signals, such as low ADX, choppy price action, or imperfect Fib alignment.
 
 12. CRYPTO COUNTER-TREND & MOMENTUM SCALPING (CRITICAL):
-    - EXPLICIT COUNTER-TREND AUTHORIZATION: For crypto assets (e.g. BTCUSD), you are EXPLICITLY AUTHORIZED to originate "Mean Reversion Shorts" when the RSI exceeds 85 AND strong bearish divergence is present on the MACD. Do not reject simply due to 'bullish macro trend' if these extreme overbought conditions exist.
+    - EXPLICIT COUNTER-TREND AUTHORIZATION: For crypto assets (e.g. BTCUSD, ETHUSD), you are EXPLICITLY AUTHORIZED to originate "Mean Reversion Shorts" when the RSI exceeds 85 AND strong bearish divergence is present on the MACD. Do not reject simply due to 'bullish macro trend' if these extreme overbought conditions exist.
     - SHORT-TERM PULLBACK LOGIC: When generating a counter-trend short, do NOT wait for a massive macro structural swing. Generate a quick A-Tier short setup targeting a pullback to the nearest Fibonacci retracement level (e.g., the 0.382 or 0.5 level) for TP1/TP2.
     - DYNAMIC RSI WEIGHTING (MOMENTUM SCALPS): If the news sentiment is overwhelmingly positive (via agent-news), IGNORE the overbought RSI up to 90. Instead of rejecting the setup, look for 'continuation momentum scalps' targeting immediate structural highs.
 
@@ -326,9 +325,11 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
     - HIGH-VOLUME NODES (HVN) & POC: An Order Block or Fibonacci level is 2x higher conviction if it aligns with the Point of Control (poc_price) or nearest High-Volume Node (nearest_hvn).
     - BREAKOUT VOLUME VALIDATION: S-Tier MACRO_MOMENTUM_BREAKOUT setups require expanding volume (volume_surge: true or volume_ratio >= 1.4). If breakout volume is ANEMIC (< 0.8x), reject the setup as a fakeout liquidity trap.
     - VALUE AREA VALUE: Pullbacks to Value Area Low (val_price) in a Bullish Trend, or Value Area High (vah_price) in a Bearish Trend, provide asymmetric risk entries.
-14. RSI DIVERGENCES & UNFILLED GAPS (TRADING CENTRAL METHODOLOGY):
-    - If snapshot.rsi_divergence is 'REGULAR_BULLISH' or 'REGULAR_BEARISH', treat it as institutional macro reversal confirmation (+10 confidence).
-    - If snapshot.rsi_divergence is 'HIDDEN_BULLISH' or 'HIDDEN_BEARISH', treat it as trend continuation confirmation (+5 confidence).
+14. CHARTIST PATTERNS, DIVERGENCES & UNFILLED GAPS (TRADING CENTRAL METHODOLOGY):
+    - If snapshot.trend_channel is present (ASCENDING_CHANNEL / DESCENDING_CHANNEL / HORIZONTAL_CHANNEL), respect channel boundaries (buy lower boundary, sell upper boundary).
+    - If snapshot.chart_pattern is detected (TRIANGLES, WEDGES, DOUBLE TOPS/BOTTOMS, HEAD & SHOULDERS), align execution with pattern breakout/reversal target (+10 confidence).
+    - If snapshot.rsi_divergence or snapshot.macd_divergence is 'REGULAR_BULLISH' or 'REGULAR_BEARISH', treat it as institutional macro reversal confirmation (+10 confidence).
+    - If snapshot.rsi_divergence or snapshot.macd_divergence is 'HIDDEN_BULLISH' or 'HIDDEN_BEARISH', treat it as trend continuation confirmation (+5 confidence).
     - If snapshot.has_unfilled_gap is true, prioritize the unfilled gap level (snapshot.unfilled_gap_target) as an institutional magnetic target.
 15. 20-BAR SWING HORIZON & ASYMMETRIC R:R (TARGET 2 >= 1:1.70):
     - Daily swing setups operate on a maximum horizon of 20 bars (20 trading days).
@@ -477,42 +478,47 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
         
         const prob = (args.probability_estimate || 50) / 100;
 
-        // 1. Limit Order Fallback for Sweeps
-        if (data.execution_parameters.entry_type === "Market" && rr < 1.2 && data.confidence_score < 100) {
-          // Calculate 50% mitigation between original entry and stop loss
-          const newEntry = entry + (sl - entry) * 0.5;
-          data.execution_parameters.suggested_entry_price = newEntry;
-          data.execution_parameters.entry_type = data.recommended_direction === "LONG" ? "Buy Limit" : "Sell Limit";
-          data.swing_rationale.fib_entry_level += " [System Fallback: 50% Mitigation Limit applied to improve R:R]";
-          
-          entry = newEntry;
-          risk = Math.abs(entry - sl);
-          reward = Math.abs(entry - tp2);
-          rr = risk > 0 ? reward / risk : 0;
+        // Trading Central Minimum R:R 1:1.70 on Target 2 (TP2)
+        let requiredRR = 1.70;
+
+        // 1. Adaptive Limit Solver for Swings when R:R < 1.70
+        if (rr < requiredRR && data.execution_parameters.entry_type === "Market") {
+          const targetRR = 1.75;
+          const solvedEntry = (tp2 + (targetRR * sl)) / (1 + targetRR);
+          const isIndexOrCrypto = ['US30', 'NAS100', 'GER30', 'SPX500', 'JP225', 'BTCUSD', 'ETHUSD'].includes(symbol);
+          const decimals = isIndexOrCrypto ? 2 : 5;
+          const formattedEntry = Number(solvedEntry.toFixed(decimals));
+
+          const isLong = data.recommended_direction === "LONG";
+          const isEntryValidLong = isLong && formattedEntry < entry && formattedEntry > sl;
+          const isEntryValidShort = !isLong && formattedEntry > entry && formattedEntry < sl;
+
+          if (isEntryValidLong || isEntryValidShort) {
+            console.log(`[Swing Desk] Adaptive Limit: Adjusted ${symbol} entry to ${formattedEntry} to lock in 1:${targetRR.toFixed(2)} R:R.`);
+            data.execution_parameters.suggested_entry_price = formattedEntry;
+            data.execution_parameters.entry_type = isLong ? "Buy Limit" : "Sell Limit";
+            data.swing_rationale.fib_entry_level += ` [Adaptive Limit Solver: Adjusted entry to $${formattedEntry} to guarantee 1:${targetRR.toFixed(2)} R:R on Target 2]`;
+            entry = formattedEntry;
+            risk = Math.abs(entry - sl);
+            reward = Math.abs(entry - tp2);
+            rr = risk > 0 ? reward / risk : 0;
+          }
         }
 
-        // Kelly / Expected Value check: EV = (Probability * Reward) - (LossProb * Risk)
+        // Expected Value check: EV = (Probability * Reward) - (LossProb * Risk)
         const expectedValueR = (prob * rr) - ((1 - prob) * 1);
 
-        let requiredRR = 1.5;
-        // 3. Expand Expected Value (Kelly Criterion) Tolerance
-        if (data.confidence_score === 100) requiredRR = 0.8;
-        else if (data.confidence_score >= 90) requiredRR = 1.0;
-        else if (data.confidence_score >= 80) requiredRR = 1.2;
-        else if (data.confidence_score >= 70) requiredRR = 1.5;
-
-        if (rr < requiredRR - 0.1 && expectedValueR < 0.5) {
-          // 2. Enforce LTF Stop Loss Compression (Drilldown)
-          if (data.confidence_score >= 90) {
+        if (rr < 1.50 && expectedValueR < 0.3) {
+          // Enforce LTF Stop Loss Compression (Drilldown)
+          if (data.confidence_score >= 85) {
             console.warn(`[Swing Guard] AI approved but R:R of 1:${rr.toFixed(2)} fails requirement. Sending to Sniper for LTF Drilldown.`);
             data.recommended_direction = "REQUIRE_LTF_DRILLDOWN";
             data.fibonacci_rationale += ` [System Guard: R:R too low (1:${rr.toFixed(2)}), requesting LTF entry compression]`;
           } else {
-            // It didn't meet the rules, force reject
-            console.warn(`[Swing Guard] AI approved but R:R of 1:${rr.toFixed(2)} and EV of ${expectedValueR.toFixed(2)} fails requirement. Rejecting.`);
+            console.warn(`[Swing Guard] AI approved but R:R of 1:${rr.toFixed(2)} fails minimum 1:1.70 requirement. Rejecting.`);
             return {
               recommended_direction: "NONE",
-              fibonacci_rationale: `Rejected post-AI: TP2 R:R of 1:${rr.toFixed(2)} and EV ${expectedValueR.toFixed(2)} does not meet requirements`,
+              fibonacci_rationale: `Rejected post-AI: TP2 R:R of 1:${rr.toFixed(2)} does not meet the institutional 1:1.70 requirement`,
               confidence_score: 0
             } as any;
           }
@@ -557,7 +563,7 @@ serve(async (req) => {
     reqBody.symbols?.join(",") ||
     searchParams.get("symbols") ||
     Deno.env.get("SWING_SYMBOLS") ||
-    "XAUUSD,XAGUSD,BTCUSD,UKOIL,EURUSD,GBPUSD,USDJPY,EURJPY,GBPJPY,AUDUSD,NZDUSD,AUDJPY,CADJPY,EURGBP,US30,NAS100";
+    "XAUUSD,XAGUSD,BTCUSD,ETHUSD,UKOIL,USOIL,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF,NZDUSD,EURJPY,GBPJPY,US30,NAS100,SPX500,GER30,JP225,AAPL,MSFT,NVDA,GOOGL,AMZN,TSLA,META";
   const newsContext = searchParams.get("news") ?? undefined;
 
   const url = Deno.env.get("SUPABASE_URL");
@@ -700,12 +706,12 @@ serve(async (req) => {
         if (activeSignals && activeSignals.length > 0) {
           await Promise.all(activeSignals.map(async (signal) => {
             try {
-              // 1. Math Validation (TTL)
+              // 1. Math Validation (20-Period Daily Horizon TTL: 20 Trading Days = 480 Hours)
               const hoursElapsed = (Date.now() - new Date(signal.created_at).getTime()) / (1000 * 60 * 60);
-              if (hoursElapsed > 12) {
-                await supabase.from("trade_opportunities").update({ status: "EXPIRED", ai_risks: "Expired: 12h TTL exceeded without execution." }).eq("id", signal.id);
+              if (hoursElapsed > 480) {
+                await supabase.from("trade_opportunities").update({ status: "EXPIRED", ai_risks: "Expired: 20-period daily swing anticipation horizon (20 days) reached without execution." }).eq("id", signal.id);
                 // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
-                console.log(`[Validation] EXPIRED ${signal.symbol}: 12h TTL expired.`);
+                console.log(`[Validation] EXPIRED ${signal.symbol}: 20-day swing horizon reached.`);
                 return;
               }
 
@@ -721,17 +727,29 @@ serve(async (req) => {
                 signal.symbol
               );
 
-              // 3. Math Validation (Stop Loss & Take Profit Hit)
+              // 3. Math Validation (Bar-Close Stop Loss & Take Profit Hit)
+              const currentClose = result.length > 0 ? result[result.length - 1].c : snapshot.current_price;
               const currentHigh = result.length > 0 ? result[result.length - 1].h : snapshot.current_price;
               const currentLow = result.length > 0 ? result[result.length - 1].l : snapshot.current_price;
               const stopLoss = signal.stop_plan_json?.stop;
               const takeProfit = signal.take_profit_json?.tp;
+              const atr = snapshot.atr_14 || Math.abs(currentClose * 0.01);
+              const catastrophicSlLong = stopLoss ? stopLoss - (atr * 2.0) : null;
+              const catastrophicSlShort = stopLoss ? stopLoss + (atr * 2.0) : null;
               
               if (stopLoss) {
-                if ((signal.side === 'LONG' && currentLow <= stopLoss) || 
-                    (signal.side === 'SHORT' && currentHigh >= stopLoss)) {
-                  await supabase.from("trade_opportunities").update({ status: "LOST", r_multiple: -1, ai_risks: "Technical Invalidation: Stop Loss crossed." }).eq("id", signal.id);
-                  console.log(`[Validation] LOST ${signal.symbol}: Stop loss crossed by live price.`);
+                // Trading Central Bar-Close Stop Loss Rule:
+                // Evaluated strictly on confirmed daily bar close, allowing intra-day wicks to breathe unless catastrophic emergency stop is breached
+                const isBarCloseLostLong = signal.side === 'LONG' && (currentClose <= stopLoss || (catastrophicSlLong !== null && currentLow <= catastrophicSlLong));
+                const isBarCloseLostShort = signal.side === 'SHORT' && (currentClose >= stopLoss || (catastrophicSlShort !== null && currentHigh >= catastrophicSlShort));
+
+                if (isBarCloseLostLong || isBarCloseLostShort) {
+                  await supabase.from("trade_opportunities").update({ 
+                    status: "LOST", 
+                    r_multiple: -1, 
+                    ai_risks: "Technical Invalidation: Confirmed daily bar close beyond Stop Loss / Pivot level." 
+                  }).eq("id", signal.id);
+                  console.log(`[Validation] LOST ${signal.symbol}: Confirmed daily bar close beyond stop loss.`);
                   return;
                 }
               }
