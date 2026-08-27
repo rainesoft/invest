@@ -29,10 +29,15 @@ export async function insertAuditLog(
   const prevHash = last?.hash ?? "";
   const hash = await computeHash(prevHash + JSON.stringify(entry));
 
-  const { error } = await supabase.from("audit_log").insert({
-    ...entry,
-    hash,
-  });
+  const cleanEntry: any = { ...entry, hash };
+  if (cleanEntry.entity_id && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanEntry.entity_id)) {
+    delete cleanEntry.entity_id;
+  }
+  if (cleanEntry.actor_id && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanEntry.actor_id)) {
+    delete cleanEntry.actor_id;
+  }
+
+  const { error } = await supabase.from("audit_log").insert(cleanEntry);
   if (error) {
     throw new Error(error.message);
   }

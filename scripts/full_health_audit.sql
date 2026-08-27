@@ -43,13 +43,16 @@ SELECT jsonb_pretty(jsonb_build_object(
 
   'cron_duplicates', (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
-      'duplicate_jobs', array_agg(jobname),
-      'schedule', schedule,
-      'count', count(*)
+      'duplicate_jobs', sub.duplicate_jobs,
+      'schedule', sub.schedule,
+      'count', sub.cnt
     )), '[]'::jsonb)
-    FROM cron.job
-    GROUP BY command, schedule
-    HAVING count(*) > 1
+    FROM (
+      SELECT array_agg(jobname) AS duplicate_jobs, schedule, count(*) AS cnt
+      FROM cron.job
+      GROUP BY command, schedule
+      HAVING count(*) > 1
+    ) sub
   ),
 
   'database_webhook_http_errors', (

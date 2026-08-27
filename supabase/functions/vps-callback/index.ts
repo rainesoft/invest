@@ -11,6 +11,7 @@ serve(async (req) => {
     const status = url.searchParams.get("status");
     const ticket = url.searchParams.get("ticket");
     const errorMsg = url.searchParams.get("error");
+    const price = url.searchParams.get("price") || url.searchParams.get("open_price");
 
     if (!tradeId || !status) {
       return new Response("Missing parameters", { status: 400 });
@@ -24,6 +25,7 @@ serve(async (req) => {
     const updatePayload: any = { status };
     if (ticket && ticket !== "0") updatePayload.meta_api_order_id = ticket;
     if (errorMsg) updatePayload.error_message = errorMsg;
+    if (price && Number(price) > 0) updatePayload.open_price = Number(price);
 
     // Autonomous HFT execution bypasses the Cloud ledger intentionally for speed.
     // We return 200 OK so the MT5 EA stops retrying and clears the queue.

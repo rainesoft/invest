@@ -59,6 +59,23 @@ def query_table(table: str, params: str = "") -> list:
         print(f"Network error querying {table}: {e}")
         return []
 
+def parse_iso(dt_str: str):
+    """Safely parse ISO timestamp across various formats and Python versions."""
+    if not dt_str:
+        return None
+    s = dt_str.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(s)
+    except Exception:
+        pass
+    # Fallback with regex/strptime
+    try:
+        import dateutil.parser
+        return dateutil.parser.isoparse(dt_str)
+    except Exception:
+        pass
+    return None
+
 now_utc = datetime.now(timezone.utc)
 print(f"================================================================================")
 print(f"=== RAINE INVEST SYSTEM HEALTH CHECK — {now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')} ===")
@@ -152,22 +169,24 @@ if desynced_trades:
 else:
     print("  Zero desynced trades found. (All OPEN trades have profit_usd = null). Clean!")
 
-def parse_iso(dt_str: str):
-    """Safely parse ISO timestamp across various formats and Python versions."""
-    if not dt_str:
-        return None
-    s = dt_str.replace("Z", "+00:00")
-    try:
-        return datetime.fromisoformat(s)
-    except Exception:
-        pass
-    # Fallback with regex/strptime
-    try:
-        import dateutil.parser
-        return dateutil.parser.isoparse(dt_str)
-    except Exception:
-        pass
-    return None
+# 8b. Stale Unfilled Pending Orders (> 48h)
+print("\n--- 8b. STALE UNFILLED PENDING ORDERS (> 48h) ---")
+stale_unfilled = query_table("user_trades", "status=in.(OPEN,PENDING,VPS_PENDING)&open_price=is.null&order=created_at.desc")
+if stale_unfilled:
+    found_stale = False
+    for su in stale_unfilled:
+        c_at = parse_iso(su.get('created_at'))
+        if c_at:
+            if c_at.tzinfo is None:
+                c_at = c_at.replace(tzinfo=timezone.utc)
+            hours_old = (now_utc - c_at).total_seconds() / 3600.0
+            if hours_old >= 48:
+                found_stale = True
+                print(f"  ⚠️ STALE UNFILLED ORDER: {su.get('id')} | {su.get('symbol')} {su.get('side')} | Created: {su.get('created_at')} ({hours_old:.1f}h old) | Ticket: {su.get('meta_api_order_id')}")
+    if not found_stale:
+        print("  Zero stale unfilled pending orders > 48h found. Clean!")
+else:
+    print("  Zero stale unfilled pending orders found.")
 
 # 9. VPS Heartbeat Diagnostics
 print("\n--- 9. VPS HEARTBEAT & RISK SETTINGS ---")
@@ -181,7 +200,7 @@ if risk_settings:
             if hb_dt:
                 if hb_dt.tzinfo is None:
                     hb_dt = hb_dt.replace(tzinfo=timezone.utc)
-                minutes_ago = (now_utc - hb_dt).total_seconds() / 60.0
+                minutes_ago = max(0.0, (now_utc - hb_dt).total_seconds() / 60.0)
         print(f"  User: {rs.get('user_id')} | Master: {rs.get('is_master_account')} | Capital: ${rs.get('portfolio_capital')} | Live: {rs.get('is_live_execution_enabled')} | Auto: {rs.get('auto_trade_enabled')} | VPS Ping: {hb} ({minutes_ago:.1f} mins ago)" if minutes_ago is not None else f"  User: {rs.get('user_id')} | No heartbeat")
 else:
     print("  No risk settings found.")
