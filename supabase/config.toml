@@ -335,126 +335,58 @@ s3_secret_key = "env(S3_SECRET_KEY)"
 
 
 
-# Trigger the Outcome Simulator at 2 and 32 past the hour
-[functions.resolve-outcomes]
+# --- CANONICAL EDGE FUNCTIONS (18 Active) ---
+
+[functions.agent-news]
 verify_jwt = false
 
-# [functions.resolve-outcomes.schedule]
-# cron = "2,32 * * * *"
-
-# Watchdog: Verify the system is healthy every 30 minutes, offset by 15 mins
-[functions.system-health-ping]
+[functions.agent-day]
 verify_jwt = false
 
-# [functions.system-health-ping.schedule]
-# cron = "15,45 * * * *"
-
-# Weekly Auto-Brag: Aggregate metrics and push to Telegram on Friday at 21:00 UTC
-[functions.generate-weekly-report]
-verify_jwt = false
-
-# [functions.generate-weekly-report.schedule]
-# cron = "0 21 * * 5"
-
-# Daily Drip Campaign: Execute Day 3 and Day 7 email sequences
-[functions.daily-drip-campaign]
-verify_jwt = false
-
-# [functions.daily-drip-campaign.schedule]
-# cron = "0 12 * * *"
-
-# Swing Fibonacci Engine: Daily macro swing signal generation at 07:00 UTC (before London open)
-# Cron is registered directly in pg_cron: cron.schedule('agent-swing-daily', '0 7 * * *', ...)
 [functions.agent-swing]
 verify_jwt = false
 
-[functions.process-retries]
-enabled = true
+[functions.agent-trade]
 verify_jwt = false
 
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
-entrypoint = "./functions/process-retries/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/process-retries/*.html" ]
-
-[functions.paystack-webhook]
+[functions.agent-treasury]
 verify_jwt = false
 
-
-[functions.process-recurring-billing]
-enabled = true
+[functions.agent-sre]
 verify_jwt = false
 
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
-entrypoint = "./functions/process-recurring-billing/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/process-recurring-billing/*.html" ]
-
-# [functions.auto-eject]
-# enabled = true
-# verify_jwt = false
-#
-# # Uncomment to specify a custom file path to the entrypoint.
-# # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
-# entrypoint = "./functions/auto-eject/index.ts"
-# # Specifies static files to be bundled with the function. Supports glob patterns.
-# # For example, if you want to serve static HTML pages in your function:
-# # static_files = [ "./functions/auto-eject/*.html" ]
-
-[functions.dump-signals]
-enabled = true
+[functions.agent-post-mortem]
 verify_jwt = false
 
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
-entrypoint = "./functions/dump-signals/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/dump-signals/*.html" ]
+[functions.resolve-outcomes]
+verify_jwt = false
+
+[functions.exness-history-sync]
+verify_jwt = false
 
 [functions.vps-poll]
-verify_jwt = false
-
-[functions.vps-callback]
 verify_jwt = false
 
 [functions.vps-market-feed]
 verify_jwt = false
 
+[functions.vps-callback]
+verify_jwt = false
+
 [functions.vps-history]
 verify_jwt = false
 
+[functions.paystack-webhook]
+verify_jwt = false
+
+[functions.process-recurring-billing]
+verify_jwt = false
+
+[functions.email-campaigns]
+verify_jwt = false
+
+[functions.telegram-broadcast]
+verify_jwt = false
+
 [functions.telegram-webhook]
-enabled = true
-verify_jwt = false
-
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
-entrypoint = "./functions/telegram-webhook/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/telegram-webhook/*.html" ]
-
-
-
-
-[functions.clear-deposit]
-enabled = true
-verify_jwt = true
-import_map = "./functions/import_map.json"
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
-entrypoint = "./functions/clear-deposit/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/clear-deposit/*.html" ]
-
-[functions.agent-day]
-verify_jwt = false
-
-[functions.agent-trade]
 verify_jwt = false
