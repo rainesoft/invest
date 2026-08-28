@@ -105,15 +105,18 @@ LIMIT 10;
 
 The `created_at` timestamps should fall within the last 4 hours for `agent-swing`, within the last 30 minutes for `agent-day`, and within the last hour for `agent-news`.
 
-### Expected Cron Schedule Reference (12 Canonical Jobs)
+### Expected Cron Schedule Reference (15 Canonical Jobs)
 
 | Job Name | Schedule | Expected Behaviour |
 |---|---|---|
 | `agent-day-poll` | `*/30 * * * *` | Fires every 30 minutes to evaluate intraday pivot setups |
 | `agent-news-poll` | `0 * * * *` | Fires at the top of every hour, 7 days a week |
 | `agent-swing-forex` | `0 */4 * * 1-5` | Fires every 4 hours on weekdays for Forex pairs |
-| `agent-swing-crypto` | `2 */4 * * *` | Fires every 4 hours daily for BTCUSD |
-| `agent-swing-indices` | `4 */4 * * 1-5` | Fires every 4 hours on weekdays for Indices & Commodities |
+| `agent-swing-crypto` | `2 */3 * * *` | Fires every 3 hours daily for BTCUSD & ETHUSD |
+| `agent-swing-indices` | `6 */4 * * 1-5` | Fires every 4 hours on weekdays for Global Indices |
+| `agent-swing-commodities` | `4 */4 * * 1-5` | Fires every 4 hours on weekdays for Commodities (XAUUSD, XAGUSD, UKOIL, USOIL) |
+| `agent-swing-stocks-daily` | `30 13 * * 1-5` | Fires weekdays at 13:30 UTC for US Equities Market Open |
+| `agent-swing-stocks` | `0 22 * * 0` | Fires Sunday 22:00 UTC for Weekly Equities Sweep |
 | `agent-trade-poll` | `3-59/5 * * * *` | Fires every 5 min (offset 3m), 7 days a week |
 | `position-manager-poll` | `*/30 * * * *` | Fires every 30 min, 7 days a week to trail stops, manage invalidations, and cancel stale pending orders |
 | `exness-history-sync-poll` | `*/15 * * * *` | Fires every 15 min to reconcile closed trades and update portfolio capital |
