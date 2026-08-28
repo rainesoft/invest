@@ -63,4 +63,5 @@ temp/
 temp/
 supabase/functions/temp-sql/
 
-temp/
+# Confidential Documentation
+docs/confidential/
