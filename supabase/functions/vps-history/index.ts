@@ -87,7 +87,7 @@ serve(async (req) => {
         if (!hasActiveLegs) {
           const totalNetProfit = siblingTrades.reduce((acc, st) => acc + (Number(st.profit_usd) || 0), 0);
           const totalRisk = siblingTrades.reduce((acc, st) => acc + (Number(st.risk_amount) || 0), 0);
-          const oppOutcome = totalNetProfit > 0 ? "WON" : (totalNetProfit < 0 ? "LOST" : "CLOSED");
+          const oppOutcome = totalNetProfit > 0 ? "WON" : (totalNetProfit < 0 ? "LOST" : "EXPIRED");
           const rMultiple = totalRisk > 0 ? Number((totalNetProfit / totalRisk).toFixed(2)) : (totalNetProfit > 0 ? 1.0 : -1.0);
 
           await supabase

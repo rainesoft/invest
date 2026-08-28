@@ -195,7 +195,7 @@ _${aiSummary}_
 *Reason:*
 _${reason}_
 
-[Manage Account](https://yourdomain.com/dashboard)
+[Manage Account](https://raineinvest.com/dashboard)
       `.trim();
 
       const telegramUrl = `https://api.telegram.org/bot${CENTRAL_TELEGRAM_BOT_TOKEN}/sendMessage`;

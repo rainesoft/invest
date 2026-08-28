@@ -288,13 +288,36 @@ serve(async (req) => {
     // 4F. Broker Execution Failures in Last Hour (MT5 Codes 10014, 10015, 10016, 10019)
     const { data: recentFailedTrades } = await supabase
       .from("user_trades")
-      .select("id, symbol, side, error_message, created_at")
+      .select("id, symbol, side, opportunity_id, error_message, created_at")
       .eq("status", "FAILED")
       .gte("created_at", oneHourAgoIso);
 
     if (recentFailedTrades && recentFailedTrades.length > 0) {
       const sample = recentFailedTrades[0];
       issues.push(`🚨 <b>Broker Execution Errors (${recentFailedTrades.length} in last hour):</b> ${sample.symbol} ${sample.side} failed with <code>${sample.error_message || "Unknown error"}</code>.`);
+
+      // Auto-reconcile parent opportunities stuck in APPROVED or ACTIVE
+      for (const ft of recentFailedTrades) {
+        if (ft.opportunity_id) {
+          const { data: opp } = await supabase
+            .from("trade_opportunities")
+            .select("id, status, ai_summary")
+            .eq("id", ft.opportunity_id)
+            .in("status", ["APPROVED", "ACTIVE"])
+            .maybeSingle();
+
+          if (opp) {
+            const failReason = ft.error_message ? `Broker Execution Failed: ${ft.error_message}` : "Broker Execution Failed";
+            await supabase.from("trade_opportunities").update({
+              status: "REJECTED",
+              ai_risks: failReason,
+              ai_summary: `${opp.ai_summary || ""}\n\n[Agent SRE Auto-Healing] ${failReason}`.trim(),
+              closed_at: now.toISOString(),
+            }).eq("id", opp.id);
+            autoRemediations.push(`Marked failed opportunity ${ft.symbol} (${opp.id}) as REJECTED due to ${failReason}`);
+          }
+        }
+      }
     }
 
     // ─────────────────────────────────────────────────────────────
