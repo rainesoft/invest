@@ -297,17 +297,23 @@ serve(async (req) => {
     const now = new Date();
     const results = [];
 
+    const speechEventsToScrape: string[] = [];
     // 2. Scan events
     for (const event of events) {
-      // We only care about events happening roughly right now (within the last 15 mins)
-      // to avoid triggering off old data.
       const eventTime = new Date(event.date);
       const diffMinutes = (now.getTime() - eventTime.getTime()) / 60000;
+
+      // Central Bank Speech Tracker: If a high-impact speech fired within the last 90 mins or is scheduled within 30 mins
+      if (event.impact === "High" && (/Speaks/i.test(event.title) || /Speech/i.test(event.title) || /Testimony/i.test(event.title) || /Press Conference/i.test(event.title))) {
+        if (diffMinutes >= -30 && diffMinutes <= 90) {
+          speechEventsToScrape.push(`${event.country} ${event.title}`);
+        }
+      }
       
-      // Skip future events or events older than 15 mins
+      // Skip future events or events older than 15 mins for numeric rules
       if (diffMinutes < 0 || diffMinutes > 15) continue;
       
-      // Needs to have 'actual' published
+      // Needs to have 'actual' published for numeric deviation rules
       if (!event.actual) continue;
 
       // Check against our rules
@@ -423,16 +429,23 @@ serve(async (req) => {
       try {
         let headlinesToProcess: string[] = [];
 
-        // 1. Proactive Tavily Macro & Crypto Queries
+        // 1. Proactive Tavily Macro, Central Bank & Commodity Queries
         if (TAVILY_API_KEY) {
           const tavilyQueries = [
+            "Federal Reserve Fed Chair speakers comments inflation interest rates USD breaking",
+            "Gold XAUUSD price reaction Treasury yields US dollar breaking",
             "BOJ Bank of Japan interest rate policy yen JPY intervention breaking",
-            "ECB European Central Bank interest rate monetary policy EUR",
-            "Federal Reserve rate cuts inflation USD dollar breaking",
+            "ECB European Central Bank interest rate monetary policy EUR breaking",
+            "Crude oil Brent WTI OPEC geopolitical supply disruption breaking",
             "BTCUSD crypto breaking news market sentiment"
           ];
 
-          for (const query of tavilyQueries) {
+          const allTavilyQueries = [
+            ...tavilyQueries,
+            ...speechEventsToScrape.map(s => `${s} statements remarks key quotes market reaction live breaking`)
+          ];
+
+          for (const query of allTavilyQueries) {
             try {
               console.log(`[Macro Scout] [Trace: ${traceId}] Proactively querying Tavily: "${query}"...`);
               const tavilyRes = await fetch("https://api.tavily.com/search", {
@@ -464,7 +477,8 @@ serve(async (req) => {
         // 2. Fallback / Complementary Multi-Source RSS Feeds
         const rssFeeds = [
           "https://cointelegraph.com/rss",
-          "https://www.forexlive.com/feed/news"
+          "https://www.forexlive.com/feed/news",
+          "https://feeds.content.dowjones.io/public/rss/mw_topstories"
         ];
 
         for (const feedUrl of rssFeeds) {
@@ -512,12 +526,15 @@ Analyze this news headline and return ONLY a JSON object.
 Format: { 
   "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL", 
   "confidence": 0-100, 
-  "symbol": "EURJPY" | "EURUSD" | "GBPUSD" | "USDJPY" | "AUDUSD" | "NZDUSD" | "AUDJPY" | "CADJPY" | "EURGBP" | "BTCUSD" | "XAUUSD" | "US30" | "NAS100" | "NONE", 
+  "symbol": "EURJPY" | "EURUSD" | "GBPUSD" | "USDJPY" | "AUDUSD" | "NZDUSD" | "AUDJPY" | "CADJPY" | "EURGBP" | "BTCUSD" | "XAUUSD" | "XAGUSD" | "UKOIL" | "USOIL" | "US30" | "NAS100" | "NONE", 
   "requires_verification": boolean 
 }
 CRITICAL RULES:
+- If news indicates Hawkish Fed commentary, sticky inflation, higher Treasury yields, or USD strength: Map symbol to "XAUUSD" with BEARISH sentiment (Gold falls on high yields/strong dollar) or "USDJPY" with BULLISH sentiment (USD rises vs JPY) with Confidence >= 85.
+- If news indicates Dovish Fed commentary, cooling inflation, rate cut acceleration, or USD weakness: Map symbol to "XAUUSD" with BULLISH sentiment (Gold rises on rate cuts) or "USDJPY" with BEARISH sentiment (USD falls vs JPY) with Confidence >= 85.
 - If news indicates BOJ rate hike or JPY intervention/strength, map symbol to "EURJPY" or "USDJPY" with BEARISH sentiment.
 - If news indicates ECB rate cuts or Euro weakness, map symbol to "EURUSD" or "EURJPY" with BEARISH sentiment.
+- If news indicates Middle East / geopolitical escalation or crude oil supply disruption, map symbol to "UKOIL" or "USOIL" with BULLISH sentiment.
 - If the news is ambiguous, a rumor, or confidence is below 85, set requires_verification to true.
 - If the headline is a generic homepage index title (e.g. "Bitcoin News Today", "Latest Updates", "Live News"), you MUST set sentiment to NEUTRAL, confidence to 0, and symbol to NONE. Only process specific, actionable macroeconomic catalysts.
 Headline: "${title}"`;
@@ -576,9 +593,12 @@ Based on this additional context, provide a final evaluation. Return ONLY a JSON
 Format: { 
   "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL", 
   "confidence": 0-100, 
-  "symbol": "EURJPY" | "EURUSD" | "GBPUSD" | "USDJPY" | "AUDUSD" | "NZDUSD" | "AUDJPY" | "CADJPY" | "EURGBP" | "BTCUSD" | "XAUUSD" | "US30" | "NAS100" | "NONE" 
+  "symbol": "EURJPY" | "EURUSD" | "GBPUSD" | "USDJPY" | "AUDUSD" | "NZDUSD" | "AUDJPY" | "CADJPY" | "EURGBP" | "BTCUSD" | "XAUUSD" | "XAGUSD" | "UKOIL" | "USOIL" | "US30" | "NAS100" | "NONE" 
 }
-CRITICAL RULE: If the headline and context refer to a generic homepage index without a specific underlying catalyst, set sentiment to NEUTRAL, confidence to 0, and symbol to NONE.`;
+CRITICAL RULES:
+- If news indicates Hawkish Fed commentary, sticky inflation, higher yields, or USD strength: Map symbol to "XAUUSD" with BEARISH sentiment (Gold falls) or "USDJPY" with BULLISH sentiment (USD rises).
+- If news indicates Dovish Fed commentary, cooling inflation, or USD weakness: Map symbol to "XAUUSD" with BULLISH sentiment (Gold rises) or "USDJPY" with BEARISH sentiment (USD falls).
+- If the headline and context refer to a generic homepage index without a specific underlying catalyst, set sentiment to NEUTRAL, confidence to 0, and symbol to NONE.`;
 
                const verifyRes = await fetch("https://api.openai.com/v1/chat/completions", {
                   method: "POST",
@@ -606,7 +626,7 @@ CRITICAL RULE: If the headline and context refer to a generic homepage index wit
           }
 
           // Execute & Publish ONLY if threshold met across valid trading universe
-          const validSymbols = ["EURJPY", "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "AUDJPY", "CADJPY", "EURGBP", "BTCUSD", "XAUUSD", "US30", "NAS100"];
+          const validSymbols = ["EURJPY", "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "AUDJPY", "CADJPY", "EURGBP", "BTCUSD", "XAUUSD", "XAGUSD", "UKOIL", "USOIL", "US30", "NAS100"];
           if (finalParsed.confidence >= 85 && (finalParsed.sentiment === "BULLISH" || finalParsed.sentiment === "BEARISH") && validSymbols.includes(finalParsed.symbol)) {
             
             const side = finalParsed.sentiment === "BULLISH" ? "LONG" : "SHORT";

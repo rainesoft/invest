@@ -14,11 +14,13 @@ export async function fetchRealtimeNews(symbol: string): Promise<string[] | null
     if (TAVILY_API_KEY) {
       let tavilyQuery = "";
       if (symbol.includes("OIL")) {
-        tavilyQuery = "EIA crude oil inventories, API stockpile data, OPEC+ statements, global oil supply demand";
+        tavilyQuery = "Crude oil Brent WTI OPEC+ supply geopolitical tensions EIA inventories global oil demand breaking";
       } else if (symbol.includes("XAU") || symbol.includes("XAG")) {
-        tavilyQuery = "Gold Silver macroeconomic drivers, inflation data, central bank gold buying, safe haven demand";
+        tavilyQuery = "Gold XAUUSD Federal Reserve interest rates, US 10-year Treasury yields, US Dollar Index DXY, inflation data, breaking market analysis";
       } else if (symbol.includes("BTC") || symbol.includes("ETH")) {
         tavilyQuery = "Bitcoin Ethereum ETF flows, regulatory news, crypto institutional adoption, halving impact";
+      } else if (symbol.includes("USD") || symbol.includes("EUR") || symbol.includes("GBP") || symbol.includes("JPY")) {
+        tavilyQuery = `${symbol} central bank policy, Federal Reserve ECB BOJ interest rates, Treasury yields, breaking forex`;
       }
 
       if (tavilyQuery) {
@@ -126,8 +128,9 @@ export function generateMacroContext(symbol: string, events: FFEvent[] | null, h
     headlines.forEach(h => report += `- ${h}\n`);
     report += `\nCRITICAL DIRECTIVE: 
 1. If these headlines indicate severe geopolitical shocks, unannounced rate hikes, or sudden crashes that OPPOSE the technical trend, you MUST abort the setup. 
-2. SENTIMENT DECAY CURVE: Markets price in news quickly. If a news event or headline appears to be older than 24 hours, its sentiment impact is decaying (50% Relevance). If it is older than 48 hours, it is fully priced in (10% Relevance) and MUST NOT invalidate structural technical setups. Do NOT let stale news overrule a high-probability Fibonacci entry.
-3. LINGERING MACRO NARRATIVES: If there is no breaking news today, but recent macro data (e.g., inflation, rate decisions from the past 3-5 days) set a clear fundamental narrative, you MUST use that lingering narrative to provide fundamental confluence to technical setups, especially during quiet weekends.\n\n`;
+2. INTERMARKET DOLLAR & YIELD DIRECTIVE FOR GOLD/METALS: Gold (XAUUSD) and Silver (XAGUSD) are fundamentally priced against US 10-Year Real Yields and the US Dollar Index (DXY). If Fed speakers or macro headlines indicate hawkish policy, sticky inflation, higher-for-longer yields, or DXY strength: You MUST treat the macro bias for XAUUSD/XAGUSD as BEARISH. Long setups are strictly forbidden during active USD/yield surges.
+3. SENTIMENT DECAY CURVE: Markets price in news quickly. If a news event or headline appears to be older than 24 hours, its sentiment impact is decaying (50% Relevance). If it is older than 48 hours, it is fully priced in (10% Relevance) and MUST NOT invalidate structural technical setups.
+4. LINGERING MACRO NARRATIVES: If there is no breaking news today, but recent macro data sets a clear fundamental narrative, you MUST use that narrative to provide fundamental confluence.\n\n`;
   }
 
   if (!events) {
@@ -203,11 +206,25 @@ const CENTRAL_BANK_PATTERNS = [
   /Federal Funds Rate/i,
   /FOMC/i,
   /Fed Rate/i,
+  /Fed Chair/i,
+  /Powell/i,
+  /Warsh/i,
+  /Waller/i,
+  /Speaks/i,
+  /Speech/i,
+  /Testimony/i,
+  /Press Conference/i,
+  /Remarks/i,
   /Main Refinancing Rate/i,
   /ECB Rate/i,
+  /ECB President/i,
+  /Lagarde/i,
   /Official Bank Rate/i,
   /BOE Rate/i,
+  /Bailey/i,
   /BOJ Rate/i,
+  /BOJ Gov/i,
+  /Ueda/i,
   /Cash Rate/i,
   /Overnight Rate/i,
   /Interest Rate Decision/i,
@@ -229,7 +246,7 @@ export function detectCentralBankEvent(
     if (e.impact !== "High") return false;
     const eventTime = new Date(e.date).getTime();
     const msAgo = now - eventTime;
-    // Event fired within the past windowHours AND has actual data published
+    // Central bank rate decision OR high-impact speaker event within the past windowHours
     return msAgo >= 0 && msAgo <= windowMs && CENTRAL_BANK_PATTERNS.some((p) => p.test(e.title));
   });
 
