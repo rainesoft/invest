@@ -283,7 +283,7 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
 1. FIBONACCI, CHARTIST & SMC CONFLUENCE:
    An S-Tier (confidence >= 90) setup REQUIRES at least 3 of the following to align:
    - Price is at or within 1.5% of a key Fib level
-   - SMART MONEY CONCEPTS (SMC): Price has mitigated a FVG or swept liquidity into an OB
+   - SMART MONEY CONCEPTS (SMC): Price has mitigated a FVG (snapshot.bullish_fvg_50pct / snapshot.bearish_fvg_50pct) or swept liquidity into an OB (snapshot.bullish_ob_50pct / snapshot.bearish_ob_50pct)
    - CHARTIST PATTERNS: Respecting Trend Channel boundaries (snapshot.trend_channel) or confirming Geometric Patterns (snapshot.chart_pattern: Triangles, Wedges, Double Tops/Bottoms, Head & Shoulders)
    - A daily/weekly structural support/resistance zone overlaps the Fib level
    - RSI or MACD divergence (snapshot.rsi_divergence / snapshot.macd_divergence) confirming exhaustion or trend continuation
@@ -315,9 +315,10 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
    - Standard requirement is minimum 1:1.70 R:R against Target 2 (TP2).
    - If the trade has high conviction and Win Probability, verify that Expected Value remains positive: EV = (Probability * Reward) - (LossProb * Risk).
 
-6. DIRECTIONAL BIAS FILTERING (CONTRARIAN VALUE OVERRIDE):
+6. DIRECTIONAL BIAS FILTERING (CONTRARIAN VALUE OVERRIDE & INTERMARKET DOLLAR MANDATE):
    - If the Macro Sentiment actively contradicts your technical setup, generally DOWNGRADE the setup to B-Tier or REJECT.
-   - CONTRARIAN VALUE OVERRIDE: If price is resting exactly on a deep Fibonacci discount (61.8% or 78.6%) and the macro sentiment is only mildly contradictory (scores between -4 and +4), you are AUTHORIZED to ignore the news sentiment and originate the trade as S-Tier or A-Tier. Institutions buy deep discounts when retail is panicking over mild news.
+   - CONTRARIAN VALUE OVERRIDE: If price is resting exactly on a deep Fibonacci discount (61.8% or 78.6%) and the macro sentiment is only mildly contradictory (scores between -4 and +4), you are AUTHORIZED to ignore the news sentiment and originate the trade as S-Tier or A-Tier for standard Forex pairs.
+   - COMMODITY & PRECIOUS METALS EXCEPTION: For high-beta commodities (XAUUSD, XAGUSD, UKOIL, USOIL), CONTRARIAN VALUE OVERRIDES ARE STRICTLY FORBIDDEN against active fundamental drivers. If Fed speakers, yields, or macro context indicate a hawkish USD or supply glut, DO NOT BUY 61.8% FIBS. If Macro indicates strong USD / hawkish Fed, you MUST evaluate Short breakdown/pullback setups for XAUUSD/XAGUSD or stay flat. Commodities have no natural valuation floor and will slice through technical fibs during macro repricing.
    - Do NOT apply this override if the macro news is catastrophic or extreme (scores of -8 to -10 or +8 to +10).
 
 7. TAKE PROFIT STRUCTURE — THREE TARGETS:
@@ -655,6 +656,16 @@ serve(async (req) => {
       ? symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean)
       : (dbSymbols && dbSymbols.length > 0 ? dbSymbols : symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean));
       
+  const utcHour = new Date().getUTCHours();
+  let sessionPriorityList: string[];
+  if (utcHour >= 12 && utcHour <= 21) {
+    sessionPriorityList = ['BTCUSD', 'ETHUSD', 'US30', 'NAS100', 'SPX500', 'XAUUSD', 'XAGUSD', 'USOIL', 'EURUSD', 'GBPUSD', 'USDCAD', 'USDJPY', 'NVDA', 'AAPL', 'TSLA', 'MSFT', 'GER30', 'UKOIL'];
+  } else if (utcHour >= 7 && utcHour < 12) {
+    sessionPriorityList = ['BTCUSD', 'ETHUSD', 'EURUSD', 'GBPUSD', 'GER30', 'UKOIL', 'XAUUSD', 'XAGUSD', 'GBPJPY', 'EURJPY', 'USDJPY', 'USDCHF', 'AUDUSD', 'US30'];
+  } else {
+    sessionPriorityList = ['BTCUSD', 'ETHUSD', 'JP225', 'USDJPY', 'GBPJPY', 'EURJPY', 'AUDUSD', 'NZDUSD', 'XAUUSD', 'US30'];
+  }
+
   symbols.sort((a, b) => {
     if (a === 'BTCUSD' && b !== 'BTCUSD') return -1;
     if (b === 'BTCUSD' && a !== 'BTCUSD') return 1;
@@ -662,7 +673,12 @@ serve(async (req) => {
     const bOpen = isMarketOpen(b);
     if (aOpen && !bOpen) return -1;
     if (!aOpen && bOpen) return 1;
-    return 0;
+
+    const aIdx = sessionPriorityList.indexOf(a);
+    const bIdx = sessionPriorityList.indexOf(b);
+    const aRank = aIdx !== -1 ? aIdx : 999;
+    const bRank = bIdx !== -1 ? bIdx : 999;
+    return aRank - bRank;
   });
 
   const traceId = crypto.randomUUID();
@@ -1146,6 +1162,28 @@ serve(async (req) => {
              } catch (err: any) {
                  // Ignore
              }
+          } else if (symbol === "XAGUSD" || symbol === "XAUUSD") {
+             // Precious Metals Inter-Asset Correlation: Silver inherits Gold macro sentiment (and vice versa)
+             const correlatedPeer = symbol === "XAGUSD" ? "XAUUSD" : "XAGUSD";
+             try {
+               const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+               const { data: peerNews } = await supabase
+                 .from("trade_opportunities")
+                 .select("side, risk_summary, ai_summary")
+                 .eq("symbol", correlatedPeer)
+                 .eq("status", "PUBLISHED")
+                 .gte("created_at", twoHoursAgo)
+                 .order("created_at", { ascending: false })
+                 .limit(1)
+                 .maybeSingle();
+
+               if (peerNews) {
+                 macroContext += `\n\n[PRECIOUS METALS INTER-ASSET CORRELATION]\nA live Tier-1 macro catalyst has fired for benchmark ${correlatedPeer} (${peerNews.side}). Details: ${peerNews.risk_summary}. Due to 90% precious metals correlation, ${symbol} MUST ALIGN with this fundamental macro direction.`;
+                 sendEvent({ type: "progress", message: `[${symbol}] Inherited live macro sentiment (${peerNews.side}) from correlated peer ${correlatedPeer}.` });
+               }
+             } catch (err: any) {
+               // Ignore
+             }
           }
 
           // === HISTORICAL MEMORY ===
@@ -1432,9 +1470,13 @@ serve(async (req) => {
             }
 
             sendEvent({ type: "progress", message: `[${symbol}] No trade: ${reason.slice(0, 120)}` });
+            const swingFallbackSide: 'LONG' | 'SHORT' = 
+              (snapshot.trend_alignment?.startsWith("BEARISH") || snapshot.htf_trend === "BEARISH") ? "SHORT" : "LONG";
             const rejectedObj = {
               symbol,
-              side: "LONG", // placeholder — no trade
+              side: (evaluation.recommended_direction !== "NONE" && evaluation.recommended_direction !== "REQUIRE_LTF_DRILLDOWN") 
+                ? evaluation.recommended_direction 
+                : swingFallbackSide,
               timeframe: timeframe.toLowerCase(),
               status: "REJECTED",
               source: "agent-swing",
@@ -1565,12 +1607,39 @@ serve(async (req) => {
             }
           }
 
+          const isHighBetaAsset = ['UKOIL', 'USOIL', 'XAUUSD', 'XAGUSD', 'US30', 'NAS100', 'SPX500', 'GER30'].includes(symbol);
+
+          if (intradayHasOpposingRejection && isHighBetaAsset) {
+            // High-beta commodity/index experiencing active opposing intraday breakdown/rally.
+            // Strict Cross-Agent Momentum Lock: Reject to prevent buying/selling into a falling knife.
+            const rejectReason = `Cross-Agent Veto: Intraday agent detected active opposing momentum on high-beta ${symbol} (${intradayRejectionDetail}). Counter-trend trade strictly forbidden.`;
+            console.log(`[${symbol}] [Cross-Agent Veto] ${rejectReason}`);
+            
+            const rejectedObj = {
+              symbol,
+              side: isLong ? "LONG" : "SHORT",
+              timeframe: timeframe.toLowerCase(),
+              status: "REJECTED",
+              source: "agent-swing",
+              ai_summary: `[SWING][${tier}] Cross-Agent Veto: ${rejectReason}`,
+              ai_risks: rejectReason,
+              confidence,
+              trace_id: traceId,
+            };
+            if (pendingNewsId) {
+              await supabase.from("trade_opportunities").update(rejectedObj).eq("id", pendingNewsId);
+            } else {
+              await supabase.from("trade_opportunities").insert(rejectedObj);
+            }
+            rejections.push({ symbol, reason: rejectReason, layer: "Cross-Agent Consensus" });
+            return;
+          }
+
           let order_type = isLong ? "BUY MARKET" : "SELL MARKET";
           const pendingOrderThreshold = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.15) : (currentPrice * 0.001);
 
           if (intradayHasOpposingRejection) {
-            // Intraday agent detected active breakdown or opposing momentum.
-            // Strictly block blind Market order to prevent buying/selling into a falling knife.
+            // Intraday agent detected active breakdown or opposing momentum on forex/stable asset.
             console.log(`[${symbol}] [Cross-Agent Confluence] Intraday agent rejected ${symbol} (${intradayRejectionDetail}). Converting to pullback LIMIT order entry.`);
             const maxLimitOffset = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.30) : (currentPrice * 0.005);
             const deepFib = nearestFibs.find(f => isLong ? f.price < currentPrice : f.price > currentPrice);
@@ -1617,25 +1686,12 @@ serve(async (req) => {
             console.log(`[${symbol}] Entry too close to live price (Dist: ${Math.abs(entryShift).toFixed(5)}). Converted to ${order_type} to prevent Error 10016. SL/TP adjusted.`);
           }
 
-          // === COMMODITY & HIGH-BETA VOLATILITY DISCIPLINE (PULLBACK LIMIT MANDATE) ===
-          // High-beta commodities (UKOIL, XAGUSD, XAUUSD, US30) experience aggressive intraday mean-reversion.
-          // Forbid aggressive market order chasing; force passive Limit orders at structural discount levels.
-          const volatileCommodities = ["UKOIL", "XAGUSD", "XAUUSD", "US30", "NAS100"];
-          if (volatileCommodities.includes(symbol) && order_type.includes("MARKET")) {
-            const limitOffset = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.35) : (currentPrice * 0.005);
-            entry = isLong ? Number((currentPrice - limitOffset).toFixed(5)) : Number((currentPrice + limitOffset).toFixed(5));
-            order_type = isLong ? "BUY LIMIT" : "SELL LIMIT";
-            evaluation.execution_parameters.suggested_entry_price = entry;
-            safeRationale += ` [Commodity Volatility Discipline: Market entry converted to pullback Limit @ $${entry} to prevent wick-chasing]`;
-          }
-
-          // === ASSET-CLASS CONTRACT MULTIPLIER & MAX DOLLAR RISK GOVERNOR ===
-          // Prevent raw trade origination from exceeding the 10% account blowout cap ($150 on $1,500 capital)
-          // on large contract assets (e.g., XAGUSD with 5000 contract size, UKOIL with 1000 contract size).
+          // === ASYMMETRIC PRE-FLIGHT RISK GOVERNOR (VAN THARP 3.0% DOLLAR CAP) ===
           const assetContractSizes: Record<string, number> = {
-            XAGUSD: 5000,
             UKOIL: 1000,
+            USOIL: 1000,
             XAUUSD: 100,
+            XAGUSD: 5000,
             US30: 1,
             NAS100: 1,
             SPX500: 1,
@@ -1644,36 +1700,44 @@ serve(async (req) => {
             EURUSD: 100000,
             GBPUSD: 100000,
             USDJPY: 100000,
+            AUDUSD: 100000,
+            NZDUSD: 100000,
+            USDCAD: 100000,
+            USDCHF: 100000,
+            EURJPY: 100000,
+            GBPJPY: 100000,
           };
           const contractSize = assetContractSizes[symbol] || 1;
           const minLot = 0.01;
-          const maxPermissibleCapitalRisk = 150.0; // 10% cap on $1,500 standard base portfolio
+          const maxPermissibleCapitalRisk = 45.0; // 3.0% hard cap on $1,500 standard base portfolio
           const maxAllowableStopDistance = maxPermissibleCapitalRisk / (minLot * contractSize);
 
           if (maxAllowableStopDistance > 0 && Math.abs(entry - sl) > maxAllowableStopDistance) {
             const rawRisk = Math.abs(entry - sl) * minLot * contractSize;
-            console.log(`[${symbol}] [Origination Risk Governor] Raw risk ($${rawRisk.toFixed(2)}) exceeds $150 cap. Anchoring entry to structural discount ($${entry} → ${isLong ? (sl + maxAllowableStopDistance).toFixed(5) : (sl - maxAllowableStopDistance).toFixed(5)}).`);
+            console.log(`[${symbol}] [Origination Risk Governor] Raw risk ($${rawRisk.toFixed(2)}) exceeds $${maxPermissibleCapitalRisk} cap. Anchoring entry to structural discount ($${entry} → ${isLong ? (sl + maxAllowableStopDistance).toFixed(5) : (sl - maxAllowableStopDistance).toFixed(5)}).`);
             
-            // Re-anchor limit entry so total dollar risk is strictly capped at $150
+            // Re-anchor limit entry so total dollar risk is strictly capped at $45 (3%)
             entry = isLong
               ? Number((sl + maxAllowableStopDistance).toFixed(5))
               : Number((sl - maxAllowableStopDistance).toFixed(5));
             order_type = isLong ? "BUY LIMIT" : "SELL LIMIT";
             evaluation.execution_parameters.suggested_entry_price = entry;
-            safeRationale += ` [Origination Risk Governor: Entry anchored to $${entry} so 0.01 lot dollar risk ($${maxPermissibleCapitalRisk.toFixed(2)}) stays strictly within the 10% capital cap]`;
+            safeRationale += ` [Origination Risk Governor: Entry anchored to Limit @ $${entry} so 0.01 lot dollar risk stays strictly within 3% risk cap ($${maxPermissibleCapitalRisk.toFixed(2)})]`;
           }
 
-          // === TAKE PROFIT DIRECTION & MONOTONIC R-MULTIPLE SANITIZATION ===
+          // === TAKE PROFIT DIRECTION & VOLATILITY-NORMALIZED R-MULTIPLE SANITIZATION ===
           const swingRiskDist = Math.abs(entry - sl);
+          const minTargetDistance = Math.max(swingRiskDist * 1.0, (dailyAtr || 0) * 0.80);
+
           if (swingRiskDist > 0) {
             if (isLong) {
-              // Strictly above entry
-              if (!tp1 || tp1 <= entry) tp1 = Number((entry + swingRiskDist * 1.0).toFixed(5));
+              // Strictly above entry with volatility-normalized spacing
+              if (!tp1 || tp1 <= entry) tp1 = Number((entry + minTargetDistance).toFixed(5));
               if (!tp2 || tp2 <= tp1) tp2 = Number((tp1 + swingRiskDist * 1.0).toFixed(5));
               if (!tp3 || tp3 <= tp2) tp3 = Number((tp2 + swingRiskDist * 1.5).toFixed(5));
             } else {
-              // Strictly below entry
-              if (!tp1 || tp1 >= entry) tp1 = Number((entry - swingRiskDist * 1.0).toFixed(5));
+              // Strictly below entry with volatility-normalized spacing
+              if (!tp1 || tp1 >= entry) tp1 = Number((entry - minTargetDistance).toFixed(5));
               if (!tp2 || tp2 >= tp1) tp2 = Number((tp1 - swingRiskDist * 1.0).toFixed(5));
               if (!tp3 || tp3 >= tp2) tp3 = Number((tp2 - swingRiskDist * 1.5).toFixed(5));
             }
@@ -1681,7 +1745,6 @@ serve(async (req) => {
           evaluation.execution_parameters.take_profit_1 = tp1;
           evaluation.execution_parameters.take_profit_2 = tp2;
           evaluation.execution_parameters.take_profit_3 = tp3;
-
           const riskPct = Math.abs(entry - sl) / entry;
           const maxRiskPct = ["XAUUSD", "XAGUSD", "BTCUSD", "UKOIL"].includes(symbol) ? 0.15 : 0.10;
 

@@ -140,9 +140,12 @@ async function evaluateOpportunity(symbol: string, snapshot: LogicContext & { ag
     
 CRITICAL RULES:
 
-0. TOP-DOWN MACRO TIDE & ORDER OF OPERATIONS (CRITICAL PRIORITY):
-   - STEP 1 (HTF Macro Tide & Swing Priming): Inspect snapshot.htf_trend, snapshot.htf_pivot, and snapshot.agent_context (Swing Trader context). If snapshot.agent_context contains a Daily Swing prime or active Swing narrative, prioritize intraday pullbacks into those Daily Fibonacci/Order Block levels. If the Daily 1D trend is strongly BEARISH, look strictly for Short continuation or Pullback Sell Limits at resistance. If Daily 1D trend is strongly BULLISH, look strictly for Longs or Pullback Buy Limits at support.
-   - STEP 2 (Intraday Pivot Regime): If Current Price > htf_pivot, your default trend regime is BULLISH. If Current Price < htf_pivot, your default trend regime is BEARISH. If trend_alignment is 'CHOP' or ADX < 20, pivot directional bias transitions to RANGE-BOUND MEAN-REVERSION (Rule 9).
+0. TOP-DOWN MACRO TIDE & BIDIRECTIONAL ORDER OF OPERATIONS (CRITICAL PRIORITY):
+   - STEP 1 (HTF Macro Tide & Bias): Inspect snapshot.htf_trend, snapshot.mtfa_trend, snapshot.htf_pivot, and snapshot.agent_context.
+     * If HTF 1D/4H trend is BEARISH: You MUST actively hunt for SHORT setups. Focus on Resistance Pullback SELL LIMITS at snapshot.bearish_fvg_50pct, snapshot.bearish_ob_50pct, 50/200 EMA, or Daily Resistance 1 / VAH. Do NOT stay flat searching only for long mean-reversions.
+     * If HTF 1D/4H trend is BULLISH: You MUST actively hunt for LONG setups. Focus on Support Pullback BUY LIMITS at snapshot.bullish_fvg_50pct, snapshot.bullish_ob_50pct, 50/200 EMA, or Daily Support 1 / VAL.
+     * If HTF trend is CHOP: Apply the Range-Bound Mean Reversion Playbook (Rule 9).
+   - STEP 2 (Intraday Pivot Regime): If Current Price > htf_pivot, your default intraday regime is BULLISH. If Current Price < htf_pivot, your default intraday regime is BEARISH.
    - STEP 3 (Indicator Confluence): Check MACD, MACD divergence (snapshot.macd_divergence), RSI divergence (snapshot.rsi_divergence), and moving averages (ema_50 and ema_200). For trend breakouts, ensure MACD agrees with direction. For Range Boundary Fades, MACD histogram exhaustion / divergence confirms the fade.
 
 1. PIVOT DIRECTIONAL BIAS & RANGE TRADING:
@@ -157,7 +160,7 @@ CRITICAL RULES:
 6. REQUIRED PARAMETERS: You MUST provide a numeric suggested_entry_price, suggested_stop_loss, and suggested_take_profit for ANY trade setup. Do not return nulls for these fields.
 7. ASYMMETRIC R:R & ADAPTIVE LIMIT ORDERS (NEVER REJECT SOLELY FOR LOW R:R AT MARKET):
    - Trading Central requires a minimum Risk/Reward ratio of 1:1.70 calculated using Target 2 (TP2).
-   - If market structure and directional bias are strong (A-Tier/S-Tier) but current market price yields R:R < 1.70 at market, DO NOT REJECT. Instead, calculate and issue a BUY LIMIT or SELL LIMIT at the nearest value area (50 EMA, Session VWAP, or Daily Pivot/Fibonacci zone) to guarantee an institutional R:R >= 1.75.
+   - If market structure and directional bias are strong (A-Tier/S-Tier) but current market price yields R:R < 1.70 at market, DO NOT REJECT. Instead, calculate and issue a BUY LIMIT (at snapshot.bullish_fvg_50pct / 50 EMA / Session VWAP) or SELL LIMIT (at snapshot.bearish_fvg_50pct / 50 EMA / Session VWAP) to guarantee an institutional R:R >= 1.75.
 8. HIGH-LEVERAGE ASSETS (VOLATILITY): Indices (US30, NAS100, SPX500, GER30) and Metals (XAGUSD, XAUUSD) have massive volatility wicks. You MUST use wider structural stops for these assets to survive normal market noise.
 9. REGIME-ADAPTIVE STRATEGY ROUTING (RANGE-BOUND MEAN-REVERSION PLAYBOOK):
    - When trend_alignment is 'CHOP', ADX < 20, or volume_regime === 'ANEMIC': MOMENTUM_BREAKOUT is strictly forbidden. You MUST switch to the Institutional Range-Bound Playbook:
@@ -167,8 +170,9 @@ CRITICAL RULES:
 11. VOLATILITY-NORMALIZED DISTANCE CHECKS (DYNAMIC ATR SCALING):
     - For ALL asset classes (Forex, Indices, Crypto, Commodities, Equities): Minimum structural breathing room is calculated dynamically against ATR as: Distance >= 0.20x ATR(14) (or >= 0.02% on indices).
     - If price distance to the level exceeds 0.20x ATR, there IS sufficient structural breathing room. Do NOT reject on distance if this condition is met.
-12. SMART MONEY ORDER FLOW & VWAP VALUE DISCIPLINE:
-    - VWAP PULLBACKS: In a BULLISH regime, optimal long entries occur when price is testing Session VWAP, POC, or bouncing off the lower VWAP band (lower1). Do NOT chase breakout longs if price is already at EXTREME_OVERBOUGHT (> upper2).
+12. SMART MONEY ORDER FLOW & DISCRETE SMC LIQUIDITY ZONES:
+    - DISCRETE SMC MIDPOINTS: If snapshot.bullish_fvg_50pct or snapshot.bullish_ob_50pct is present during an uptrend, anchor your Pullback Buy Limit directly to that level. If snapshot.bearish_fvg_50pct or snapshot.bearish_ob_50pct is present during a downtrend, anchor your Pullback Sell Limit directly to that level.
+    - VWAP PULLBACKS: In a BULLISH regime, optimal long entries occur when price is testing Session VWAP, POC, or bouncing off the lower VWAP band (lower1). In a BEARISH regime, optimal short entries occur when price is testing Session VWAP, POC, or rejecting the upper VWAP band (upper1). Do NOT chase longs at EXTREME_OVERBOUGHT (> upper2) or shorts at EXTREME_OVERSOLD (< lower2).
     - BREAKOUT VOLUME REQUIREMENT: For MOMENTUM_BREAKOUT or Stop orders (Buy Stop / Sell Stop), you MUST verify that volume_surge is true or volume_ratio >= 1.4. If volume is LOW or ANEMIC, reject the breakout as a false trap or place a LIMIT order pullback at the POC (poc_price) / HVN (nearest_hvn).
     - VALUE AREA ACCEPTANCE: When price is within the Value Area (in_value_area: true), expect mean reversion toward POC. Trend continuations require acceptance outside VAH/VAL on expanding volume.
 13. SESSION KILLZONES & ASIAN RANGE SWEEPS:
@@ -183,6 +187,9 @@ CRITICAL RULES:
 15. 20-BAR ANTICIPATION HORIZON & TIME-TO-LIVE (TTL):
     - All 30m intraday setups are strictly valid for a maximum horizon of 20 periods (10 hours).
     - If current market price gives R:R < 1.70 to Target 2, do NOT reject: calculate a pullback Limit Order at the nearest structural level to enforce an institutional >= 1:1.75 R:R.
+16. INTERMARKET DOLLAR & COMMODITY DIRECTIVE (GOLD & METALS MACRO MANDATE):
+    - Gold (XAUUSD) and Silver (XAGUSD) are strongly inversely correlated with US 10-Year Real Yields and the US Dollar Index (DXY).
+    - If snapshot.agent_context, macro headlines, or HTF trend reflect a strong USD or hawkish Fed speeches, LONG setups on XAUUSD/XAGUSD are STRICTLY FORBIDDEN. You MUST evaluate Resistance Pullback SELL LIMITS (at bearish_fvg_50pct / 50 EMA / VWAP Upper) or stay flat.
 
 Historical Memory:
 ${historicalMemory || "None"}
@@ -354,17 +361,30 @@ serve(async (req) => {
     (reqBody as any).symbols?.join(",") || searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "XAUUSD,XAGUSD,BTCUSD,ETHUSD,UKOIL,USOIL,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF,NZDUSD,EURJPY,GBPJPY,US30,NAS100,SPX500,GER30,JP225,AAPL,MSFT,NVDA,TSLA";
   const symbols = symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean);
 
-  // Institutional Opportunity-Ranked Asset Sorting:
-  // Priority: 1) Open high-liquidity / high-volatility assets, 2) Other open markets, 3) Closed markets
-  const priorityList = ['BTCUSD', 'ETHUSD', 'XAUUSD', 'US30', 'NAS100', 'SPX500', 'EURUSD', 'GBPUSD', 'AUDUSD', 'USDCAD', 'USDCHF', 'UKOIL', 'USOIL', 'XAGUSD', 'USDJPY', 'GBPJPY', 'EURJPY', 'GER30', 'JP225', 'NVDA', 'AAPL', 'MSFT', 'TSLA'];
+  // Institutional Opportunity-Ranked Asset Sorting (Session-Aware Killzone Scheduling):
+  // Dynamically prioritize assets with peak liquidity and volatility for the current market session
+  const utcHour = new Date().getUTCHours();
+  let sessionPriorityList: string[];
+  
+  if (utcHour >= 12 && utcHour <= 21) {
+    // New York Session (12:00 - 21:00 UTC) -> US Indices, US Equities, Metals, WTI Oil, Major USD pairs
+    sessionPriorityList = ['US30', 'NAS100', 'SPX500', 'XAUUSD', 'XAGUSD', 'USOIL', 'BTCUSD', 'ETHUSD', 'EURUSD', 'GBPUSD', 'USDCAD', 'USDJPY', 'NVDA', 'AAPL', 'TSLA', 'MSFT', 'GER30', 'UKOIL'];
+  } else if (utcHour >= 7 && utcHour < 12) {
+    // London Session (07:00 - 12:00 UTC) -> European pairs, DAX, Brent Oil, Metals, Gold
+    sessionPriorityList = ['EURUSD', 'GBPUSD', 'GER30', 'UKOIL', 'XAUUSD', 'XAGUSD', 'GBPJPY', 'EURJPY', 'USDJPY', 'USDCHF', 'BTCUSD', 'ETHUSD', 'AUDUSD', 'US30'];
+  } else {
+    // Asian / Tokyo Session (22:00 - 07:00 UTC) -> Nikkei, JPY crosses, Antipodeans, Crypto
+    sessionPriorityList = ['JP225', 'USDJPY', 'GBPJPY', 'EURJPY', 'AUDUSD', 'NZDUSD', 'BTCUSD', 'ETHUSD', 'XAUUSD', 'US30'];
+  }
+
   symbols.sort((a, b) => {
     const aOpen = isMarketOpen(a);
     const bOpen = isMarketOpen(b);
     if (aOpen && !bOpen) return -1;
     if (!aOpen && bOpen) return 1;
 
-    const aIdx = priorityList.indexOf(a);
-    const bIdx = priorityList.indexOf(b);
+    const aIdx = sessionPriorityList.indexOf(a);
+    const bIdx = sessionPriorityList.indexOf(b);
     const aRank = aIdx !== -1 ? aIdx : 999;
     const bRank = bIdx !== -1 ? bIdx : 999;
     return aRank - bRank;
@@ -856,6 +876,26 @@ serve(async (req) => {
               if (macroBoost > 0 && fomcModeActive) {
                 fundamental_context += `\n[FOMC MACRO BOOST: +8 confidence authorized for macro-aligned setup]`;
               }
+              if (symbol === "XAGUSD" || symbol === "XAUUSD") {
+                const correlatedPeer = symbol === "XAGUSD" ? "XAUUSD" : "XAGUSD";
+                try {
+                  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+                  const { data: peerNews } = await supabase
+                    .from("trade_opportunities")
+                    .select("side, risk_summary, ai_summary")
+                    .eq("symbol", correlatedPeer)
+                    .eq("status", "PUBLISHED")
+                    .gte("created_at", twoHoursAgo)
+                    .order("created_at", { ascending: false })
+                    .limit(1)
+                    .maybeSingle();
+
+                  if (peerNews) {
+                    fundamental_context += `\n\n[PRECIOUS METALS INTER-ASSET CORRELATION]\nA live Tier-1 macro catalyst has fired for benchmark ${correlatedPeer} (${peerNews.side}). Details: ${peerNews.risk_summary}. Due to 90% precious metals correlation, ${symbol} MUST ALIGN with this fundamental macro direction.`;
+                    sendEvent({ type: 'progress', message: `[${symbol}] Inherited macro sentiment (${peerNews.side}) from correlated peer ${correlatedPeer}.` });
+                  }
+                } catch (e) {}
+              }
             }
 
             // ETF flow sentiment for crypto assets
@@ -971,26 +1011,30 @@ serve(async (req) => {
             }
 
             // === SIGNAL SLEEP MODE ===
-            // If this symbol has 3+ consecutive INFLECTION_POINT_WAIT rejections in the last 2 hours,
+            // If this symbol has 2+ consecutive C-Tier / consolidation rejections in the last 2 hours,
             // skip AI evaluation to reduce compute waste and database noise.
             const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
             const { data: recentRejections } = await supabase
               .from('trade_opportunities')
-              .select('ai_summary')
+              .select('ai_summary, confidence')
               .eq('symbol', symbol)
               .eq('status', 'REJECTED')
               .gte('created_at', twoHoursAgo)
               .order('created_at', { ascending: false })
-              .limit(3);
+              .limit(2);
             
-            if (recentRejections && recentRejections.length >= 3) {
-              const allInflectionWait = recentRejections.every((r: any) => 
-                r.ai_summary?.includes('INFLECTION_POINT_WAIT')
+            if (recentRejections && recentRejections.length >= 2) {
+              const allCTierOrInflection = recentRejections.every((r: any) => 
+                r.ai_summary?.includes('INFLECTION_POINT_WAIT') || 
+                r.ai_summary?.includes('C-Tier') || 
+                r.ai_summary?.includes('NONE -> NONE') ||
+                r.ai_summary?.includes('No valid') ||
+                (r.confidence != null && r.confidence <= 50)
               );
-              if (allInflectionWait) {
-                console.log(`[Sleep Mode] ${symbol}: 3 consecutive INFLECTION_POINT_WAIT rejections. Entering 2-hour sleep mode.`);
+              if (allCTierOrInflection) {
+                console.log(`[Sleep Mode] ${symbol}: 2 consecutive C-Tier / consolidation rejections. Entering 2-hour sleep mode.`);
                 sendEvent({ type: 'progress', message: `[Sleep Mode] ${symbol}: Market is in tight consolidation. Skipping for 2 hours to reduce noise.` });
-                rejections.push({ symbol, reason: 'Sleep mode: 3 consecutive INFLECTION_POINT_WAIT in 2h window', layer: 'Sleep Mode' });
+                rejections.push({ symbol, reason: 'Sleep mode: 2 consecutive C-Tier rejections in 2h window', layer: 'Sleep Mode' });
                 return;
               }
             }
@@ -1046,9 +1090,7 @@ serve(async (req) => {
 
             let is_valid = evaluation.recommended_direction !== "NONE" && evaluation.recommended_direction !== "REQUIRE_LTF_DRILLDOWN";
             
-            // FIX: Use RSI + Bollinger Band position to determine fallback direction.
-            // Previously defaulted to SHORT when trend was CHOP, causing systematic SHORT bias.
-            // Now: RSI < 40 or price near lower BB => LONG bias. RSI > 60 or price near upper BB => SHORT bias.
+            // True bidirectional fallback: Anchor direction to HTF macro trend first, then intraday structure
             const rsi = snapshot.rsi_14 ?? 50;
             const bbUpper = snapshot.bb_upper ?? Infinity;
             const bbLower = snapshot.bb_lower ?? 0;
@@ -1057,13 +1099,14 @@ serve(async (req) => {
             const nearUpperBB = bbUpper < Infinity && Math.abs(price - bbUpper) / bbUpper < 0.005;
             
             let fallbackSide: 'LONG' | 'SHORT';
-            if (snapshot.trend_alignment.startsWith('BULLISH') || rsi < 40 || nearLowerBB) {
+            if (snapshot.htf_trend === 'BEARISH' || snapshot.trend_alignment.startsWith('BEARISH')) {
+              fallbackSide = 'SHORT';
+            } else if (snapshot.htf_trend === 'BULLISH' || snapshot.trend_alignment.startsWith('BULLISH')) {
               fallbackSide = 'LONG';
-            } else if (snapshot.trend_alignment.startsWith('BEARISH') || rsi > 60 || nearUpperBB) {
+            } else if (rsi > 60 || nearUpperBB) {
               fallbackSide = 'SHORT';
             } else {
-              // True neutral — use HTF trend as tiebreaker
-              fallbackSide = (snapshot.htf_trend === 'BULLISH') ? 'LONG' : 'SHORT';
+              fallbackSide = 'LONG';
             }
             
             let dbSide = (!is_valid) ? fallbackSide : evaluation.recommended_direction;
@@ -1105,10 +1148,10 @@ serve(async (req) => {
             if (!is_valid || confidence_score < 70) {
               let rejectReason = "";
               if (evaluation.recommended_direction === "REQUIRE_LTF_DRILLDOWN") {
-                rejectReason = `LTF_ENTRY_WAIT: Macro trend is strong but price is overextended. Waiting for LTF pullback.`;
+                const targetDirection = (snapshot.trend_alignment.startsWith("BULLISH") || snapshot.htf_trend === "BULLISH") ? "LONG" : "SHORT";
+                rejectReason = `LTF_ENTRY_WAIT: Macro trend is ${targetDirection} but 30m chart lacks precision entry. Queued to Sniper watchlist for 5m drilldown.`;
                 
                 const expiresAt = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
-                const targetDirection = snapshot.trend_alignment.startsWith("BULLISH") ? "LONG" : "SHORT";
                 
                 await supabase.from("trade_watchlists").update({ status: 'CANCELLED' }).eq('symbol', symbol).eq('status', 'WATCHING');
                 await supabase.from("trade_watchlists").insert({
@@ -1118,7 +1161,13 @@ serve(async (req) => {
                   macro_score: String(confidence_score),
                   source_agent: "agent-day",
                   current_price: snapshot.current_price,
-                  context: snapshot,
+                  context: {
+                    ...snapshot,
+                    bullish_fvg_50pct: snapshot.bullish_fvg_50pct,
+                    bearish_fvg_50pct: snapshot.bearish_fvg_50pct,
+                    bullish_ob_50pct: snapshot.bullish_ob_50pct,
+                    bearish_ob_50pct: snapshot.bearish_ob_50pct,
+                  },
                   expires_at: expiresAt
                 });
               } else {
@@ -1174,19 +1223,27 @@ serve(async (req) => {
                return;
             }
 
-            const reward = Math.abs(take_profit - entry_price);
-            let rrRatio = reward / risk;
+            // Volatility-Normalized Minimum Take Profit Target
+            const minReward = Math.max(risk * 1.50, (snapshot.atr_14 || 0) * 1.0);
+            if (dbSide === "LONG" && take_profit < entry_price + minReward) {
+               take_profit = Number((entry_price + minReward).toFixed(3));
+            } else if (dbSide === "SHORT" && take_profit > entry_price - minReward) {
+               take_profit = Number((entry_price - minReward).toFixed(3));
+            }
 
-            // --- OVERRIDE: CAP SCALPING R:R TO 3.0 ---
-            if (rrRatio > 3.0) {
-               console.log(`[Layer C: Execution Desk] OVERRIDE ${symbol}: Capping R:R from ${rrRatio.toFixed(2)} down to 3.0 max for Scalping.`);
-               institutional_rationale += ` [Execution Desk overrode Take Profit to hard cap 1:3 R:R for Scalp.]`;
+            const reward = Math.abs(take_profit - entry_price);
+            let rrRatio = risk > 0 ? (reward / risk) : 0;
+
+            // --- OVERRIDE: CAP SCALPING R:R TO 3.5 ---
+            if (rrRatio > 3.5) {
+               console.log(`[Layer C: Execution Desk] OVERRIDE ${symbol}: Capping R:R from ${rrRatio.toFixed(2)} down to 3.5 max for intraday.`);
+               institutional_rationale += ` [Execution Desk overrode Take Profit to hard cap 1:3.5 R:R for intraday.]`;
                if (dbSide === "LONG") {
-                  take_profit = Number((entry_price + (risk * 3.0)).toFixed(3));
+                  take_profit = Number((entry_price + (risk * 3.5)).toFixed(3));
                } else {
-                  take_profit = Number((entry_price - (risk * 3.0)).toFixed(3));
+                  take_profit = Number((entry_price - (risk * 3.5)).toFixed(3));
                }
-               rrRatio = 3.0;
+               rrRatio = 3.5;
             }
 
             if (rrRatio < 1.20) {
@@ -1197,12 +1254,11 @@ serve(async (req) => {
             // Append actual math to AI rationale
             institutional_rationale += ` Execution Math: Structural target set at ${take_profit} yielding a 1:${rrRatio.toFixed(1)} Risk:Reward ratio.`;
 
-            // === ASSET-CLASS CONTRACT MULTIPLIER & MAX DOLLAR RISK GOVERNOR ===
-            // Prevent raw trade origination from exceeding the 10% account blowout cap ($150 on $1,500 capital)
-            // on large contract assets (e.g., XAGUSD with 5000 contract size, UKOIL with 1000 contract size).
+            // === ASSET-CLASS CONTRACT MULTIPLIER & MAX DOLLAR RISK GOVERNOR (3% BUDGET) ===
             const assetContractSizes: Record<string, number> = {
               XAGUSD: 5000,
               UKOIL: 1000,
+              USOIL: 1000,
               XAUUSD: 100,
               US30: 1,
               NAS100: 1,
@@ -1212,21 +1268,27 @@ serve(async (req) => {
               EURUSD: 100000,
               GBPUSD: 100000,
               USDJPY: 100000,
+              AUDUSD: 100000,
+              NZDUSD: 100000,
+              USDCAD: 100000,
+              USDCHF: 100000,
+              EURJPY: 100000,
+              GBPJPY: 100000,
             };
             const contractSize = assetContractSizes[symbol] || 1;
             const minLot = 0.01;
-            const maxPermissibleCapitalRisk = 150.0; // 10% cap on $1,500 base capital
+            const maxPermissibleCapitalRisk = 45.0; // 3.0% cap on $1,500 base capital
             const maxAllowableStopDistance = maxPermissibleCapitalRisk / (minLot * contractSize);
 
             if (maxAllowableStopDistance > 0 && risk > maxAllowableStopDistance) {
               const rawRisk = risk * minLot * contractSize;
-              console.log(`[${symbol}] [Origination Risk Governor] Raw risk ($${rawRisk.toFixed(2)}) exceeds $150 cap. Anchoring entry to structural discount ($${entry_price} → ${dbSide === "LONG" ? (stop_loss + maxAllowableStopDistance).toFixed(3) : (stop_loss - maxAllowableStopDistance).toFixed(3)}).`);
+              console.log(`[${symbol}] [Origination Risk Governor] Raw risk ($${rawRisk.toFixed(2)}) exceeds $${maxPermissibleCapitalRisk} cap. Anchoring entry to structural discount ($${entry_price} → ${dbSide === "LONG" ? (stop_loss + maxAllowableStopDistance).toFixed(3) : (stop_loss - maxAllowableStopDistance).toFixed(3)}).`);
               
               entry_price = dbSide === "LONG"
                 ? Number((stop_loss + maxAllowableStopDistance).toFixed(3))
                 : Number((stop_loss - maxAllowableStopDistance).toFixed(3));
               risk = Math.abs(entry_price - stop_loss);
-              institutional_rationale += ` [Origination Risk Governor: Entry anchored to $${entry_price} so 0.01 lot dollar risk ($${maxPermissibleCapitalRisk.toFixed(2)}) stays strictly within the 10% capital cap]`;
+              institutional_rationale += ` [Origination Risk Governor: Entry anchored to $${entry_price} so 0.01 lot dollar risk stays strictly within 3% risk cap ($${maxPermissibleCapitalRisk.toFixed(2)})]`;
             }
 
             const expectedReturnPct = Math.abs(take_profit - entry_price) / entry_price;
