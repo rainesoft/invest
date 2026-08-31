@@ -32,9 +32,13 @@ export type LogicContext = {
   
   // SMC (Smart Money Concepts)
   bullish_fvg_nearest?: number | null;
+  bullish_fvg_50pct?: number | null;
   bearish_fvg_nearest?: number | null;
+  bearish_fvg_50pct?: number | null;
   bullish_ob_nearest?: number | null;
+  bullish_ob_50pct?: number | null;
   bearish_ob_nearest?: number | null;
+  bearish_ob_50pct?: number | null;
   liquidity_sweep_bullish?: boolean;
   liquidity_sweep_bearish?: boolean;
   momentum_spike?: 'BULLISH' | 'BEARISH' | 'NONE';
@@ -130,7 +134,9 @@ export function calculatePivotPoints(high: number, low: number, close: number) {
 
 export function detectFVG(open: number[], high: number[], low: number[], close: number[]) {
   let bullish_fvg_nearest: number | null = null;
+  let bullish_fvg_50pct: number | null = null;
   let bearish_fvg_nearest: number | null = null;
+  let bearish_fvg_50pct: number | null = null;
   
   const n = high.length;
   const lookback = Math.min(30, n);
@@ -146,6 +152,7 @@ export function detectFVG(open: number[], high: number[], low: number[], close: 
       }
       if (!filled && !bullish_fvg_nearest) {
         bullish_fvg_nearest = gapTop;
+        bullish_fvg_50pct = Number(((gapTop + gapBottom) / 2).toFixed(5));
       }
     }
     
@@ -159,15 +166,18 @@ export function detectFVG(open: number[], high: number[], low: number[], close: 
       }
       if (!filled && !bearish_fvg_nearest) {
         bearish_fvg_nearest = gapBottom;
+        bearish_fvg_50pct = Number(((gapTop + gapBottom) / 2).toFixed(5));
       }
     }
   }
-  return { bullish_fvg_nearest, bearish_fvg_nearest };
+  return { bullish_fvg_nearest, bullish_fvg_50pct, bearish_fvg_nearest, bearish_fvg_50pct };
 }
 
 export function detectOrderBlocks(open: number[], high: number[], low: number[], close: number[], volume?: number[]) {
   let bullish_ob_nearest: number | null = null;
+  let bullish_ob_50pct: number | null = null;
   let bearish_ob_nearest: number | null = null;
+  let bearish_ob_50pct: number | null = null;
   
   const n = close.length;
   const lookback = Math.min(30, n);
@@ -192,17 +202,20 @@ export function detectOrderBlocks(open: number[], high: number[], low: number[],
     // Bullish OB
     if (i >= 1 && close[i] > open[i] && body > prevBody * 1.5 && close[i-1] < open[i-1] && volumeConfirmed) {
       const obHigh = high[i-1];
+      const obLow = low[i-1];
       let mitigated = false;
       for (let j = i + 1; j < n; j++) {
         if (low[j] <= obHigh) mitigated = true;
       }
       if (!mitigated && !bullish_ob_nearest) {
         bullish_ob_nearest = obHigh;
+        bullish_ob_50pct = Number(((obHigh + obLow) / 2).toFixed(5));
       }
     }
     
     // Bearish OB
     if (i >= 1 && close[i] < open[i] && body > prevBody * 1.5 && close[i-1] > open[i-1] && volumeConfirmed) {
+      const obHigh = high[i-1];
       const obLow = low[i-1];
       let mitigated = false;
       for (let j = i + 1; j < n; j++) {
@@ -210,10 +223,11 @@ export function detectOrderBlocks(open: number[], high: number[], low: number[],
       }
       if (!mitigated && !bearish_ob_nearest) {
         bearish_ob_nearest = obLow;
+        bearish_ob_50pct = Number(((obHigh + obLow) / 2).toFixed(5));
       }
     }
   }
-  return { bullish_ob_nearest, bearish_ob_nearest };
+  return { bullish_ob_nearest, bullish_ob_50pct, bearish_ob_nearest, bearish_ob_50pct };
 }
 
 export interface VWAPResult {
@@ -662,9 +676,13 @@ export function getContextSnapshot(
       ltf_bos: 'NONE',
       candlestick_pattern: 'NONE',
       bullish_fvg_nearest: null,
+      bullish_fvg_50pct: null,
       bearish_fvg_nearest: null,
+      bearish_fvg_50pct: null,
       bullish_ob_nearest: null,
+      bullish_ob_50pct: null,
       bearish_ob_nearest: null,
+      bearish_ob_50pct: null,
       liquidity_sweep_bullish: false,
       liquidity_sweep_bearish: false,
       momentum_spike: 'NONE',
@@ -710,8 +728,8 @@ export function getContextSnapshot(
   const recent_swing_low = bullish_fractals.length > 0 ? bullish_fractals[bullish_fractals.length - 1].price : null;
 
   // SMC Calculations (with volume validation)
-  const { bullish_fvg_nearest, bearish_fvg_nearest } = detectFVG(open, high, low, close);
-  const { bullish_ob_nearest, bearish_ob_nearest } = detectOrderBlocks(open, high, low, close, volume);
+  const { bullish_fvg_nearest, bullish_fvg_50pct, bearish_fvg_nearest, bearish_fvg_50pct } = detectFVG(open, high, low, close);
+  const { bullish_ob_nearest, bullish_ob_50pct, bearish_ob_nearest, bearish_ob_50pct } = detectOrderBlocks(open, high, low, close, volume);
   const { liquidity_sweep_bullish, liquidity_sweep_bearish } = detectLiquiditySweeps(high, low, close, open, bullish_fractals, bearish_fractals);
 
   // Smart Money Order Flow & Volume Calculations
@@ -854,9 +872,13 @@ export function getContextSnapshot(
     ltf_bos,
     candlestick_pattern,
     bullish_fvg_nearest,
+    bullish_fvg_50pct,
     bearish_fvg_nearest,
+    bearish_fvg_50pct,
     bullish_ob_nearest,
+    bullish_ob_50pct,
     bearish_ob_nearest,
+    bearish_ob_50pct,
     liquidity_sweep_bullish,
     liquidity_sweep_bearish,
     momentum_spike,

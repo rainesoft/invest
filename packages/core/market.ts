@@ -1,9 +1,12 @@
-export function isMarketOpen(symbol: string): boolean {
-  // Simple heuristic for Crypto: starts with major crypto ticker or ends with USDT
+export function isCrypto(symbol: string): boolean {
+  if (!symbol) return false;
+  const upper = symbol.toUpperCase();
   const cryptoBases = ["BTC", "ETH", "SOL", "XRP", "DOGE", "LTC", "ADA"];
-  const isCrypto = cryptoBases.some(c => symbol.startsWith(c)) || symbol.endsWith("USDT");
-  
-  if (isCrypto) {
+  return cryptoBases.some(c => upper.startsWith(c)) || upper.endsWith("USDT");
+}
+
+export function isMarketOpen(symbol: string): boolean {
+  if (isCrypto(symbol)) {
     return true; // Crypto is 24/7
   }
 

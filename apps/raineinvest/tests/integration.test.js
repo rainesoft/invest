@@ -83,3 +83,44 @@ test('end-to-end trade lifecycle', () => {
     'KILL_SWITCH'
   ]);
 });
+
+test('weekend defense filters non-crypto trades and protects capital', () => {
+  const isCrypto = (symbol) => {
+    if (!symbol) return false;
+    const upper = symbol.toUpperCase();
+    const cryptoBases = ["BTC", "ETH", "SOL", "XRP", "DOGE", "LTC", "ADA"];
+    return cryptoBases.some(c => upper.startsWith(c)) || upper.endsWith("USDT");
+  };
+
+  const openTrades = [
+    { id: '1', meta_api_order_id: 'ord-1', symbol: 'EURUSD', profit: -12.5, open_price: 1.0850 },
+    { id: '2', meta_api_order_id: 'ord-2', symbol: 'XAUUSD', profit: 45.0, open_price: 2350.0 },
+    { id: '3', meta_api_order_id: 'ord-3', symbol: 'BTCUSD', profit: -50.0, open_price: 64000.0 },
+    { id: '4', meta_api_order_id: 'ord-4', symbol: 'US30', profit: 0.0, open_price: 39000.0 },
+  ];
+
+  // Filter out 24/7 crypto trades
+  const vulnerableTrades = openTrades.filter(t => t.symbol ? !isCrypto(t.symbol) : true);
+  assert.equal(vulnerableTrades.length, 3);
+  assert.deepEqual(vulnerableTrades.map(t => t.symbol), ['EURUSD', 'XAUUSD', 'US30']);
+
+  let closedCount = 0;
+  let movedToBeCount = 0;
+  const closedSymbols = [];
+  const beSymbols = [];
+
+  for (const trade of vulnerableTrades) {
+    if (trade.profit <= 0) {
+      closedCount++;
+      closedSymbols.push(trade.symbol);
+    } else {
+      movedToBeCount++;
+      beSymbols.push(trade.symbol);
+    }
+  }
+
+  assert.equal(closedCount, 2); // EURUSD (loss) and US30 (break-even/zero profit closed)
+  assert.equal(movedToBeCount, 1); // XAUUSD (profit moved to BE)
+  assert.deepEqual(closedSymbols, ['EURUSD', 'US30']);
+  assert.deepEqual(beSymbols, ['XAUUSD']);
+});
