@@ -90,6 +90,16 @@ if crashes:
 else:
     print("  Zero AGENT_CRASH entries found. Clean!")
 
+# 1b. AI Evaluation Model Timeouts / API Outages
+print("\n--- 1b. AI MODEL TIMEOUTS / OUTAGES (audit_log) ---")
+timeouts = query_table("audit_log", "action=eq.API_TIMEOUT&order=created_at.desc&limit=5")
+if timeouts:
+    for to in timeouts:
+        payload = to.get('payload_json') or {}
+        print(f"  [{to.get('created_at')}] Symbol: {payload.get('symbol')} | Reason: {payload.get('reason')} | Err: {str(payload.get('error'))[:100]}")
+else:
+    print("  Zero recent API_TIMEOUT entries found. Clean!")
+
 # 2. Recent Autonomous Agent Research Runs
 print("\n--- 2. RECENT AGENT ACTIVITY (RESEARCH_RUN) ---")
 for agent in ["agent-news", "agent-swing", "agent-day"]:

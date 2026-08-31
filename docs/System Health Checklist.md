@@ -121,7 +121,7 @@ The `created_at` timestamps should fall within the last 4 hours for `agent-swing
 | `position-manager-poll` | `*/30 * * * *` | Fires every 30 min, 7 days a week to trail stops, manage invalidations, and cancel stale pending orders |
 | `exness-history-sync-poll` | `*/15 * * * *` | Fires every 15 min to reconcile closed trades and update portfolio capital |
 | `resolve-outcomes-poll` | `*/10 * * * *` | Fires every 10 min to reconcile MT5 deals and grade trade opportunities |
-| `agent-sre-poll` | `15 * * * *` | Fires hourly to run 8-point telemetry audit, execute auto-healing reconciliations, and dispatch alerts |
+| `agent-sre-poll` | `15 * * * *` | Fires hourly to run 9-point telemetry audit, execute auto-healing reconciliations, and dispatch alerts |
 | `invoke_reset_daily_drawdown` | `0 22 * * *` | Fires at 22:00 UTC daily |
 | `weekend-defense-cron` | `30 20 * * 5` | Fires Friday 20:30 UTC to trigger `agent-trade` roll-over sweep (closes losers, moves winners to BE) |
 
@@ -922,7 +922,7 @@ The backend manages recurring billing and automated lifecycle campaigns.
 
 The `agent-sre` edge function runs automatically every hour at `:15` via `agent-sre-poll`. It serves as the primary autonomous guardian of system reliability.
 
-### 8-Point Diagnostic Probes
+### 9-Point Diagnostic Probes
 1. **`pg_cron` Health**: Executes `check_cron_failures()` RPC to detect any failed background jobs.
 2. **Network & HTTP Integrity**: Scans `net._http_response` for 4xx/5xx responses or DNS errors in the last hour.
 3. **Agent Crash Detection**: Queries `audit_log` for `action = 'AGENT_CRASH'` entries.
@@ -930,7 +930,9 @@ The `agent-sre` edge function runs automatically every hour at `:15` via `agent-
 5. **Broker Execution Errors**: Scans `user_trades` for recent `status = 'FAILED'` records (MT5 error codes 10014, 10015, 10016, 10019) in the last hour.
 6. **MT5 VPS Bridge Connectivity**: Verifies `user_risk_settings.vps_last_heartbeat` latency (< 3 mins).
 7. **Market Data Freshness**: Validates `market_data_pti` candle flow for active symbols (< 2.0h latency during open sessions).
-8. **Treasury Solvency**: Verifies `system_settings.treasury_status` solvency ratio ≥ 1.0.
+8. **AI Model Outage & Timeout Sweep**: Scans `audit_log` for recent `API_TIMEOUT` spikes in the last hour (detecting OpenAI outages or access limits).
+9. **Account Drawdown & Circuit Breaker Guardrails**: Monitors all active PAMM accounts against daily drawdown (5%) and total maximum drawdown (10%) limits.
+10. **Treasury Solvency**: Verifies `system_settings.treasury_status` solvency ratio ≥ 1.0.
 
 ### Autonomous Self-Healing Actions
 When non-critical desyncs are detected, `agent-sre` auto-remediates without human intervention:
