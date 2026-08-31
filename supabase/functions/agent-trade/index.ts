@@ -1,10 +1,5 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
-import { isAutoTradingEnabled } from "../../../packages/core/settings.ts";
-import { isMarketOpen, isCrypto } from "../../../packages/core/market.ts";
-import { fetchPaperBars } from "../../../packages/execution/index.ts";
-import { getContextSnapshot } from "../../../packages/strategy/indicators.ts";
-import { insertAuditLog } from "../../../packages/core/audit.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -23,6 +18,124 @@ interface WebhookPayload {
   action?: "MANUAL_EXECUTION" | "RUNNER_HANDOFF" | "MANAGE_POSITIONS" | "WEEKEND_DEFENSE" | "AUTO_EJECT" | "MODIFY_ORDER" | "EXECUTE_PENDING" | "PROCESS_RETRIES";
   user_id?: string;
   opportunity_id?: string;
+}
+
+interface AuditEntry {
+  actor_type: string;
+  actor_id?: string;
+  action: string;
+  entity_type?: string;
+  entity_id?: string;
+  payload_json?: Record<string, unknown>;
+}
+
+async function computeHash(input: string) {
+  const data = new TextEncoder().encode(input);
+  const buf = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function insertAuditLog(supabase: any, entry: AuditEntry) {
+  try {
+    const { data: last } = await supabase
+      .from("audit_log")
+      .select("hash")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const prevHash = last?.hash ?? "";
+    const hash = await computeHash(prevHash + JSON.stringify(entry));
+
+    const cleanEntry: any = { ...entry, hash };
+    if (cleanEntry.entity_id && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanEntry.entity_id)) {
+      delete cleanEntry.entity_id;
+    }
+    if (cleanEntry.actor_id && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanEntry.actor_id)) {
+      delete cleanEntry.actor_id;
+    }
+
+    await supabase.from("audit_log").insert(cleanEntry);
+  } catch (err) {
+    console.error("[Audit Log] Failed to insert audit log:", err);
+  }
+}
+
+async function isAutoTradingEnabled(supabase: any): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from("system_settings")
+      .select("value")
+      .eq("key", "auto_trading_enabled")
+      .single();
+    if (error || !data) return true;
+    return data.value === true || data.value === "true";
+  } catch {
+    return true;
+  }
+}
+
+function isCrypto(symbol: string): boolean {
+  if (!symbol) return false;
+  const upper = symbol.toUpperCase();
+  const cryptoBases = ["BTC", "ETH", "SOL", "XRP", "DOGE", "LTC", "ADA"];
+  return cryptoBases.some(c => upper.startsWith(c)) || upper.endsWith("USDT");
+}
+
+function isMarketOpen(symbol: string): boolean {
+  if (isCrypto(symbol)) return true;
+  const now = new Date();
+  const day = now.getUTCDay();
+  const hour = now.getUTCHours();
+  if ((day === 5 && hour >= 22) || (day === 6) || (day === 0 && hour < 22)) return false;
+  if (hour === 22) return false;
+  return true;
+}
+
+async function fetchRecentBars(supabase: any, symbol: string, limit = 50) {
+  try {
+    const { data } = await supabase
+      .from("market_data_pti")
+      .select("ts, o, h, l, c, v")
+      .eq("symbol", symbol)
+      .order("ts", { ascending: false })
+      .limit(limit);
+    if (!data || data.length === 0) return [];
+    return data.reverse().map((b: any) => ({
+      t: b.ts,
+      o: Number(b.o),
+      h: Number(b.h),
+      l: Number(b.l),
+      c: Number(b.c),
+      v: Number(b.v) || 1
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function computeAtr14(highs: number[], lows: number[], closes: number[]): number {
+  if (!highs || !lows || !closes || highs.length < 2) return 0;
+  const trs: number[] = [];
+  for (let i = 1; i < highs.length; i++) {
+    const tr = Math.max(
+      highs[i] - lows[i],
+      Math.abs(highs[i] - closes[i - 1]),
+      Math.abs(lows[i] - closes[i - 1])
+    );
+    trs.push(tr);
+  }
+  if (trs.length === 0) return 0;
+  if (trs.length < 14) {
+    return Number((trs.reduce((s, v) => s + v, 0) / trs.length).toFixed(5));
+  }
+  let atr = trs.slice(0, 14).reduce((sum, val) => sum + val, 0) / 14;
+  for (let i = 14; i < trs.length; i++) {
+    atr = (atr * 13 + trs[i]) / 14;
+  }
+  return Number(atr.toFixed(5));
 }
 
 async function notifyTelegram(htmlText: string) {
@@ -79,7 +192,7 @@ async function executePendingOrders(supabase: any) {
   let executedCount = 0;
 
   for (const symbol in groupedBySymbol) {
-    const bars = await fetchPaperBars(symbol, "1m", 1, supabase);
+    const bars = await fetchRecentBars(supabase, symbol, 1);
     if (bars.length === 0) continue;
     const currentPrice = bars[0].c;
     const tradesForSymbol = groupedBySymbol[symbol];
@@ -262,9 +375,14 @@ async function processRetryQueue(supabase: any) {
   return { status: "success", processed: results.length, results };
 }
 
+
+
 serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*" } });
+  }
   try {
-    const payload: WebhookPayload = await req.json();
+    const payload: WebhookPayload = await req.json().catch(() => ({}));
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
     const isDefensiveAction =
@@ -766,18 +884,14 @@ serve(async (req) => {
 
       for (const symbol of uniqueSymbols) {
         try {
-          const bars = await fetchPaperBars(symbol, "30m", 50, supabase);
+          const bars = await fetchRecentBars(supabase, symbol, 50);
           if (bars.length >= 14) {
-            const snap = getContextSnapshot(
-              bars.map((b: any) => b.t),
-              bars.map((b: any) => b.o),
+            const atr = computeAtr14(
               bars.map((b: any) => b.h),
               bars.map((b: any) => b.l),
-              bars.map((b: any) => b.c),
-              bars.map((b: any) => b.v),
-              symbol
+              bars.map((b: any) => b.c)
             );
-            atrCache.set(symbol, snap.atr_14 || 0);
+            atrCache.set(symbol, atr || 0);
           }
         } catch (_) { /* non-fatal */ }
       }
@@ -1197,52 +1311,72 @@ serve(async (req) => {
             ? (currentPrice - entryPrice) / riskDist
             : (entryPrice - currentPrice) / riskDist;
 
+          const getDecimals = (sym: string) => {
+            if (["US30", "NAS100", "SPX500", "GER30", "BTCUSD", "XAUUSD", "XAGUSD", "UKOIL"].includes(sym)) return 2;
+            if (sym.endsWith("JPY")) return 3;
+            return 5;
+          };
+          const decimals = getDecimals(trade.symbol);
           const atr = atrCache.get(trade.symbol) || riskDist;
           let newSl: number | null = null;
           let actionName = "";
 
-          if (trade.trade_type === "RUNNER") {
+          // 1. Dynamic ATR Trailing (For RUNNER legs, or mature SWING legs with >= 1.2R profit)
+          if (trade.trade_type === "RUNNER" || (trade.trade_type === "SWING" && priceMoveInR >= 1.2)) {
             const trailSl = isLong ? currentPrice - (atr * 1.5) : currentPrice + (atr * 1.5);
             const isImprovement = isLong ? trailSl > currentSl : trailSl < currentSl;
             const isSafeFromOriginal = isLong ? trailSl > originalSl : trailSl < originalSl;
 
-            // Only trail runner once price has moved at least +0.8R to prevent immediate spread choking
-            if (isImprovement && isSafeFromOriginal && (priceMoveInR >= 0.80 || profit > 0)) {
-              newSl = Number(trailSl.toFixed(5));
-              actionName = `TRAIL_RUNNER (+${priceMoveInR.toFixed(1)}R)`;
+            // Only trail once price has moved at least +0.60R to avoid premature choking
+            if (isImprovement && isSafeFromOriginal && (priceMoveInR >= 0.60 || profit > 0)) {
+              newSl = Number(trailSl.toFixed(decimals));
+              actionName = `TRAIL_${trade.trade_type} (+${priceMoveInR.toFixed(1)}R)`;
             }
           }
 
+          // 2. Multi-Stage Stepped R-Locks (Guaranteed Risk-Free & Profit Locking)
           if (!newSl) {
             if (priceMoveInR >= 3.0) {
+              // Lock in +2.0R Profit
               const lockSl = isLong
-                ? Number((entryPrice + (riskDist * 2.0)).toFixed(5))
-                : Number((entryPrice - (riskDist * 2.0)).toFixed(5));
+                ? Number((entryPrice + (riskDist * 2.0)).toFixed(decimals))
+                : Number((entryPrice - (riskDist * 2.0)).toFixed(decimals));
               const isImprovement = isLong ? lockSl > currentSl : lockSl < currentSl;
               if (isImprovement) {
                 newSl = lockSl;
                 actionName = `LOCK_IN_2R (profit +${priceMoveInR.toFixed(1)}R)`;
               }
             } else if (priceMoveInR >= 2.0) {
+              // Lock in +1.0R Profit
               const lockSl = isLong
-                ? Number((entryPrice + riskDist).toFixed(5))
-                : Number((entryPrice - riskDist).toFixed(5));
+                ? Number((entryPrice + (riskDist * 1.0)).toFixed(decimals))
+                : Number((entryPrice - (riskDist * 1.0)).toFixed(decimals));
               const isImprovement = isLong ? lockSl > currentSl : lockSl < currentSl;
               if (isImprovement) {
                 newSl = lockSl;
                 actionName = `LOCK_IN_1R (profit +${priceMoveInR.toFixed(1)}R)`;
               }
             } else if (priceMoveInR >= 1.0) {
-              // At +1.0R (TP1 reached), lock Stop Loss at Break-Even (entryPrice) to protect principal
-              const beSl = Number(entryPrice.toFixed(5));
+              // Lock in +0.5R Profit (At +1.0R, secure half an R profit rather than just flat BE)
+              const lockSl = isLong
+                ? Number((entryPrice + (riskDist * 0.5)).toFixed(decimals))
+                : Number((entryPrice - (riskDist * 0.5)).toFixed(decimals));
+              const isImprovement = isLong ? lockSl > currentSl : lockSl < currentSl;
+              if (isImprovement) {
+                newSl = lockSl;
+                actionName = `LOCK_IN_0.5R (profit +${priceMoveInR.toFixed(1)}R)`;
+              }
+            } else if (priceMoveInR >= 0.50) {
+              // At +0.50R, lock Stop Loss at Break-Even (entryPrice) to eliminate all downside risk!
+              const beSl = Number(entryPrice.toFixed(decimals));
               const isImprovement = isLong ? beSl > currentSl : beSl < currentSl;
               if (isImprovement) {
                 newSl = beSl;
-                actionName = `BREAK_EVEN_AT_1R (profit +${priceMoveInR.toFixed(1)}R)`;
+                actionName = `BREAK_EVEN_AT_0.5R (profit +${priceMoveInR.toFixed(1)}R)`;
               }
-            } else if (barsElapsed >= 20 && profit > 0 && priceMoveInR >= 0.60) {
-              // Thesis decay: Only move to BE on aged trade if it has developed healthy profit buffer
-              const beSl = Number(entryPrice.toFixed(5));
+            } else if (barsElapsed >= 20 && profit > 0 && priceMoveInR >= 0.30) {
+              // Thesis decay: Only move to BE on aged trade once modestly positive
+              const beSl = Number(entryPrice.toFixed(decimals));
               const isImprovement = isLong ? beSl > currentSl : beSl < currentSl;
               if (isImprovement) {
                 newSl = beSl;
@@ -1400,18 +1534,13 @@ serve(async (req) => {
       try {
         const tfForAtr = isSwingTrade ? "1D" : "30m";
         const minAtrMultiplier = isSwingTrade ? 1.25 : 1.0;
-        const bars = await fetchPaperBars(signal.symbol, tfForAtr, 50, supabase);
+        const bars = await fetchRecentBars(supabase, signal.symbol, 50);
         if (bars.length >= 14) {
-          const snap = getContextSnapshot(
-            bars.map((b: any) => b.t),
-            bars.map((b: any) => b.o),
+          const rawAtr = computeAtr14(
             bars.map((b: any) => b.h),
             bars.map((b: any) => b.l),
-            bars.map((b: any) => b.c),
-            bars.map((b: any) => b.v),
-            signal.symbol
+            bars.map((b: any) => b.c)
           );
-          const rawAtr = snap.atr_14 || 0;
           const minRequiredRisk = rawAtr * minAtrMultiplier;
           if (minRequiredRisk > 0) {
             const currentRisk = Math.abs(defaultEntryPrice - stopLoss);
@@ -1551,19 +1680,15 @@ serve(async (req) => {
     const orderTypeStr = (signal.entry_plan_json?.order_type || "Market").toUpperCase();
     if (!isManual && (orderTypeStr.includes("STOP") || signal.ai_summary?.includes("BREAKOUT"))) {
       try {
-        const bars = await fetchPaperBars(signal.symbol, "30m", 30, supabase);
+        const bars = await fetchRecentBars(supabase, signal.symbol, 30);
         if (bars.length >= 10) {
-          const snap = getContextSnapshot(
-            bars.map((b: any) => b.t),
-            bars.map((b: any) => b.o),
-            bars.map((b: any) => b.h),
-            bars.map((b: any) => b.l),
-            bars.map((b: any) => b.c),
-            bars.map((b: any) => b.v),
-            signal.symbol
-          );
-          if (snap.volume_regime === "ANEMIC" || (snap.volume_ratio !== null && snap.volume_ratio < 0.70)) {
-            const rejectReason = `[Execution Desk] REJECTED: Low-Volume Fakeout Trap. Breakout tick volume ratio is anemic (${snap.volume_ratio}x < 0.70x required).`;
+          const recentVol = bars[bars.length - 1]?.v || 1;
+          const prevVols = bars.slice(0, -1).map((b: any) => b.v || 1);
+          const avgVol = prevVols.reduce((s: number, v: number) => s + v, 0) / prevVols.length || 1;
+          const volumeRatio = recentVol / avgVol;
+
+          if (volumeRatio < 0.70) {
+            const rejectReason = `[Execution Desk] REJECTED: Low-Volume Fakeout Trap. Breakout tick volume ratio is anemic (${volumeRatio.toFixed(2)}x < 0.70x required).`;
             await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_summary: (signal.ai_summary || "") + "\n\n" + rejectReason, ai_risks: rejectReason }).eq("id", signal.id);
             console.log(`[Execution Desk] Rejected ${signal.symbol} due to anemic breakout volume.`);
             return new Response(JSON.stringify({ success: true, message: "Rejected due to low volume fakeout" }), { status: 200 });
@@ -1826,23 +1951,7 @@ serve(async (req) => {
         let tierRiskModifier = 1.0;
         if (signalTier === "B-Tier") tierRiskModifier = 0.5;
 
-        // --- ALL-TIME DRAWDOWN BREAKER & PHM ---
-        let drawdownModifier = 1.0;
-        const hwm = Number(user.high_water_mark_equity) || Number(user.portfolio_capital);
-        const maxDrawdownPct = Number(user.max_drawdown_pct) || 0.05;
-        
-        let effectiveHwm = hwm;
-        let effectiveRiskPct = Number(user.risk_per_trade_pct);
-        
-        // Global House Money Logic
-        if (phmSettings.active && phmSettings.floor_capital > 0) {
-            if (Number(user.portfolio_capital) > Number(phmSettings.floor_capital)) {
-                effectiveRiskPct = Number(phmSettings.risk_pct) || effectiveRiskPct;
-                console.log(`[PHM Active] User ${user.user_id} is playing with House Money! Risk escalated to ${effectiveRiskPct * 100}%`);
-            }
-            // Override HWM to force a soft-landing at the PHM Floor
-            effectiveHwm = Math.max(hwm, Number(phmSettings.floor_capital));
-        }
+
 
         // --- ALL-TIME DRAWDOWN BREAKER & TIERED RECOVERY MODE ---
         let drawdownModifier = 1.0;
