@@ -241,16 +241,34 @@ ${JSON.stringify(snapshot, null, 2)}`,
     parallel_tool_calls: false
   };
 
-  const responseRes = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body)
-  });
+  let responseData: any = null;
+  let lastError: any = null;
+  const maxRetries = 2;
 
-  const responseData = await responseRes.json();
-  
-  if (responseData.error) {
-    throw new Error(`Responses API Error: ${responseData.error.message}`);
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const responseRes = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body)
+      });
+      responseData = await responseRes.json();
+      if (responseData.error) {
+        throw new Error(`Responses API Error: ${responseData.error.message}`);
+      }
+      lastError = null;
+      break;
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`[Responses API] Attempt ${attempt + 1}/${maxRetries + 1} failed for ${symbol}: ${err.message}`);
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      }
+    }
+  }
+
+  if (lastError || !responseData) {
+    throw lastError || new Error("Failed to obtain response from Responses API after retries");
   }
 
   const output = responseData.output;

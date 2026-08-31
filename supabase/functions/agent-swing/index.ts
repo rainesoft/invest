@@ -79,14 +79,14 @@ export function calculateFibonacciLevels(high: number[], low: number[], close: n
     // Price moved UP from low to high, now retracing DOWN
     levels = retracementRatios.map((r) => ({
       label: `${(r * 100).toFixed(1)}%`,
-      price: Number((swing_high - swing_range * r).toFixed(2)),
+      price: Number((swing_high - swing_range * r).toFixed(5)),
       pct: r,
     }));
   } else {
     // Price moved DOWN from high to low, now retracing UP
     levels = retracementRatios.map((r) => ({
       label: `${(r * 100).toFixed(1)}%`,
-      price: Number((swing_low + swing_range * r).toFixed(2)),
+      price: Number((swing_low + swing_range * r).toFixed(5)),
       pct: r,
     }));
   }
@@ -97,13 +97,13 @@ export function calculateFibonacciLevels(high: number[], low: number[], close: n
   if (direction === "BULLISH_RETRACEMENT") {
     extensions = extensionRatios.map((r) => ({
       label: `${(r * 100).toFixed(1)}% ext`,
-      price: Number((swing_low - swing_range * (r - 1)).toFixed(2)),
+      price: Number((swing_low - swing_range * (r - 1)).toFixed(5)),
       pct: r,
     }));
   } else {
     extensions = extensionRatios.map((r) => ({
       label: `${(r * 100).toFixed(1)}% ext`,
-      price: Number((swing_high + swing_range * (r - 1)).toFixed(2)),
+      price: Number((swing_high + swing_range * (r - 1)).toFixed(5)),
       pct: r,
     }));
   }
@@ -427,16 +427,34 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
     max_output_tokens: 1500
   };
 
-  const responseRes = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body)
-  });
+  let responseData: any = null;
+  let lastError: any = null;
+  const maxRetries = 2;
 
-  const responseData = await responseRes.json();
-  
-  if (responseData.error) {
-    throw new Error(`Responses API Error: ${responseData.error.message}`);
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const responseRes = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body)
+      });
+      responseData = await responseRes.json();
+      if (responseData.error) {
+        throw new Error(`Responses API Error: ${responseData.error.message}`);
+      }
+      lastError = null;
+      break;
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`[Responses API] Attempt ${attempt + 1}/${maxRetries + 1} failed for ${symbol}: ${err.message}`);
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      }
+    }
+  }
+
+  if (lastError || !responseData) {
+    throw lastError || new Error("Failed to obtain response from Responses API after retries");
   }
 
   const output = responseData.output;
