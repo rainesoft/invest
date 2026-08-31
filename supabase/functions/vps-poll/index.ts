@@ -104,8 +104,8 @@ serve(async (req) => {
       let safeTp = targetTP > 0 ? Number(targetTP.toFixed(decimals)) : 0;
       let safeVolume = Number(trade.volume.toFixed(2));
 
-      // Validate SL direction
-      if (safeEntry > 0 && safeSl > 0) {
+      // Validate SL direction only for fresh pending orders (allow trailing/profit SL for OPEN trades)
+      if (trade.status === "VPS_PENDING" && safeEntry > 0 && safeSl > 0) {
         const isLong = trade.side === "LONG" || trade.side === "BUY";
         if (isLong && safeSl >= safeEntry) {
           safeSl = Number((safeEntry - (riskDistance > 0 ? riskDistance : 0.001)).toFixed(decimals));
