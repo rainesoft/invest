@@ -384,6 +384,58 @@ serve(async (req) => {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // PROBE 8: AI Evaluation Model Timeouts / API Errors
+    // ─────────────────────────────────────────────────────────────
+    let apiTimeoutCount = 0;
+    const { data: apiTimeouts, error: timeoutErr } = await supabase
+      .from("audit_log")
+      .select("id, payload_json, created_at")
+      .eq("action", "API_TIMEOUT")
+      .gte("created_at", oneHourAgoIso);
+
+    if (!timeoutErr && apiTimeouts && apiTimeouts.length > 0) {
+      apiTimeoutCount = apiTimeouts.length;
+      if (apiTimeoutCount >= 3) {
+        const sampleReason = apiTimeouts[0]?.payload_json?.error || apiTimeouts[0]?.payload_json?.reason || "API Outage";
+        issues.push(`⚠️ <b>AI Model Outage (${apiTimeoutCount} timeouts in last hour):</b> <code>${String(sampleReason).slice(0, 150)}</code>`);
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // PROBE 9: Account Drawdown & Circuit Breaker Guardrails
+    // ─────────────────────────────────────────────────────────────
+    let drawdownBreachedCount = 0;
+    const { data: allRiskAccounts } = await supabase
+      .from("user_risk_settings")
+      .select("user_id, portfolio_capital, daily_starting_equity, high_water_mark_equity, max_daily_drawdown_pct, max_drawdown_pct, auto_trade_enabled");
+
+    if (allRiskAccounts && allRiskAccounts.length > 0) {
+      for (const acc of allRiskAccounts) {
+        const capital = Number(acc.portfolio_capital || 0);
+        const dailyStart = Number(acc.daily_starting_equity || capital);
+        const hwm = Number(acc.high_water_mark_equity || capital);
+        const maxDailyDdPct = Number(acc.max_daily_drawdown_pct || 0.05);
+        const maxTotalDdPct = Number(acc.max_drawdown_pct || 0.10);
+
+        if (dailyStart > 0) {
+          const currentDailyLoss = (dailyStart - capital) / dailyStart;
+          if (currentDailyLoss >= maxDailyDdPct) {
+            drawdownBreachedCount++;
+            issues.push(`🚨 <b>Daily Drawdown Breached:</b> Account ${acc.user_id.slice(0, 8)} lost ${(currentDailyLoss * 100).toFixed(1)}% today (Max: ${(maxDailyDdPct * 100).toFixed(0)}%).`);
+          }
+        }
+
+        if (hwm > 0) {
+          const currentTotalLoss = (hwm - capital) / hwm;
+          if (currentTotalLoss >= maxTotalDdPct) {
+            drawdownBreachedCount++;
+            issues.push(`🚨 <b>Max Total Drawdown Breached:</b> Account ${acc.user_id.slice(0, 8)} drawdown is ${(currentTotalLoss * 100).toFixed(1)}% from HWM (Max: ${(maxTotalDdPct * 100).toFixed(0)}%).`);
+          }
+        }
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // TELEMETRY SUMMARY & INCIDENT ALERTING
     // ─────────────────────────────────────────────────────────────
     const isHealthy = issues.length === 0;
@@ -394,6 +446,8 @@ serve(async (req) => {
       vps_latency_mins: vpsMinsAgo,
       solvency_ratio: solvencyRatio,
       market_data_latency_hours: candleHoursAgo,
+      api_timeouts_count: apiTimeoutCount,
+      drawdown_breaches_count: drawdownBreachedCount,
       issues_count: issues.length,
       issues,
       remediations_count: autoRemediations.length,
@@ -441,6 +495,7 @@ serve(async (req) => {
       tgLines.push(`• VPS Latency: <code>${vpsMinsAgo !== null ? `${vpsMinsAgo.toFixed(1)}m` : "N/A"}</code>`);
       tgLines.push(`• Treasury Solvency: <code>${solvencyRatio.toFixed(2)}x</code>`);
       tgLines.push(`• Candle Latency: <code>${candleHoursAgo !== null ? `${candleHoursAgo.toFixed(1)}h` : "N/A"}</code>`);
+      tgLines.push(`• AI Timeouts (1h): <code>${apiTimeoutCount}</code>`);
 
       await notifyTelegram(tgLines.join("\n"));
     }
