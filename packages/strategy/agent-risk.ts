@@ -1,4 +1,4 @@
-import { SupabaseClient } from "@supabase/supabase-js";
+import { SupabaseClient } from "npm:@supabase/supabase-js@2.108.2";
 import { LogicContext } from "./indicators.ts";
 
 export type RiskValidationResult = {

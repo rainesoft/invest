@@ -1,4 +1,4 @@
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2.108.2";
 import { insertAuditLog } from "../core/audit.ts";
 
 function getEnv(name: string): string | undefined {

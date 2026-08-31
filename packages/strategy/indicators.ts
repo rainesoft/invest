@@ -1,4 +1,4 @@
-import { EMA, RSI, ADX, ATR, BollingerBands, MACD } from 'technicalindicators';
+import { EMA, RSI, ADX, ATR, BollingerBands, MACD } from "npm:technicalindicators@3.1.0";
 
 export type LogicContext = {
   candlestick_pattern?: string;
