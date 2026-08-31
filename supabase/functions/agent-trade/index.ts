@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
 import { isAutoTradingEnabled } from "../../../packages/core/settings.ts";
-import { isMarketOpen } from "../../../packages/core/market.ts";
+import { isMarketOpen, isCrypto } from "../../../packages/core/market.ts";
 import { fetchPaperBars } from "../../../packages/execution/index.ts";
 import { getContextSnapshot } from "../../../packages/strategy/indicators.ts";
 import { insertAuditLog } from "../../../packages/core/audit.ts";
@@ -385,8 +385,8 @@ serve(async (req) => {
 
       const { data: openTrades, error } = await supabase
         .from("user_trades")
-        .select("id, meta_api_order_id, symbol, side, status, user_id, open_price")
-        .eq("status", "OPEN")
+        .select("id, meta_api_order_id, symbol, side, status, user_id, open_price, opportunity_id")
+        .in("status", ["OPEN", "VPS_PENDING", "ACTIVE"])
         .not("meta_api_order_id", "is", null);
 
       if (error || !openTrades || openTrades.length === 0) {
@@ -395,9 +395,25 @@ serve(async (req) => {
       }
 
       // Exempt Crypto from weekend defense because Crypto trades 24/7
-      const vulnerableTrades = openTrades.filter(t => t.symbol ? !isMarketOpen(t.symbol) : true);
+      const vulnerableTrades = openTrades.filter(t => t.symbol ? !isCrypto(t.symbol) : true);
       const uniqueOrders = [...new Set(vulnerableTrades.map(t => t.meta_api_order_id))];
+
+      if (uniqueOrders.length === 0) {
+        console.log("[Weekend Defense] Open trades exist but all are 24/7 crypto. No weekend liquidation needed.");
+        await notifyTelegram("🛡️ <b>Weekend Defense:</b> Only 24/7 crypto trades open. No weekend rollover risk to protect.");
+        return new Response("No non-crypto trades to defend.", { status: 200 });
+      }
+
       console.log(`[Weekend Defense] Found ${uniqueOrders.length} unique master orders to evaluate. Routing via ${isVpsAlive ? "VPS" : "MetaAPI"}.`);
+
+      // Fetch market data PTI snapshot as fallback pricing
+      const { data: ptiData } = await supabase.from("market_data_pti").select("symbol, data_json");
+      const ptiMap = new Map<string, any>();
+      if (ptiData) {
+        for (const p of ptiData) {
+          ptiMap.set(p.symbol, p.data_json);
+        }
+      }
 
       let closedCount = 0, movedToBeCount = 0, errorCount = 0;
       const closedSymbols: string[] = [];
@@ -409,22 +425,39 @@ serve(async (req) => {
           if (!tradeData) continue;
 
           let position = null;
-          if (!isVpsAlive && META_API_TOKEN && META_API_ACCOUNT_ID) {
-            const posRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/positions/${orderId}`, { headers: { "auth-token": META_API_TOKEN } });
-            if (!posRes.ok) {
-              await supabase.from("user_trades").update({ status: "CLOSED" }).eq("meta_api_order_id", orderId).eq("status", "OPEN");
-              continue;
+          if (META_API_TOKEN && META_API_ACCOUNT_ID) {
+            try {
+              const posRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/positions/${orderId}`, { headers: { "auth-token": META_API_TOKEN } });
+              if (!posRes.ok) {
+                if (posRes.status === 404) {
+                  // Position already closed on broker
+                  await supabase.from("user_trades").update({ status: "CLOSED" }).eq("meta_api_order_id", orderId).eq("status", "OPEN");
+                  continue;
+                }
+              } else {
+                position = await posRes.json();
+                if (position?.error) {
+                  console.warn(`[Weekend Defense] Position error for ${orderId}:`, position.error);
+                  position = null;
+                }
+              }
+            } catch (e) {
+              console.warn(`[Weekend Defense] MetaAPI position fetch failed for ${orderId}:`, e);
             }
-            position = await posRes.json();
-            if (position.error) { errorCount++; continue; }
           }
 
-          const profit = position ? (Number(position.profit) || 0) : 0;
-          const openPrice = position ? Number(position.openPrice) : (Number(tradeData.open_price) || 0);
           const symbol = tradeData.symbol;
+          const openPrice = position ? Number(position.openPrice) : (Number(tradeData.open_price) || 0);
+          const isLong = tradeData.side === "LONG" || tradeData.side === "BUY";
+          const ptiSnap = ptiMap.get(symbol);
+          const currentPrice = position ? Number(position.currentPrice) : (ptiSnap?.c || openPrice);
 
-          if (isVpsAlive || profit <= 0) {
-            console.log(`[Weekend Defense] ${symbol} (${orderId}) CLOSING via ${isVpsAlive ? "VPS" : "MetaAPI"}.`);
+          const profit = position
+            ? (Number(position.profit) || 0)
+            : (openPrice > 0 ? (isLong ? currentPrice - openPrice : openPrice - currentPrice) : 0);
+
+          if (profit <= 0) {
+            console.log(`[Weekend Defense] ${symbol} (${orderId}) LOSER (profit $${profit.toFixed(2)}). CLOSING via ${isVpsAlive ? "VPS" : "MetaAPI"}.`);
             if (!DRY_RUN) {
               if (isVpsAlive) {
                 await supabase.from("user_trades").update({ status: "VPS_CLOSE", error_message: "Weekend Defense Liquidation" }).eq("meta_api_order_id", orderId);
@@ -440,24 +473,46 @@ serve(async (req) => {
                   await supabase.from("user_trades").update({ status: "CLOSED", error_message: "Weekend Defense (MetaAPI)" }).eq("meta_api_order_id", orderId);
                   closedSymbols.push(`${symbol} ($${profit.toFixed(2)})`);
                   closedCount++;
-                } else { errorCount++; }
+                } else {
+                  errorCount++;
+                }
               }
             } else {
               closedSymbols.push(`${symbol} [DRY]`);
               closedCount++;
             }
-          } else if (!isVpsAlive && profit > 0 && META_API_TOKEN && META_API_ACCOUNT_ID) {
-            console.log(`[Weekend Defense] ${symbol} (${orderId}) profit $${profit.toFixed(2)}. Moving SL to BE (${openPrice}).`);
+          } else {
+            console.log(`[Weekend Defense] ${symbol} (${orderId}) WINNER (profit $${profit.toFixed(2)}). Moving SL to BE (${openPrice}).`);
             if (!DRY_RUN) {
-              const modRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
-                method: "POST",
-                headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
-                body: JSON.stringify({ actionType: "POSITION_MODIFY", positionId: orderId, stopLoss: openPrice, takeProfit: position.takeProfit })
-              });
-              if (modRes.ok) {
-                beSymbols.push(`${symbol} (+$${profit.toFixed(2)})`);
-                movedToBeCount++;
-              } else { errorCount++; }
+              let modified = false;
+              if (isVpsAlive && tradeData.opportunity_id) {
+                const { data: currentOpp } = await supabase.from("trade_opportunities").select("stop_plan_json").eq("id", tradeData.opportunity_id).single();
+                if (currentOpp) {
+                  const updatedJson = { ...currentOpp.stop_plan_json, stop: openPrice };
+                  const modRes = await supabase.from("trade_opportunities").update({ stop_plan_json: updatedJson }).eq("id", tradeData.opportunity_id);
+                  if (!modRes.error) {
+                    beSymbols.push(`${symbol} (+$${profit.toFixed(2)} via VPS)`);
+                    movedToBeCount++;
+                    modified = true;
+                  }
+                }
+              }
+              if (META_API_TOKEN && META_API_ACCOUNT_ID) {
+                const modRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                  method: "POST",
+                  headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                  body: JSON.stringify({ actionType: "POSITION_MODIFY", positionId: orderId, stopLoss: openPrice, takeProfit: position?.takeProfit })
+                });
+                if (modRes.ok) {
+                  if (!modified) {
+                    beSymbols.push(`${symbol} (+$${profit.toFixed(2)})`);
+                    movedToBeCount++;
+                    modified = true;
+                  }
+                } else if (!modified) {
+                  errorCount++;
+                }
+              }
             } else {
               beSymbols.push(`${symbol} (+$${profit.toFixed(2)}) [DRY]`);
               movedToBeCount++;
@@ -1151,7 +1206,8 @@ serve(async (req) => {
             const isImprovement = isLong ? trailSl > currentSl : trailSl < currentSl;
             const isSafeFromOriginal = isLong ? trailSl > originalSl : trailSl < originalSl;
 
-            if (isImprovement && isSafeFromOriginal && (profit > 0 || priceMoveInR > 0)) {
+            // Only trail runner once price has moved at least +0.8R to prevent immediate spread choking
+            if (isImprovement && isSafeFromOriginal && (priceMoveInR >= 0.80 || profit > 0)) {
               newSl = Number(trailSl.toFixed(5));
               actionName = `TRAIL_RUNNER (+${priceMoveInR.toFixed(1)}R)`;
             }
@@ -1177,22 +1233,15 @@ serve(async (req) => {
                 actionName = `LOCK_IN_1R (profit +${priceMoveInR.toFixed(1)}R)`;
               }
             } else if (priceMoveInR >= 1.0) {
-              const lockSl = isLong
-                ? Number((entryPrice + (riskDist * 0.5)).toFixed(5))
-                : Number((entryPrice - (riskDist * 0.5)).toFixed(5));
-              const isImprovement = isLong ? lockSl > currentSl : lockSl < currentSl;
-              if (isImprovement) {
-                newSl = lockSl;
-                actionName = `LOCK_IN_HALF_R (profit +${priceMoveInR.toFixed(1)}R)`;
-              }
-            } else if (priceMoveInR >= 0.50) {
+              // At +1.0R (TP1 reached), lock Stop Loss at Break-Even (entryPrice) to protect principal
               const beSl = Number(entryPrice.toFixed(5));
               const isImprovement = isLong ? beSl > currentSl : beSl < currentSl;
               if (isImprovement) {
                 newSl = beSl;
-                actionName = `BREAK_EVEN (profit +${priceMoveInR.toFixed(1)}R)`;
+                actionName = `BREAK_EVEN_AT_1R (profit +${priceMoveInR.toFixed(1)}R)`;
               }
-            } else if (barsElapsed >= 20 && profit > 0) {
+            } else if (barsElapsed >= 20 && profit > 0 && priceMoveInR >= 0.60) {
+              // Thesis decay: Only move to BE on aged trade if it has developed healthy profit buffer
               const beSl = Number(entryPrice.toFixed(5));
               const isImprovement = isLong ? beSl > currentSl : beSl < currentSl;
               if (isImprovement) {
@@ -1795,9 +1844,42 @@ serve(async (req) => {
             effectiveHwm = Math.max(hwm, Number(phmSettings.floor_capital));
         }
 
-        if (Number(user.portfolio_capital) < effectiveHwm * (1 - maxDrawdownPct)) {
-           console.log(`[Drawdown Breaker] User ${user.user_id} breached ${maxDrawdownPct*100}% all-time max drawdown (Relative HWM: ${effectiveHwm})! Blocking new execution.`);
-           continue; // Skips allocating volume to this user
+        // --- ALL-TIME DRAWDOWN BREAKER & TIERED RECOVERY MODE ---
+        let drawdownModifier = 1.0;
+        let isRecoveryMode = false;
+        const hwm = Number(user.high_water_mark_equity) || Number(user.portfolio_capital);
+        const maxDrawdownPct = Number(user.max_drawdown_pct) || 0.10;
+        const hardDrawdownStopPct = maxDrawdownPct * 1.5; // e.g. 15% hard stop
+        
+        let effectiveHwm = hwm;
+        let effectiveRiskPct = Number(user.risk_per_trade_pct);
+        
+        // Global House Money Logic
+        if (phmSettings.active && phmSettings.floor_capital > 0) {
+            if (Number(user.portfolio_capital) > Number(phmSettings.floor_capital)) {
+                effectiveRiskPct = Number(phmSettings.risk_pct) || effectiveRiskPct;
+                console.log(`[PHM Active] User ${user.user_id} is playing with House Money! Risk escalated to ${effectiveRiskPct * 100}%`);
+            }
+            // Override HWM to force a soft-landing at the PHM Floor
+            effectiveHwm = Math.max(hwm, Number(phmSettings.floor_capital));
+        }
+
+        const userCapital = Number(user.portfolio_capital);
+        const currentDrawdownPct = effectiveHwm > 0 ? (effectiveHwm - userCapital) / effectiveHwm : 0;
+
+        if (userCapital < effectiveHwm * (1 - maxDrawdownPct)) {
+           // Account has breached standard drawdown threshold. Check if eligible for Tiered Recovery Mode.
+           const isHighConvictionTier = signalTier === "S-Tier" || signalTier === "A-Tier" || (signal.confidence || 0) >= 80;
+           const isWithinRecoveryBuffer = userCapital >= effectiveHwm * (1 - hardDrawdownStopPct);
+
+           if (isHighConvictionTier && isWithinRecoveryBuffer) {
+              isRecoveryMode = true;
+              drawdownModifier = signalTier === "S-Tier" ? 0.50 : 0.35;
+              console.log(`[Drawdown Recovery Mode] User ${user.user_id} in ${(currentDrawdownPct * 100).toFixed(1)}% drawdown. High-conviction ${signalTier || 'A-Tier'} trade permitted at ${(drawdownModifier * 100).toFixed(0)}% recovery scale.`);
+           } else {
+              console.log(`[Drawdown Breaker] User ${user.user_id} breached ${(currentDrawdownPct * 100).toFixed(1)}% drawdown (HWM: $${effectiveHwm})! Blocking execution for ${signalTier || 'trade'}.`);
+              continue; // Skips allocating volume to this user
+           }
         }
 
         // --- DAILY DRAWDOWN BREAKER (PROP FIRM RULE) ---
@@ -1815,13 +1897,14 @@ serve(async (req) => {
         
         // --- ASSET-CLASS HARD VOLUME CAPS (Commodity Multiplier & Volatility Governors) ---
         const assetLotCaps: Record<string, number> = {
-          UKOIL: 0.02,
-          XAUUSD: 0.02,
-          XAGUSD: 0.02,
-          US30: 0.10,
-          NAS100: 0.10,
-          SPX500: 0.10,
-          GER30: 0.10,
+          UKOIL: 0.01,
+          USOIL: 0.01,
+          XAUUSD: 0.01,
+          XAGUSD: 0.01,
+          US30: 0.05,
+          NAS100: 0.05,
+          SPX500: 0.05,
+          GER30: 0.05,
           BTCUSD: 0.02,
           EURUSD: 0.20,
           GBPUSD: 0.20,
@@ -1841,39 +1924,53 @@ serve(async (req) => {
         let effectivePointsAtRisk = pointsAtRisk;
         let riskAmount = effectivePointsAtRisk * volume * pointValueUsd;
         
-        // --- ACCOUNT BLOWOUT PROTECTION & SMART LIMIT ENTRY OPTIMIZATION ---
-        // If the minimum lot creates a risk that exceeds 10% of capital, check if this is an S/A-Tier Limit order
-        // that can be pulled deeper into the structural discount zone to satisfy the 10% hard cap safely.
-        const maxPermissibleRisk = Number(user.portfolio_capital) * 0.10;
+        // --- PRE-FLIGHT DOLLAR RISK HARD CAP (VAN THARP 3.0% FIXED FRACTIONAL BUDGET) ---
+        // Prevents high-point-value instruments (Gold, Oil) from risking more than 3% of capital on wide stops.
+        const maxPermissibleRisk = Number(user.portfolio_capital) * 0.03;
+        
         if (riskAmount > maxPermissibleRisk) {
-          const isLimitOrder = aiOrderType.includes("LIMIT");
-          const isHighConfidence = (signal.confidence || 0) >= 80;
-          const maxPointsAtRisk = maxPermissibleRisk / (volumeStep * pointValueUsd);
-          
-          if (isLimitOrder && isHighConfidence && maxPointsAtRisk > 0 && pointsAtRisk <= maxPointsAtRisk * 2.5) {
-            const isLong = signal.side === "LONG" || signal.side === "BUY";
-            const optimizedEntryPrice = isLong
-              ? Number((stopLoss + maxPointsAtRisk).toFixed(5))
-              : Number((stopLoss - maxPointsAtRisk).toFixed(5));
-
-            console.log(`[Smart Order Sizing] Optimizing S-Tier ${signal.symbol} Limit Entry: Pulling entry closer to SL ($${entryPrice} → $${optimizedEntryPrice}) to satisfy 10% cap ($${maxPermissibleRisk.toFixed(2)}).`);
-            
-            scaledEntry.price = optimizedEntryPrice;
-            defaultEntryPrice = optimizedEntryPrice;
-            effectivePointsAtRisk = maxPointsAtRisk;
-            riskAmount = effectivePointsAtRisk * volumeStep * pointValueUsd;
-            
-            // Backfill the optimized entry price into signal record and database for tracking
-            if (signal.entry_plan_json) {
-              signal.entry_plan_json.price = optimizedEntryPrice;
-              await supabase.from("trade_opportunities").update({
-                entry_plan_json: signal.entry_plan_json,
-              }).eq("id", signal.id);
+          // 1. Try reducing volume down to safe lot size
+          if (volume > volumeStep) {
+            const safeVolume = Math.floor(maxPermissibleRisk / (effectivePointsAtRisk * pointValueUsd) / volumeStep) * volumeStep;
+            if (safeVolume >= volumeStep) {
+              console.log(`[Risk Manager] Clamping ${signal.symbol} volume (${volume} → ${safeVolume}) to satisfy 3.0% dollar risk cap ($${maxPermissibleRisk.toFixed(2)}).`);
+              volume = safeVolume;
+              riskAmount = effectivePointsAtRisk * volume * pointValueUsd;
             }
-          } else {
-            console.log(`[Risk Manager] Blocking User ${user.user_id}: allocated volume (${volume}) creates $${riskAmount.toFixed(2)} risk, violating 10% hard cap ($${maxPermissibleRisk.toFixed(2)}).`);
-            blockedByRiskManager = true;
-            continue;
+          }
+
+          // 2. If at minimum 0.01 lot the dollar risk STILL exceeds 3% (e.g. Gold 150pt stop), optimize limit entry or block
+          if (riskAmount > maxPermissibleRisk) {
+            const isLimitOrder = aiOrderType.includes("LIMIT");
+            const isHighConfidence = (signal.confidence || 0) >= 80;
+            const maxPointsAtRisk = maxPermissibleRisk / (volumeStep * pointValueUsd);
+            
+            if (isLimitOrder && isHighConfidence && maxPointsAtRisk > 0 && pointsAtRisk <= maxPointsAtRisk * 2.5) {
+              const isLong = signal.side === "LONG" || signal.side === "BUY";
+              const optimizedEntryPrice = isLong
+                ? Number((stopLoss + maxPointsAtRisk).toFixed(5))
+                : Number((stopLoss - maxPointsAtRisk).toFixed(5));
+
+              console.log(`[Smart Order Sizing] Optimizing S-Tier ${signal.symbol} Limit Entry: Pulling entry closer to SL ($${entryPrice} → $${optimizedEntryPrice}) to satisfy 3% cap ($${maxPermissibleRisk.toFixed(2)}).`);
+              
+              scaledEntry.price = optimizedEntryPrice;
+              defaultEntryPrice = optimizedEntryPrice;
+              effectivePointsAtRisk = maxPointsAtRisk;
+              riskAmount = effectivePointsAtRisk * volumeStep * pointValueUsd;
+              volume = volumeStep;
+              
+              // Backfill the optimized entry price into signal record and database for tracking
+              if (signal.entry_plan_json) {
+                signal.entry_plan_json.price = optimizedEntryPrice;
+                await supabase.from("trade_opportunities").update({
+                  entry_plan_json: signal.entry_plan_json,
+                }).eq("id", signal.id);
+              }
+            } else {
+              console.log(`[Risk Manager] Blocking User ${user.user_id}: ${signal.symbol} risk ($${riskAmount.toFixed(2)}) exceeds 3.0% maximum risk budget ($${maxPermissibleRisk.toFixed(2)}).`);
+              blockedByRiskManager = true;
+              continue;
+            }
           }
         }
 
@@ -1886,18 +1983,23 @@ serve(async (req) => {
           user_id: user.user_id,
           volume,
           risk_amount: riskAmount,
+          is_recovery_mode: isRecoveryMode,
         });
       }
     }
 
     if (totalMasterVolume <= 0) {
       console.log(`[PAMM Router] Skipping execution. Total Volume: ${totalMasterVolume}.`);
-      let rejectReason = `Rejected: No volume allocated (Circuit Breaker / Max Drawdown reached for all users).`;
+      let rejectReason = `Execution Skipped: No volume allocated (Circuit Breaker / Max Drawdown reached for all users).`;
       if (blockedByRiskManager) {
-        rejectReason = `Rejected: No volume allocated (10% Account Blowout Protection hard cap reached for users).`;
+        rejectReason = `Execution Skipped: No volume allocated (10% Account Blowout Protection hard cap reached for users).`;
       }
-      await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + rejectReason, ai_risks: rejectReason }).eq("id", signal.id);
-      return new Response("No volume allocated", { status: 200 });
+      // Preserve technical signal approval in trade_opportunities, log desk skip note
+      await supabase.from("trade_opportunities").update({
+        ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + rejectReason,
+        ai_risks: rejectReason
+      }).eq("id", signal.id);
+      return new Response(JSON.stringify({ ok: true, message: rejectReason }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
 
     // --- VPS EXECUTION ROUTING ---
