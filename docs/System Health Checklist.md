@@ -417,6 +417,25 @@ Tables in non-public schemas (`net`, `cron`, `vault`) cannot be queried directly
 
 ---
 
+## ⚠️ 1L. Decommissioned Edge Function & External Ping Sweep (HTTP 401 Flooding)
+
+> [!WARNING]
+> **Incident (2026-09-01):** An external server in London (`18.169.92.26`) running a legacy `pg_net` cron fired HTTP POST requests to `https://ktezlusdkqlfdwqrldtn.supabase.co/functions/v1/agent-sniper` every minute without auth headers. Because `agent-sniper` was decommissioned and archived into `supabase/functions/_archive/agent-sniper`, the endpoint rejected the calls with `HTTP 401 Unauthorized`, generating ~1,440 false-alarm 401 log entries daily.
+
+### Diagnostic Protocol & Standard Rule:
+1. Scan ClickHouse `function_edge_logs` for high-frequency 401s or calls to archived functions (`agent-sniper`, `agent-scalper`):
+   ```sql
+   SELECT timestamp, event_message 
+   FROM logs 
+   WHERE source = 'function_edge_logs' 
+     AND event_message NOT LIKE '% | 200 | %' 
+     AND event_message NOT LIKE '% | 201 | %' 
+   ORDER BY timestamp DESC LIMIT 30;
+   ```
+2. When decommissioning an Edge Function, ensure any legacy external callers receive a lightweight HTTP 200 status (`{ ok: true, status: "DECOMMISSIONED" }`) or unpublish the function completely from Supabase to prevent log pollution.
+
+---
+
 ## 2. Autonomous Agent Activity
 Verify that the AI agents are actively evaluating the market and producing expected heartbeat logs.
 
@@ -515,6 +534,23 @@ WHERE macro_bias = 'VOLATILITY_LOCKOUT'
   1. Determine the underlying macro direction bias (`"LONG"` or `"SHORT"`).
   2. Queue the symbol to `trade_watchlists` for precision entry drilldown.
   3. Mark the opportunity as `REJECTED` (or `PENDING_DRILLDOWN`) with `side` set to the normalized `"LONG"` or `"SHORT"` direction.
+
+---
+
+## ⚠️ 2G. Market Data Fallback — MetaAPI Broker Symbol Alias Resolution
+
+> [!WARNING]
+> **Incident (2026-09-01):** When `agent-day` or `agent-swing` fell back to MetaAPI market data for global indices and commodities (`NAS100`, `GER30`, `SPX500`), MetaAPI returned `HTTP 500: Symbol NAS100 does not exist` because the broker (Exness) names these symbols `USTEC`, `DE30`, `US500` on the server.
+
+### Standard Rule:
+In `packages/execution/index.ts` (`fetchPaperBars`), all fallback market data requests must iterate over candidate broker symbol aliases before failing:
+- `NAS100` -> `['NAS100', 'USTEC', 'USTECm', 'USTEC_m', 'NAS100m']`
+- `GER30` -> `['GER30', 'DE30', 'DE30m', 'DE30_m', 'GER30m', 'GER40']`
+- `SPX500` -> `['SPX500', 'US500', 'US500m', 'US500_m', 'SPX500m']`
+- `JP225` -> `['JP225', 'JP225m', 'NIKKEI', 'JPN225']`
+- `US30` -> `['US30', 'US30m', 'DJ30', 'WS30']`
+- `UKOIL` -> `['UKOIL', 'UKOILm', 'BRENT']`
+- `USOIL` -> `['USOIL', 'USOILm', 'WTI']`
 
 ---
 
@@ -900,6 +936,19 @@ await supabase.from("trade_opportunities").update({
 }).eq("id", signal.id);
 ```
 Never leave an unexecuted signal in `APPROVED`.
+
+---
+
+## ⚠️ 3J. VPS History Callback — External / Manual Deal Handling (HTTP 404 Resolution)
+
+> [!WARNING]
+> **Incident (2026-09-01):** When manual MT5 trades or external EA scalps closed on the broker, the VPS EA dispatched a deal closure callback to `GET /functions/v1/vps-history?ticket=...`. Because these deals originated outside `user_trades`, the query returned `HTTP 404 Not Found` ("Trade not found"), generating error log noise.
+
+### Standard Rule:
+In `/functions/v1/vps-history`, when a ticket is not found in `user_trades`:
+- Do **not** return HTTP 404.
+- Return HTTP 200 with `{ ok: true, status: "EXTERNAL_SKIPPED", message: "Trade ticket not mapped in user_trades" }`.
+- Total broker balance and equity changes from manual/external trades are automatically reconciled into `user_risk_settings` every 15 minutes by `exness-history-sync`.
 
 ---
 
