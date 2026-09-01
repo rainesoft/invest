@@ -57,10 +57,10 @@ export async function validateGlobalSignal(
     return { valid: false, reason: "Risk Check Failed: Could not query active signals" };
   }
 
-  // --- NEW GUARD: Check for OPEN trades in user_trades ---
+  // --- GUARD: Check for OPEN & PENDING trades in user_trades ---
   const { data: openTrades, error: openTradesError } = await supabase
     .from("user_trades")
-    .select("id, symbol, side")
+    .select("id, symbol, side, status, open_price, created_at, meta_api_order_id, opportunity_id")
     .in("status", ["OPEN", "VPS_PENDING", "VPS_PROCESSING"]);
     
   if (openTradesError) {
@@ -69,7 +69,37 @@ export async function validateGlobalSignal(
 
   const liveTradesForSymbol = openTrades ? openTrades.filter(t => t.symbol === symbol) : [];
   if (liveTradesForSymbol.length > 0) {
-    return { valid: false, reason: `REJECTED: Strict 1-trade-per-symbol isolation. A live trade for ${symbol} is already OPEN or PENDING execution.` };
+    // Check if the trade is truly a filled active position
+    const hasFilledPosition = liveTradesForSymbol.some(t => t.open_price !== null && t.open_price !== undefined);
+    
+    // Check age of pending trades
+    const now = Date.now();
+    const hasFreshPendingOrder = liveTradesForSymbol.some(t => {
+      const createdAt = t.created_at ? new Date(t.created_at).getTime() : 0;
+      const ageHours = (now - createdAt) / (1000 * 60 * 60);
+      return ageHours < 2; // Under 2 hours is considered active pending
+    });
+
+    if (hasFilledPosition) {
+      return { valid: false, reason: `REJECTED: Strict 1-trade-per-symbol isolation. A live filled position for ${symbol} is already OPEN.` };
+    } else if (hasFreshPendingOrder) {
+      return { valid: false, reason: `REJECTED: Strict 1-trade-per-symbol isolation. A fresh pending order for ${symbol} is awaiting fill (<2h old).` };
+    } else {
+      // Stale pending limit order (>2h unfilled). Auto-cancel/expire it and allow the new high-conviction signal!
+      console.log(`[Risk Manager] Found stale unfilled pending order for ${symbol} (>2h old). Superseding with fresh signal.`);
+      for (const staleTrade of liveTradesForSymbol) {
+        await supabase.from("user_trades").update({ 
+          status: "CLOSED", 
+          error_message: "Superseded by fresh AI signal" 
+        }).eq("id", staleTrade.id);
+        if (staleTrade.opportunity_id) {
+          await supabase.from("trade_opportunities").update({ 
+            status: "EXPIRED", 
+            closed_at: new Date().toISOString() 
+          }).eq("id", staleTrade.opportunity_id).in("status", ["ACTIVE", "APPROVED", "QUEUED"]);
+        }
+      }
+    }
   }
 
   // --- CONSECUTIVE STOP-LOSS COOLDOWN (Cascade & Knife-Catching Guard) ---
