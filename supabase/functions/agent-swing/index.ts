@@ -368,7 +368,10 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
     - If snapshot.has_unfilled_gap is true, prioritize the unfilled gap level (snapshot.unfilled_gap_target) as an institutional magnetic target.
 15. 20-BAR SWING HORIZON & ASYMMETRIC R:R (TARGET 2 >= 1:1.70):
     - Daily swing setups operate on a maximum horizon of 20 bars (20 trading days).
-    - Target 2 (TP2) is your primary benchmark for institutional R:R (minimum 1:1.70). If current price yields < 1.70 R:R, calculate an optimal pullback Limit Order at the nearest Fib level.`;
+    - Target 2 (TP2) is your primary benchmark for institutional R:R (minimum 1:1.70). If current price yields < 1.70 R:R, calculate an optimal pullback Limit Order at the nearest Fib level.
+16. SUPPORT / RESISTANCE (S/R) FLIP CONFLUENCE:
+    - If snapshot.sr_flip is present with type === 'BULLISH_SR_FLIP' and holding_confirmed === true: A prior resistance level has broken out and is now holding as institutional support. Anchor Buy Limit / Pullback entries to snapshot.sr_flip.flip_level (+10 confidence bonus).
+    - If snapshot.sr_flip is present with type === 'BEARISH_SR_FLIP' and holding_confirmed === true: A prior support level has broken down and is now acting as institutional resistance. Anchor Sell Limit / Pullback entries to snapshot.sr_flip.flip_level (+10 confidence bonus).`;
 
   console.log(`[Responses API] Submitting ${symbol} analysis...`);
   
@@ -1342,6 +1345,19 @@ serve(async (req) => {
             sendEvent({ type: 'progress', message: `[${symbol as string}] HTF Fib Alignment Bonus: +5 (daily/weekly Fib zones overlap within 0.3%)` });
           }
 
+          // === S/R FLIP CONFLUENCE BONUS (+10) ===
+          const srFlip = (snapshot as any).sr_flip;
+          if (srFlip && srFlip.type !== 'NONE' && srFlip.holding_confirmed) {
+            const isSRAligned = 
+              (evaluation.recommended_direction === 'LONG' && srFlip.type === 'BULLISH_SR_FLIP') ||
+              (evaluation.recommended_direction === 'SHORT' && srFlip.type === 'BEARISH_SR_FLIP');
+            if (isSRAligned) {
+              adjustedConfidence = Math.min(100, adjustedConfidence + 10);
+              confidenceAdjustments.push(`+10 S/R Flip Confluence (${srFlip.type} holding @ ${srFlip.flip_level?.toFixed(2)})`);
+              sendEvent({ type: 'progress', message: `[${symbol as string}] S/R Flip Bonus: +10 (${srFlip.narrative})` });
+            }
+          }
+
           // === MACRO SCOUT ALIGNMENT BONUS (+20) / PENALTY (-30) ===
           if (pendingNewsSide && evaluation.recommended_direction === pendingNewsSide) {
              adjustedConfidence = Math.min(100, adjustedConfidence + 20);
@@ -1399,10 +1415,9 @@ serve(async (req) => {
              evaluation.thought_process = `[Execution Desk Override] Attempted Mean Reversion in high-momentum environment (ADX > 25). Strategy blocked.`;
           }
 
-          // === GUARDRAIL #3: S-TIER OB/FVG STRUCTURAL CONFIRMATION ===
+          // === GUARDRAIL #3: S-TIER OB/FVG/SR-FLIP STRUCTURAL CONFIRMATION ===
           // Per ICT/SMC methodology, an S-Tier signal (confidence >= 90) MUST have at least one
-          // institutional footprint visible on the LTF snapshot: an Order Block, Fair Value Gap,
-          // or Liquidity Sweep. The AI prompt encourages this, but we enforce it as a hard rule.
+          // institutional footprint visible: an Order Block, Fair Value Gap, Liquidity Sweep, or confirmed S/R Flip.
           // Without a structural anchor, the signal is downgraded to a hard cap of A-Tier (89).
           if (adjustedConfidence >= 90 && evaluation.recommended_direction !== "NONE") {
             const isLong = evaluation.recommended_direction === "LONG";
@@ -1415,16 +1430,19 @@ serve(async (req) => {
             const hasSweep = isLong
               ? !!(snapshot as any).ltf_liquidity_sweep_bullish
               : !!(snapshot as any).ltf_liquidity_sweep_bearish;
+            const hasSRFlip = isLong
+              ? (snapshot as any).sr_flip?.type === 'BULLISH_SR_FLIP' && (snapshot as any).sr_flip?.holding_confirmed
+              : (snapshot as any).sr_flip?.type === 'BEARISH_SR_FLIP' && (snapshot as any).sr_flip?.holding_confirmed;
 
-            if (!hasOB && !hasFVG && !hasSweep) {
+            if (!hasOB && !hasFVG && !hasSweep && !hasSRFlip) {
               const prevTier = getTier(adjustedConfidence);
               adjustedConfidence = Math.min(adjustedConfidence, 89);
-              confidenceAdjustments.push(`[S-Tier Guard] No LTF OB/FVG/Sweep detected — capped at A-Tier (was ${prevTier})`); 
-              sendEvent({ type: 'progress', message: `[${symbol as string}] S-Tier OB/FVG Guard: No institutional footprint found on LTF. Signal downgraded from ${prevTier} → A-Tier. Add an LTF OB/FVG entry for full S-Tier.` });
-              console.log(`[S-Tier Guard] [Trace: ${traceId}] ${symbol as string}: Downgraded from S-Tier — no LTF OB, FVG or Liquidity Sweep present.`);
+              confidenceAdjustments.push(`[S-Tier Guard] No LTF OB/FVG/Sweep/SR-Flip detected — capped at A-Tier (was ${prevTier})`); 
+              sendEvent({ type: 'progress', message: `[${symbol as string}] S-Tier Structural Guard: No institutional footprint found. Signal downgraded from ${prevTier} → A-Tier. Add an LTF OB/FVG/SR-Flip entry for full S-Tier.` });
+              console.log(`[S-Tier Guard] [Trace: ${traceId}] ${symbol as string}: Downgraded from S-Tier — no LTF OB, FVG, Liquidity Sweep or S/R Flip present.`);
             } else {
-              const footprint = [hasOB ? 'OB' : '', hasFVG ? 'FVG' : '', hasSweep ? 'Sweep' : ''].filter(Boolean).join(' + ');
-              sendEvent({ type: 'progress', message: `[${symbol as string}] S-Tier OB/FVG Guard PASSED ✅ — Institutional footprint confirmed: ${footprint}` });
+              const footprint = [hasOB ? 'OB' : '', hasFVG ? 'FVG' : '', hasSweep ? 'Sweep' : '', hasSRFlip ? 'S/R Flip' : ''].filter(Boolean).join(' + ');
+              sendEvent({ type: 'progress', message: `[${symbol as string}] S-Tier Structural Guard PASSED ✅ — Institutional footprint confirmed: ${footprint}` });
             }
           }
 
