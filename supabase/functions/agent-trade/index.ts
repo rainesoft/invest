@@ -817,7 +817,31 @@ serve(async (req) => {
                       method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
                       body: JSON.stringify({ actionType: "ORDER_CANCEL", orderId: ord.id })
                     });
-                    await supabase.from("user_trades").update({ status: "CLOSED", error_message: "Order cancelled (orphaned stale limit order > 8h)" }).eq("meta_api_order_id", ord.id);
+                    const { data: cancelledTrades } = await supabase
+                       .from("user_trades")
+                       .update({ status: "CLOSED", error_message: "Order cancelled (orphaned stale limit order > 8h)", closed_at: new Date().toISOString() })
+                       .eq("meta_api_order_id", ord.id)
+                       .select("opportunity_id");
+
+                     if (cancelledTrades && cancelledTrades.length > 0) {
+                       for (const ct of cancelledTrades) {
+                         if (ct.opportunity_id) {
+                           const { data: remainingLegs } = await supabase
+                             .from("user_trades")
+                             .select("id")
+                             .eq("opportunity_id", ct.opportunity_id)
+                             .in("status", ["OPEN", "PENDING", "VPS_PENDING", "VPS_PROCESSING"]);
+
+                           if (!remainingLegs || remainingLegs.length === 0) {
+                             await supabase
+                               .from("trade_opportunities")
+                               .update({ status: "EXPIRED", r_multiple: 0, closed_at: new Date().toISOString() })
+                               .eq("id", ct.opportunity_id)
+                               .in("status", ["ACTIVE", "APPROVED", "QUEUED"]);
+                           }
+                         }
+                       }
+                     }
                  }
               }
            }
@@ -891,7 +915,7 @@ serve(async (req) => {
          }
       }));
       
-      for (const [orderId, trade] of orderMap) {
+for (const [orderId, trade] of orderMap) {
         try {
           // --- 1. BROKER SYNC CHECK & GARBAGE COLLECTION ---
           let position = null;
@@ -904,34 +928,54 @@ serve(async (req) => {
              try {
                  let isMissedFill = false;
                  
-                 // 1. Price-Action Based GC: Did the market hit TP1 without us?
+                 // 1. Price-Action / Runaway Based GC: Did the market hit TP1 or take off without us (>= 1.0x ATR)?
                  const currentPrice = orderData.currentPrice || ptiMap.get(trade.symbol)?.c;
                  const opp = trade.trade_opportunities;
                  const tp1 = opp?.take_profit_json?.tp1 || opp?.take_profit_json?.tp;
+                 const entryPrice = opp?.entry_plan_json?.price || opp?.entry_plan_json?.entry_price || opp?.entry_plan_json?.limit_price;
+                 const atr = atrCache.get(trade.symbol) || 0;
                  
+                 const isLong = trade.side === "LONG" || trade.side === "BUY";
                  if (currentPrice && tp1) {
-                    const isLong = trade.side === "LONG" || trade.side === "BUY";
                     if (isLong && currentPrice >= tp1) isMissedFill = true;
                     if (!isLong && currentPrice <= tp1) isMissedFill = true;
                  }
+                 if (currentPrice && entryPrice && atr > 0) {
+                    // If market moved >= 1.0x ATR in favorable direction without triggering our limit, cancel runaway order
+                    const favorableMove = isLong ? (currentPrice - entryPrice) : (entryPrice - currentPrice);
+                    if (favorableMove >= atr * 1.0) {
+                      isMissedFill = true;
+                    }
+                 }
 
-                 // 2. Time-Based GC: Is the limit order > 8h old?
+                 // 2. Timeframe-Aware Dynamic TTL:
+                 // 30m / Intraday: 3 hours (6 bars)
+                 // 1D / 4H / Swing: 12 hours
+                 const tf = opp?.timeframe?.toLowerCase() || "30m";
+                 const maxTtlHours = (tf === "1d" || tf === "4h" || opp?.source === "agent-swing") ? 12 : 3;
+
                  let ageHours = 0;
                  if (orderData.time) {
                    const orderTime = new Date(orderData.time).getTime();
                    ageHours = (Date.now() - orderTime) / (1000 * 60 * 60);
+                 } else if (trade.created_at) {
+                   const tradeTime = new Date(trade.created_at).getTime();
+                   ageHours = (Date.now() - tradeTime) / (1000 * 60 * 60);
                  }
                    
-                 if (ageHours >= 8 || isMissedFill) {
+                 if (ageHours >= maxTtlHours || isMissedFill) {
                    const reasonStr = isMissedFill 
-                      ? "Missed Fill: Market reached Take Profit target without triggering entry"
-                      : "Stale limit order > 8h";
+                      ? "Missed Fill: Market took off towards target without triggering entry"
+                      : `Stale pending order > ${maxTtlHours}h (${tf})`;
                    console.log(`[Position Manager] Garbage Collection: Cancelling pending order ${orderId} for ${trade.symbol}. Reason: ${reasonStr}`);
                    await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
                      method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
                      body: JSON.stringify({ actionType: "ORDER_CANCEL", orderId })
                    });
                    await supabase.from("user_trades").update({ status: "CLOSED", error_message: `Order cancelled (${reasonStr})` }).eq("meta_api_order_id", orderId);
+                   if (trade.opportunity_id) {
+                     await supabase.from("trade_opportunities").update({ status: "EXPIRED", closed_at: new Date().toISOString() }).eq("id", trade.opportunity_id).in("status", ["ACTIVE", "APPROVED", "QUEUED"]);
+                   }
                    isGCd = true;
                  }
              } catch (e) {
@@ -941,13 +985,17 @@ serve(async (req) => {
           } else {
              // NOT a pending order. Check position.
              
-             // If open_price is null and the order is > 8 hours old, it is a stale unfilled order that was missed or cancelled
+             // If open_price is null and the order is older than timeframe TTL, it is a stale unfilled order that was missed or cancelled
+             const opp = trade.trade_opportunities;
+             const tf = opp?.timeframe?.toLowerCase() || "30m";
+             const maxTtlHours = (tf === "1d" || tf === "4h" || opp?.source === "agent-swing") ? 12 : 3;
+
              const tradeAgeHours = trade.created_at ? (Date.now() - new Date(trade.created_at).getTime()) / (1000 * 60 * 60) : 0;
-             if (trade.open_price === null && tradeAgeHours >= 8) {
+             if (trade.open_price === null && tradeAgeHours >= maxTtlHours) {
                console.log(`[Position Manager] Garbage Collection: Stale unfilled trade ${trade.id} (${trade.symbol}, ${tradeAgeHours.toFixed(1)}h old, open_price=null). Marking CLOSED.`);
-               await supabase.from("user_trades").update({ status: "CLOSED", error_message: "Order cancelled (Stale unfilled pending order > 8h)" }).eq("id", trade.id);
+               await supabase.from("user_trades").update({ status: "CLOSED", error_message: `Order cancelled (Stale unfilled pending order > ${maxTtlHours}h)` }).eq("id", trade.id);
                if (trade.opportunity_id) {
-                 await supabase.from("trade_opportunities").update({ status: "EXPIRED", closed_at: new Date().toISOString() }).eq("id", trade.opportunity_id).in("status", ["ACTIVE", "APPROVED"]);
+                 await supabase.from("trade_opportunities").update({ status: "EXPIRED", closed_at: new Date().toISOString() }).eq("id", trade.opportunity_id).in("status", ["ACTIVE", "APPROVED", "QUEUED"]);
                }
                continue;
              }
@@ -2007,19 +2055,19 @@ serve(async (req) => {
             }
           }
 
-          // 2. If at minimum 0.01 lot the dollar risk STILL exceeds 3% (e.g. Gold 150pt stop), optimize limit entry or block
+          // 2. If at minimum 0.01 lot the dollar risk STILL exceeds 3% (e.g. Gold 150pt stop), fine-tune limit entry if within tight 1.15x buffer or block cleanly
           if (riskAmount > maxPermissibleRisk) {
             const isLimitOrder = aiOrderType.includes("LIMIT");
             const isHighConfidence = (signal.confidence || 0) >= 80;
             const maxPointsAtRisk = maxPermissibleRisk / (volumeStep * pointValueUsd);
             
-            if (isLimitOrder && isHighConfidence && maxPointsAtRisk > 0 && pointsAtRisk <= maxPointsAtRisk * 2.5) {
+            if (isLimitOrder && isHighConfidence && maxPointsAtRisk > 0 && pointsAtRisk <= maxPointsAtRisk * 1.15) {
               const isLong = signal.side === "LONG" || signal.side === "BUY";
               const optimizedEntryPrice = isLong
                 ? Number((stopLoss + maxPointsAtRisk).toFixed(5))
                 : Number((stopLoss - maxPointsAtRisk).toFixed(5));
 
-              console.log(`[Smart Order Sizing] Optimizing S-Tier ${signal.symbol} Limit Entry: Pulling entry closer to SL ($${entryPrice} → $${optimizedEntryPrice}) to satisfy 3% cap ($${maxPermissibleRisk.toFixed(2)}).`);
+              console.log(`[Smart Order Sizing] Fine-Tuning ${signal.symbol} Limit Entry: Refined entry closer to SL ($${entryPrice} → $${optimizedEntryPrice}) to satisfy 3% cap ($${maxPermissibleRisk.toFixed(2)}).`);
               
               scaledEntry.price = optimizedEntryPrice;
               defaultEntryPrice = optimizedEntryPrice;
@@ -2035,7 +2083,7 @@ serve(async (req) => {
                 }).eq("id", signal.id);
               }
             } else {
-              console.log(`[Risk Manager] Blocking User ${user.user_id}: ${signal.symbol} risk ($${riskAmount.toFixed(2)}) exceeds 3.0% maximum risk budget ($${maxPermissibleRisk.toFixed(2)}).`);
+              console.log(`[Risk Manager] Blocking User ${user.user_id}: ${signal.symbol} risk ($${riskAmount.toFixed(2)}) exceeds 3.0% maximum risk budget ($${maxPermissibleRisk.toFixed(2)}) at 0.01 lot minimum.`);
               blockedByRiskManager = true;
               continue;
             }
