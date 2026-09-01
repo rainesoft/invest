@@ -250,8 +250,7 @@ serve(async (req) => {
     const { data: activeOpps } = await supabase
       .from("trade_opportunities")
       .select("id, symbol, created_at")
-      .in("status", ["ACTIVE", "APPROVED"])
-      .lte("created_at", twentyFourHoursAgoIso);
+      .in("status", ["ACTIVE", "APPROVED"]);
 
     if (activeOpps && activeOpps.length > 0) {
       for (const opp of activeOpps) {
@@ -268,12 +267,14 @@ serve(async (req) => {
             .eq("opportunity_id", opp.id);
 
           if (!allLegs || allLegs.length === 0) {
-            await supabase.from("trade_opportunities").update({
-              status: "EXPIRED",
-              r_multiple: 0,
-              closed_at: now.toISOString()
-            }).eq("id", opp.id);
-            autoRemediations.push(`Expired completed opportunity ${opp.symbol} (${opp.id}) with 0 trades created`);
+            if (opp.created_at <= twentyFourHoursAgoIso) {
+              await supabase.from("trade_opportunities").update({
+                status: "EXPIRED",
+                r_multiple: 0,
+                closed_at: now.toISOString()
+              }).eq("id", opp.id);
+              autoRemediations.push(`Expired completed opportunity ${opp.symbol} (${opp.id}) with 0 trades created`);
+            }
           } else {
             const totalNetProfit = allLegs.reduce((acc: number, l: any) => acc + (Number(l.profit_usd) || 0), 0);
             const totalRisk = allLegs.reduce((acc: number, l: any) => acc + (Number(l.risk_amount) || 0), 0);
