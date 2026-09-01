@@ -1285,10 +1285,11 @@ serve(async (req) => {
                if (!rawEntry) rawEntry = snapshot.current_price;
                if (!rawSL) rawSL = evaluation.recommended_direction === "LONG" ? (snapshot.safe_long_stop_loss || null) : (snapshot.safe_short_stop_loss || null);
                
+               const shadowSide: "LONG" | "SHORT" = (evaluation.recommended_direction === "LONG" || evaluation.recommended_direction === "BUY" || evaluation.recommended_direction === "BULLISH") ? "LONG" : "SHORT";
                const { error: shadowErr } = await supabase.from("shadow_ledger").insert({
                   symbol: symbol as string,
                   timeframe: timeframe.toLowerCase(),
-                  side: evaluation.recommended_direction.trim().toUpperCase(),
+                  side: shadowSide,
                   entry_price: rawEntry,
                   take_profit: rawTP || null,
                   stop_loss: rawSL || null,
@@ -1427,6 +1428,42 @@ serve(async (req) => {
             }
           }
 
+          if (evaluation.recommended_direction === "REQUIRE_LTF_DRILLDOWN") {
+            const drilldownDirection: "LONG" | "SHORT" = (snapshot.trend_alignment?.startsWith("BULLISH") || snapshot.htf_trend === "BULLISH" || fib?.trend === "BULLISH") ? "LONG" : "SHORT";
+            const msg = `[REQUIRE_LTF_DRILLDOWN] Macro trend is ${drilldownDirection} but daily chart lacks precision R:R entry. Queued to Sniper watchlist for LTF drilldown.`;
+            console.log(`[Swing AI] [Trace: ${traceId}] ${symbol as string}: ${msg}`);
+            sendEvent({ type: "progress", message: `[${symbol as string}] ${msg}` });
+
+            // Queue to trade_watchlists for precision entry drilldown
+            await supabase.from("trade_watchlists").update({ status: 'CANCELLED' }).eq('symbol', symbol as string).eq('status', 'WATCHING');
+            await supabase.from("trade_watchlists").insert({
+              symbol: symbol as string,
+              direction: drilldownDirection,
+              timeframe: "5m",
+              status: "WATCHING",
+              expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+              notes: msg
+            });
+
+            const rejectedObj = {
+              symbol: symbol as string,
+              side: drilldownDirection,
+              timeframe: timeframe.toLowerCase(),
+              status: "REJECTED",
+              source: "agent-swing",
+              entry_plan_json: { price: evaluation.execution_parameters?.suggested_entry_price || snapshot.current_price, order_type: "Market", scaled_entries: null },
+              stop_plan_json: { stop: snapshot.safe_long_stop_loss || snapshot.current_price, initial: snapshot.safe_long_stop_loss || snapshot.current_price, atr: snapshot.atr_14 },
+              take_profit_json: { tp: evaluation.execution_parameters?.take_profit_2 || null },
+              ai_summary: `[SWING][LTF Drilldown] ${safeRationale}`,
+              ai_risks: msg,
+              confidence: adjustedConfidence,
+              trace_id: traceId,
+            };
+            await supabase.from("trade_opportunities").insert(rejectedObj);
+            rejections.push({ symbol: symbol as string, reason: msg, layer: "Execution Desk" });
+            return;
+          }
+
           if (evaluation.recommended_direction === "NONE" || adjustedConfidence < 75) {
             const reason = evaluation.recommended_direction === "NONE"
               ? "No valid swing setup identified: " + (evaluation.swing_rationale?.structural_confirmation || "Consolidation / CHOP without clear edge")
@@ -1438,7 +1475,8 @@ serve(async (req) => {
           }
 
           // === DYNAMIC SMC / LTF PRECISION ENTRY & STOP LOSS ANCHORING ===
-          const isLong = evaluation.recommended_direction === "LONG";
+          const dbSide: "LONG" | "SHORT" = (evaluation.recommended_direction === "LONG" || evaluation.recommended_direction === "BUY" || evaluation.recommended_direction === "BULLISH") ? "LONG" : "SHORT";
+          const isLong = dbSide === "LONG";
           const ltfOb = isLong ? (snapshot as any).ltf_bullish_ob_nearest : (snapshot as any).ltf_bearish_ob_nearest;
           const ltfFvg = isLong ? (snapshot as any).ltf_bullish_fvg_nearest : (snapshot as any).ltf_bearish_fvg_nearest;
           const dailyAtr = (snapshot as any).atr_14 || 10;
@@ -1633,7 +1671,7 @@ serve(async (req) => {
           }
 
           const maxAllowableStopDistance = maxPermissibleCapitalRisk / (minLot * pointValueUsd);
-          const maxPermissibleEntryOffset = Math.max((dailyAtr || 1) * 1.0, currentPrice * 0.015);
+          const maxPermissibleEntryOffset = Math.min((dailyAtr || 1) * 0.25, currentPrice * 0.003);
 
           if (maxAllowableStopDistance > 0 && Math.abs(entry - sl) > maxAllowableStopDistance) {
             const rawRisk = Math.abs(entry - sl) * minLot * pointValueUsd;
@@ -1641,9 +1679,9 @@ serve(async (req) => {
               ? Number((sl + maxAllowableStopDistance).toFixed(5))
               : Number((sl - maxAllowableStopDistance).toFixed(5));
 
-            // Check if anchoring the entry moves it too far (>1.0x ATR or >1.5%) from current market price
+            // Check if anchoring the entry moves it too far (>0.25x ATR or >0.3%) from current market price
             if (Math.abs(anchoredEntry - currentPrice) > maxPermissibleEntryOffset) {
-              const msg = `Risk ($${rawRisk.toFixed(2)}) exceeds $${maxPermissibleCapitalRisk.toFixed(2)} cap at 0.01 lot minimum and requires entry offset (${Math.abs(anchoredEntry - currentPrice).toFixed(4)}) exceeding 1.0x ATR buffer (${maxPermissibleEntryOffset.toFixed(4)}). Setup rejected to preserve capital.`;
+              const msg = `Risk ($${rawRisk.toFixed(2)}) exceeds $${maxPermissibleCapitalRisk.toFixed(2)} cap at 0.01 lot minimum and requires entry offset (${Math.abs(anchoredEntry - currentPrice).toFixed(4)}) exceeding tight 0.25x ATR buffer (${maxPermissibleEntryOffset.toFixed(4)}). Setup rejected to preserve capital.`;
               console.log(`[${symbol as string}] [Origination Risk Governor] REJECTED: ${msg}`);
               sendEvent({ type: "progress", message: `[${symbol as string}] REJECTED: ${msg}` });
               rejections.push({ symbol: symbol as string, reason: msg, layer: "Risk Governor" });
@@ -1654,7 +1692,7 @@ serve(async (req) => {
             entry = anchoredEntry;
             order_type = isLong ? "BUY LIMIT" : "SELL LIMIT";
             evaluation.execution_parameters.suggested_entry_price = entry;
-            safeRationale += ` [Origination Risk Governor: Entry anchored to Limit @ $${entry} within ATR buffer so 0.01 lot dollar risk stays strictly within 3% risk cap ($${maxPermissibleCapitalRisk.toFixed(2)})]`;
+            safeRationale += ` [Origination Risk Governor: Entry anchored to Limit @ $${entry} within tight ATR buffer so 0.01 lot dollar risk stays strictly within 3% risk cap ($${maxPermissibleCapitalRisk.toFixed(2)})]`;
           }
 
           // === TAKE PROFIT DIRECTION & VOLATILITY-NORMALIZED R-MULTIPLE SANITIZATION ===
@@ -1685,7 +1723,7 @@ serve(async (req) => {
             sendEvent({ type: "progress", message: `[${symbol as string}] REJECTED: ${msg}` });
             const rejectedObj = {
               symbol: symbol as string,
-              side: evaluation.recommended_direction.trim().toUpperCase(),
+              side: dbSide,
               timeframe: timeframe.toLowerCase(),
               status: "REJECTED",
               source: "agent-swing",
@@ -1729,7 +1767,7 @@ serve(async (req) => {
               sendEvent({ type: "progress", message: `[${symbol as string}] REJECTED: ${msg}` });
               const rejectedObj = {
                 symbol: symbol as string,
-                side: evaluation.recommended_direction.trim().toUpperCase(),
+                side: dbSide,
                 timeframe: timeframe.toLowerCase(),
                 status: "REJECTED",
                 source: "agent-swing",
@@ -1763,7 +1801,7 @@ serve(async (req) => {
 
           const approvedObj = {
               symbol: symbol as string,
-              side: evaluation.recommended_direction.trim().toUpperCase(),
+              side: dbSide,
               timeframe: timeframe.toLowerCase(),
               status: isManual ? "PENDING_APPROVAL" : "APPROVED",
               source: "agent-swing",
