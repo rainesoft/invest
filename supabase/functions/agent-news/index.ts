@@ -631,33 +631,35 @@ CRITICAL RULES:
             
             const side = finalParsed.sentiment === "BULLISH" ? "LONG" : "SHORT";
             
-            // Insert cleanly into trade_opportunities as PUBLISHED
-            const { data: opp, error: oppErr } = await supabase.from("trade_opportunities").insert({
+            // Save macro sentiment context to market_context table (expires in 4 hours)
+            const macroBias = finalParsed.sentiment === "BULLISH" ? "BULLISH" : "BEARISH";
+            const { error: ctxErr } = await supabase.from("market_context").insert({
               symbol: finalParsed.symbol,
-              side,
-              status: "PUBLISHED",
+              agent_persona: "MACRO_SCOUT",
               timeframe: "M1",
-              ai_summary: headlineIdentifier,
-              risk_summary: `Sentiment evaluation: ${finalParsed.sentiment} (${finalParsed.confidence}%). Context: ${verifiedContext}`,
-              created_at: new Date().toISOString(),
+              macro_bias: macroBias,
+              narrative: `Sentiment: ${headlineIdentifier} | ${verifiedContext}`,
+              expires_at: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
               trace_id: traceId
-            }).select("id").single();
+            });
 
-            if (oppErr) {
-              console.error(`[Macro Scout] Opportunity Insert Error:`, oppErr);
-              continue;
+            if (ctxErr) {
+              console.error(`[Macro Scout] Market Context Insert Error:`, ctxErr);
             }
+
+            // Hive Mind: Instantly align the HFT Director with the news sentiment
+            await pingHFTDirector(supabase, finalParsed.symbol, side);
 
             // Wake up agent-swing immediately for Event-Driven Technical Confluence
             await pingAgentSwing(finalParsed.symbol);
 
-            console.log(`[Macro Scout] [Trace: ${traceId}] Signal queued for technical confluence:`, side, finalParsed.symbol);
+            console.log(`[Macro Scout] [Trace: ${traceId}] Sentiment context recorded & agent-swing alerted for:`, side, finalParsed.symbol);
             await notify(
-              `📰 <b>SENTIMENT SIGNAL DETECTED</b>\n` +
+              `📰 <b>SENTIMENT EVENT DETECTED</b>\n` +
               `<b>${title}</b>\n` +
               `Sentiment: ${finalParsed.sentiment} (${finalParsed.confidence}%)\n` +
               `Context: ${verifiedContext}\n\n` +
-              `Signal queued for <b>${side} ${finalParsed.symbol}</b> pending technical confluence.`
+              `Dispatched <b>agent-swing</b> to search for technical alignment on <b>${side} ${finalParsed.symbol}</b>.`
             );
             results.push({ rule: "SENTIMENT", action: side, symbol: finalParsed.symbol });
           }
