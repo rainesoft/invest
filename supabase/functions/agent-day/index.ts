@@ -166,6 +166,9 @@ CRITICAL RULES:
 16. INTERMARKET DOLLAR & COMMODITY DIRECTIVE (GOLD & METALS MACRO MANDATE):
     - Gold (XAUUSD) and Silver (XAGUSD) are strongly inversely correlated with US 10-Year Real Yields and the US Dollar Index (DXY).
     - If snapshot.agent_context, macro headlines, or HTF trend reflect a strong USD or hawkish Fed speeches, LONG setups on XAUUSD/XAGUSD are STRICTLY FORBIDDEN. You MUST evaluate Resistance Pullback SELL LIMITS (at bearish_fvg_50pct / 50 EMA / VWAP Upper) or stay flat.
+17. SUPPORT / RESISTANCE (S/R) FLIP CONFLUENCE:
+    - If snapshot.sr_flip is present with type === 'BULLISH_SR_FLIP' and holding_confirmed === true: A prior resistance level has broken out and is now holding as institutional support. Anchor Buy Limit / Pullback entries to snapshot.sr_flip.flip_level (+10 confidence bonus).
+    - If snapshot.sr_flip is present with type === 'BEARISH_SR_FLIP' and holding_confirmed === true: A prior support level has broken down and is now acting as institutional resistance. Anchor Sell Limit / Pullback entries to snapshot.sr_flip.flip_level (+10 confidence bonus).
 
 Historical Memory:
 ${historicalMemory || "None"}
@@ -1107,7 +1110,21 @@ serve(async (req) => {
             // and corrupts the mathematical R:R calculation, causing valid asymmetric setups to be rejected.
             
             let raw_confidence = evaluation.confidence_score || 50;
-            const confidence_score = raw_confidence <= 1.0 ? raw_confidence * 100 : raw_confidence;
+            let confidence_score = raw_confidence <= 1.0 ? raw_confidence * 100 : raw_confidence;
+
+            // === S/R FLIP CONFLUENCE BONUS (+10) ===
+            const srFlip = (snapshot as any).sr_flip;
+            if (is_valid && srFlip && srFlip.type !== 'NONE' && srFlip.holding_confirmed) {
+              const isSRAligned = 
+                (evaluation.recommended_direction === 'LONG' && srFlip.type === 'BULLISH_SR_FLIP') ||
+                (evaluation.recommended_direction === 'SHORT' && srFlip.type === 'BEARISH_SR_FLIP');
+              if (isSRAligned) {
+                confidence_score = Math.min(100, confidence_score + 10);
+                console.log(`[Layer B] [${symbol}] S/R Flip Confluence Bonus: +10 (${srFlip.narrative})`);
+                sendEvent({ type: 'progress', message: `[${symbol}] S/R Flip Bonus: +10 (${srFlip.type} holding @ ${srFlip.flip_level})` });
+              }
+            }
+
             let tier = "C-Tier";
             if (confidence_score >= 90) tier = "S-Tier";
             else if (confidence_score >= 80) tier = "A-Tier";
