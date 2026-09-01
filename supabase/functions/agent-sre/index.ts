@@ -140,12 +140,7 @@ serve(async (req) => {
     // ─────────────────────────────────────────────────────────────
     // PROBE 2: Database Webhook & HTTP Response Errors
     // ─────────────────────────────────────────────────────────────
-    const { data: httpErrors, error: httpFetchError } = await supabase
-      .from("net._http_response")
-      .select("id, status_code, error_msg, created")
-      .or(`status_code.gte.400,error_msg.not.is.null`)
-      .gte("created", oneHourAgoIso)
-      .limit(10);
+    const { data: httpErrors, error: httpFetchError } = await supabase.rpc("check_http_response_errors");
 
     if (!httpFetchError && httpErrors && httpErrors.length > 0) {
       issues.push(`⚠️ <b>HTTP / Webhook Errors (${httpErrors.length} in last hour):</b> Status ${httpErrors[0].status_code || "ERR"}: ${httpErrors[0].error_msg || "HTTP Error"}`);
@@ -183,7 +178,7 @@ serve(async (req) => {
     // 4B. Orphaned APPROVED Signals (Missing user_trades > 5 mins)
     const { data: approvedOpps } = await supabase
       .from("trade_opportunities")
-      .select("id, symbol, side, created_at")
+      .select("id, symbol, side, created_at, ai_risks, ai_summary")
       .eq("status", "APPROVED")
       .lte("created_at", fiveMinsAgoIso);
 
@@ -191,7 +186,18 @@ serve(async (req) => {
       for (const opp of approvedOpps) {
         const { data: legs } = await supabase.from("user_trades").select("id").eq("opportunity_id", opp.id);
         if (!legs || legs.length === 0) {
-          issues.push(`⚠️ <b>Orphaned APPROVED Signal:</b> ${opp.symbol} (${opp.id}) has no user_trades legs.`);
+          // If execution was skipped or blocked by risk manager, auto-reconcile to REJECTED
+          const isSkipped = (opp.ai_risks && opp.ai_risks.includes("Execution Skipped")) ||
+                            (opp.ai_summary && opp.ai_summary.includes("[Execution Desk] Execution Skipped"));
+          if (isSkipped) {
+            await supabase.from("trade_opportunities").update({
+              status: "REJECTED",
+              closed_at: now.toISOString(),
+            }).eq("id", opp.id);
+            autoRemediations.push(`Reconciled orphaned APPROVED opportunity ${opp.symbol} (${opp.id}) to REJECTED (Execution Skipped)`);
+          } else {
+            issues.push(`⚠️ <b>Orphaned APPROVED Signal:</b> ${opp.symbol} (${opp.id}) has no user_trades legs.`);
+          }
         }
       }
     }

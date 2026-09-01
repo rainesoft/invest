@@ -124,3 +124,21 @@ test('weekend defense filters non-crypto trades and protects capital', () => {
   assert.deepEqual(closedSymbols, ['EURUSD', 'US30']);
   assert.deepEqual(beSymbols, ['XAUUSD']);
 });
+
+test('telegram broadcast filters out B-Tier, C-Tier, and unranked signals', () => {
+  const filterSignal = (aiSummary) => {
+    const tierMatch = (aiSummary || "").match(/(S|A|B|C)-Tier/);
+    const rawTier = tierMatch ? `${tierMatch[1]}-Tier` : null;
+    if (rawTier === "B-Tier" || rawTier === "C-Tier" || !rawTier) {
+      return { broadcast: false, tier: rawTier };
+    }
+    return { broadcast: true, tier: rawTier };
+  };
+
+  assert.deepEqual(filterSignal("[S-Tier] Strong bullish confluence"), { broadcast: true, tier: "S-Tier" });
+  assert.deepEqual(filterSignal("[A-Tier] Clear breakout setup"), { broadcast: true, tier: "A-Tier" });
+  assert.deepEqual(filterSignal("[B-Tier] Moderate setup"), { broadcast: false, tier: "B-Tier" });
+  assert.deepEqual(filterSignal("[C-Tier] Weak signal"), { broadcast: false, tier: "C-Tier" });
+  assert.deepEqual(filterSignal("No tier specified"), { broadcast: false, tier: null });
+});
+

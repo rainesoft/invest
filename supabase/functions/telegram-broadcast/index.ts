@@ -52,13 +52,13 @@ serve(async (req) => {
         return new Response("Ignored REJECTED signal", { status: 200 });
       }
 
-      // Extract tier from ai_summary early to filter out noise
+      // Extract tier from ai_summary early to filter out noise (only S-Tier and A-Tier are broadcasted)
       const tierMatch = (record.ai_summary || "").match(/(S|A|B|C)-Tier/);
       const rawTier = tierMatch ? `${tierMatch[1]}-Tier` : null;
 
-      if (rawTier === "C-Tier") {
-        console.log("Skipping C-Tier broadcast to prevent alert fatigue.");
-        return new Response("Ignored C-Tier signal", { status: 200 });
+      if (rawTier === "B-Tier" || rawTier === "C-Tier" || !rawTier) {
+        console.log(`Skipping ${rawTier || "unranked"} broadcast to Telegram (minimum A-Tier required).`);
+        return new Response(`Ignored ${rawTier || "unranked"} signal`, { status: 200 });
       }
 
       let subscribedUsers: { chatId: string }[] = [];
@@ -101,15 +101,13 @@ serve(async (req) => {
 
       // R:R formatting
       const rrMatch   = rawSummary.match(/1:([0-9.]+)/);
-      const tier      = rawTier ? escapeMd(rawTier) : "—";
+      const tier      = escapeMd(rawTier);
       const rr        = rrMatch   ? escapeMd(`1:${rrMatch[1]}`) : "—";
 
       const sideEmoji = record.side === "LONG" ? "🟢" : "🔴";
-      const headerEmoji = (rawTier === "S-Tier" || rawTier === "A-Tier") ? "🚀" : "⚠️";
-      const headerTitle = (rawTier === "S-Tier" || rawTier === "A-Tier") ? "*AUTOPILOT PAMM EXECUTED*" : "*ACTIONABLE SIGNAL DETECTED*";
-      const subHeader = (rawTier === "S-Tier" || rawTier === "A-Tier") 
-        ? "✅ _Trade executed on Master Account\\. View Ledger\\._"
-        : "⚠️ _B\\-Tier Setup\\. Auto\\-execution skipped\\. Manual execution recommended\\._";
+      const headerEmoji = "🚀";
+      const headerTitle = "*AUTOPILOT PAMM EXECUTED*";
+      const subHeader = "✅ _Trade executed on Master Account\\. View Ledger\\._";
 
       const message = `
 ${headerEmoji} ${headerTitle} ${headerEmoji}
