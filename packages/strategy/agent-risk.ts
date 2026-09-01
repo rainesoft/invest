@@ -7,14 +7,32 @@ export type RiskValidationResult = {
 };
 
 const CORRELATION_GROUPS: Record<string, { group: string, weight: number }> = {
+  // US Dollar Basket
   'EURUSD': { group: 'USD', weight: -1 },
   'GBPUSD': { group: 'USD', weight: -1 },
+  'AUDUSD': { group: 'USD', weight: -1 },
+  'NZDUSD': { group: 'USD', weight: -1 },
   'XAUUSD': { group: 'USD', weight: -1 },
   'XAGUSD': { group: 'USD', weight: -1 },
   'BTCUSD': { group: 'USD', weight: -1 },
   'USDJPY': { group: 'USD', weight: 1 },
+  'USDCHF': { group: 'USD', weight: 1 },
+  'USDCAD': { group: 'USD', weight: 1 },
+
+  // Global Equity Indices Basket
   'US30':   { group: 'EQUITY_INDICES', weight: 1 },
   'NAS100': { group: 'EQUITY_INDICES', weight: 1 },
+  'SPX500': { group: 'EQUITY_INDICES', weight: 1 },
+  'GER30':  { group: 'EQUITY_INDICES', weight: 1 },
+
+  // Energy Basket
+  'UKOIL':  { group: 'ENERGY', weight: 1 },
+  'USOIL':  { group: 'ENERGY', weight: 1 },
+
+  // JPY Crosses Basket
+  'GBPJPY': { group: 'JPY_CROSSES', weight: 1 },
+  'EURJPY': { group: 'JPY_CROSSES', weight: 1 },
+  'CADJPY': { group: 'JPY_CROSSES', weight: 1 },
 };
 
 // Validates if the central AI is allowed to generate a new signal for this asset
@@ -42,15 +60,15 @@ export async function validateGlobalSignal(
   // --- NEW GUARD: Check for OPEN trades in user_trades ---
   const { data: openTrades, error: openTradesError } = await supabase
     .from("user_trades")
-    .select("id, symbol")
-    .eq("symbol", symbol)
+    .select("id, symbol, side")
     .in("status", ["OPEN", "VPS_PENDING", "VPS_PROCESSING"]);
     
   if (openTradesError) {
     return { valid: false, reason: "Risk Check Failed: Could not query open trades" };
   }
 
-  if (openTrades && openTrades.length > 0) {
+  const liveTradesForSymbol = openTrades ? openTrades.filter(t => t.symbol === symbol) : [];
+  if (liveTradesForSymbol.length > 0) {
     return { valid: false, reason: `REJECTED: Strict 1-trade-per-symbol isolation. A live trade for ${symbol} is already OPEN or PENDING execution.` };
   }
 
@@ -74,7 +92,6 @@ export async function validateGlobalSignal(
   // --------------------------------------------------------
 
   // Guardrail: Asset Isolation (Don't spam multiple signals for the same asset)
-  // Smart Pyramiding Upgrade: Only block if we have an active trade that is NOT significantly in profit.
   if (activeSignals) {
     const activeForSymbol = activeSignals.filter(t => t.symbol === symbol);
     if (activeForSymbol.length > 0) {
@@ -91,7 +108,6 @@ export async function validateGlobalSignal(
           // If the current price is at least 0.50 ATR away from the first entry, allow scaling in
           if (priceDiff > atr * 0.50) {
             console.log(`[Risk Manager] Pyramiding approved for ${symbol}. Current price is > 0.50 ATR from original entry.`);
-            // DO NOT return valid yet, we must check correlation limits below
           } else {
             return { valid: false, reason: `REJECTED: Asset isolation enforced. Active trade for ${symbol} is not far enough in profit (needs >0.50 ATR) to safely scale in.` };
           }
@@ -100,14 +116,16 @@ export async function validateGlobalSignal(
         return { valid: false, reason: `REJECTED: Asset isolation enforced. Signal already active for ${symbol}` };
       }
     }
+  }
 
-    // Guardrail: Correlation Limits
-    const symbolGroup = CORRELATION_GROUPS[symbol];
-    if (symbolGroup && currentSnapshot) {
-      let existingExposure = 0;
-      
+  // Guardrail: Comprehensive Portfolio Correlation Basket Limits
+  const symbolGroup = CORRELATION_GROUPS[symbol];
+  if (symbolGroup && currentSnapshot) {
+    let existingExposure = 0;
+    
+    // Check signals in trade_opportunities
+    if (activeSignals) {
       for (const t of activeSignals) {
-        // We only care about other assets in the same correlation group
         if (t.symbol !== symbol) {
           const activeGroup = CORRELATION_GROUPS[t.symbol];
           if (activeGroup && activeGroup.group === symbolGroup.group) {
@@ -116,20 +134,33 @@ export async function validateGlobalSignal(
           }
         }
       }
+    }
 
-      // Estimate the assumed direction of the new signal based on trend alignment
-      let assumedSide = 'NONE';
-      if (currentSnapshot.trend_alignment.startsWith('BULLISH')) assumedSide = 'LONG';
-      else if (currentSnapshot.trend_alignment.startsWith('BEARISH')) assumedSide = 'SHORT';
-
-      if (assumedSide !== 'NONE') {
-        const assumedWeight = (assumedSide === 'LONG' ? 1 : -1) * symbolGroup.weight;
-        const projectedExposure = existingExposure + assumedWeight;
-
-        // If the absolute net exposure exceeds 1, we are stacking correlated trades. Reject.
-        if (Math.abs(projectedExposure) > 1) {
-          return { valid: false, reason: `REJECTED: Correlation limit exceeded. Cannot stack multiple correlated ${symbolGroup.group} trades.` };
+    // Check live open positions in user_trades
+    if (openTrades) {
+      for (const ut of openTrades) {
+        if (ut.symbol !== symbol) {
+          const activeGroup = CORRELATION_GROUPS[ut.symbol];
+          if (activeGroup && activeGroup.group === symbolGroup.group) {
+            const activeWeight = (ut.side === 'LONG' || ut.side === 'BUY' ? 1 : -1) * activeGroup.weight;
+            existingExposure += activeWeight;
+          }
         }
+      }
+    }
+
+    // Estimate the assumed direction of the new signal based on trend alignment
+    let assumedSide = 'NONE';
+    if (currentSnapshot.trend_alignment.startsWith('BULLISH')) assumedSide = 'LONG';
+    else if (currentSnapshot.trend_alignment.startsWith('BEARISH')) assumedSide = 'SHORT';
+
+    if (assumedSide !== 'NONE') {
+      const assumedWeight = (assumedSide === 'LONG' ? 1 : -1) * symbolGroup.weight;
+      const projectedExposure = existingExposure + assumedWeight;
+
+      // If the absolute net exposure exceeds 1, reject to prevent stacked correlation
+      if (Math.abs(projectedExposure) > 1) {
+        return { valid: false, reason: `REJECTED: Portfolio correlation limit exceeded. Cannot stack multiple correlated ${symbolGroup.group} trades (Current Net Exposure: ${existingExposure}, Projected: ${projectedExposure}).` };
       }
     }
   }
