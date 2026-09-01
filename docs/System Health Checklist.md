@@ -393,6 +393,30 @@ FROM (
 
 ---
 
+## ⚠️ 1J. PostgREST Foreign Key Relationship Constraint Diagnostic (HTTP 400 Bad Request)
+
+> [!WARNING]
+> **Incident (2026-09-01):** `agent-trade` queries attempting embedded table joins (e.g., `.from("user_trades").select("..., user_risk_settings!inner(...)")`) failed with PostgREST `HTTP 400 Bad Request` ("Could not find a relationship between 'user_trades' and 'user_risk_settings' in the schema cache"). Because `user_trades` and `user_risk_settings` both reference `auth.users(id)` without a direct foreign key constraint between them, PostgREST cannot perform embedded joins.
+
+### Standard Rule:
+In Edge Functions, never use PostgREST embedded table joins (`parent(child(...))`) unless an explicit PostgreSQL `FOREIGN KEY` constraint exists between those two tables. If no direct foreign key exists, perform two sequential queries:
+1. Query the primary table (`user_trades`).
+2. Extract user IDs and query the secondary table (`user_risk_settings`) using `.in("user_id", userIds)`.
+3. Map records in-memory via a JavaScript `Map`.
+
+---
+
+## ⚠️ 1K. Internal Schema Boundary & RPC Diagnostic (HTTP 404 on net._http_response)
+
+> [!WARNING]
+> **Incident (2026-09-01):** `agent-sre` attempted to query `supabase.from("net._http_response")` via the REST API. PostgREST only exposes the `public` schema by default, causing all queries targeting `net._http_response` to return `HTTP 404 Not Found`.
+
+### Standard Rule:
+Tables in non-public schemas (`net`, `cron`, `vault`) cannot be queried directly through PostgREST table endpoints (`/rest/v1/...`). 
+- **Fix:** Create a `SECURITY DEFINER` function in the `public` schema (such as `public.check_http_response_errors()` or `public.check_cron_failures()`) and invoke it via `supabase.rpc("check_http_response_errors")`.
+
+---
+
 ## 2. Autonomous Agent Activity
 Verify that the AI agents are actively evaluating the market and producing expected heartbeat logs.
 
@@ -465,6 +489,18 @@ WHERE macro_bias = 'VOLATILITY_LOCKOUT'
 - [ ] **Multi-Timeframe Confluence Filter:** Confirm that `agent-swing` is actively pulling and analyzing 4H and Weekly macro trends to validate 30m entries before approving any S-Tier signals.
 - [ ] **Structural Guardrails (OB/FVG/Sweeps):** Review recent S-Tier `trade_opportunities` to ensure that Fibonacci executions are explicitly paired with Order Blocks, Fair Value Gaps, or Liquidity Sweeps.
 - [ ] **Adaptive ATR Compression:** Monitor `market_context` to verify that ATR expansion and contraction bounds are actively adjusting based on whether the market is assessed as being in `CHOP` or `TRENDING` conditions.
+
+---
+
+## ⚠️ 2E. Schema Standard — trade_opportunities Column Types (model_id UUID vs source Text)
+
+> [!WARNING]
+> **Incident (2026-09-01):** `agent-day` queried `.eq("trade_opportunities.model_id", "agent-day")` in Phase 1B Runner Handoff, resulting in PostgreSQL error `22P02 invalid input syntax for type uuid: "agent-day"` (HTTP 400 Bad Request) because `model_id` is a UUID column.
+
+### Standard Rule:
+- `model_id` (UUID): Used strictly for referencing registered ML model version UUIDs.
+- `source` (TEXT): Stores the string agent identifier generating the signal (`'agent-day'`, `'agent-swing'`, `'agent-news'`).
+- Always query `.eq("trade_opportunities.source", "agent-day")` when filtering by agent name.
 
 ---
 
@@ -834,6 +870,25 @@ The `/functions/v1/vps-history` Edge Function endpoint receives deal closure not
 
 ---
 
+## ⚠️ 3I. PAMM Router — Volume Allocation Skip & Orphaned APPROVED Guard
+
+> [!CAUTION]
+> **Incident (2026-09-01):** When all user allocations evaluated to `0.00` lots (due to Circuit Breakers, Daily Drawdown Limits, or 10% Blowout Protection caps), `agent-trade` logged a skip note in `ai_summary` and returned HTTP 200, but failed to update `status: 'REJECTED'`. This left opportunities lingering in `status = 'APPROVED'` indefinitely with 0 `user_trades` legs.
+
+### Standard Rule:
+Any early exit in `agent-trade` that blocks trade execution must explicitly set:
+```typescript
+await supabase.from("trade_opportunities").update({
+  status: "REJECTED",
+  ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + rejectReason,
+  ai_risks: rejectReason,
+  closed_at: new Date().toISOString(),
+}).eq("id", signal.id);
+```
+Never leave an unexecuted signal in `APPROVED`.
+
+---
+
 ## 4. External Integrations
 Verify that external data pipelines and notification systems are alive.
 
@@ -847,6 +902,22 @@ The `telegram-broadcast` edge function is triggered automatically via a Postgres
 - [ ] **Verify Webhook Secret Sync:** If the `telegram-broadcast` logs show a fast `401 Unauthorized` error when the database attempts to trigger it, the `WEBHOOK_SECRET` environment variable in the Edge Functions is out of sync with the database vault. Run `supabase secrets set WEBHOOK_SECRET=<decrypted_secret> --project-ref ktezlusdkqlfdwqrldtn` (fetching the secret from `vault.decrypted_secrets WHERE name = 'webhook_secret'`) to restore the pipeline.
 - [ ] **Verify Bot Token:** Ensure `TELEGRAM_BOT_TOKEN` is correctly set in the Edge Function secrets. A missing or invalid token will result in HTTP 401 errors from the Telegram API within the edge function logs.
 - [ ] **Test Delivery:** To safely verify delivery without broadcasting a fake signal to all users, you can manually invoke the edge function via the Supabase CLI or HTTP POST using a mock payload that mimics a `REJECTED` user trade for a specific test user's `user_id`.
+
+---
+
+## ⚠️ 4B. Edge Function Inter-Agent Call URL Standard (SUPABASE_URL vs WEBHOOK_URL)
+
+> [!WARNING]
+> **Incident (2026-09-01):** `agent-swing` failed during order revalidation with `TypeError: Invalid URL: 'undefined/agent-trade'` because it referenced `Deno.env.get("WEBHOOK_URL")` which is not set in Supabase Edge Runtime.
+
+### Standard Rule:
+When Edge Functions call other sibling Edge Functions directly via HTTP POST:
+- Construct the base URL using:
+  ```typescript
+  const functionsUrl = (Deno.env.get("SUPABASE_URL") || "").replace(/\/$/, "") + "/functions/v1";
+  await fetch(`${functionsUrl}/agent-trade`, { ... });
+  ```
+- Always pass authorization headers (`x-webhook-secret` or `x-cron-secret`) fetched from `Deno.env.get("WEBHOOK_SECRET") || Deno.env.get("CRON_SECRET")`.
 
 
 ## 5. API Quotas & External Dependency Balances
