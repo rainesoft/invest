@@ -612,6 +612,18 @@ CRITICAL RULES:
             
             const side = finalParsed.sentiment === "BULLISH" ? "LONG" : "SHORT";
             
+            // Check for duplicate sentiment alerts on this symbol in the last 15 minutes to prevent spam
+            const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+            const { data: recentContext } = await supabase
+              .from("market_context")
+              .select("id")
+              .eq("symbol", finalParsed.symbol)
+              .eq("agent_persona", "MACRO_SCOUT")
+              .gte("created_at", fifteenMinsAgo)
+              .limit(1);
+
+            const isDuplicate = recentContext && recentContext.length > 0;
+
             // Save macro sentiment context to market_context table (expires in 4 hours)
             const macroBias = finalParsed.sentiment === "BULLISH" ? "BULLISH" : "BEARISH";
             const { error: ctxErr } = await supabase.from("market_context").insert({
@@ -635,13 +647,21 @@ CRITICAL RULES:
             await pingAgentSwing(finalParsed.symbol);
 
             console.log(`[Macro Scout] [Trace: ${traceId}] Sentiment context recorded & agent-swing alerted for:`, side, finalParsed.symbol);
-            await notify(
-              `📰 <b>SENTIMENT EVENT DETECTED</b>\n` +
-              `<b>${title}</b>\n` +
-              `Sentiment: ${finalParsed.sentiment} (${finalParsed.confidence}%)\n` +
-              `Context: ${verifiedContext}\n\n` +
-              `Dispatched <b>agent-swing</b> to search for technical alignment on <b>${side} ${finalParsed.symbol}</b>.`
-            );
+
+            if (!isDuplicate) {
+              const sentimentEmoji = finalParsed.sentiment === "BULLISH" ? "🟢" : "🔴";
+              const cleanTitle = title.length > 95 ? title.slice(0, 92) + "..." : title;
+              const actionText = side === "LONG" ? "long" : "short";
+
+              await notify(
+                `📰 <b>MACRO ALERT</b> | ${sentimentEmoji} <b>${finalParsed.sentiment} ${finalParsed.symbol}</b> (${finalParsed.confidence}%)\n` +
+                `<i>"${cleanTitle}"</i>\n` +
+                `⚡ <b>Action:</b> Scanning ${actionText} swing setups`
+              );
+            } else {
+              console.log(`[Macro Scout] [Trace: ${traceId}] Throttled duplicate telegram broadcast for:`, finalParsed.symbol);
+            }
+
             results.push({ rule: "SENTIMENT", action: side, symbol: finalParsed.symbol });
           }
         }

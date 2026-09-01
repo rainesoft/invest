@@ -456,11 +456,30 @@ export async function fetchPaperBars(
       const token = settings.meta_api_token || getEnv('META_API_TOKEN') || '';
       const account = settings.meta_api_account_id || getEnv('META_API_ACCOUNT_ID') || '';
 
-      const res = await metaApiMarketDataFetch(
-        `/historical-market-data/symbols/${symbol}/timeframes/${tfNorm}/candles?limit=${limit}`,
-        token,
-        account
-      );
+      const BROKER_SYMBOL_ALIASES: Record<string, string[]> = {
+        NAS100: ['NAS100', 'USTEC', 'USTECm', 'USTEC_m', 'NAS100m'],
+        GER30: ['GER30', 'DE30', 'DE30m', 'DE30_m', 'GER30m', 'GER40'],
+        SPX500: ['SPX500', 'US500', 'US500m', 'US500_m', 'SPX500m'],
+        JP225: ['JP225', 'JP225m', 'NIKKEI', 'JPN225'],
+        US30: ['US30', 'US30m', 'DJ30', 'WS30'],
+        UKOIL: ['UKOIL', 'UKOILm', 'BRENT'],
+        USOIL: ['USOIL', 'USOILm', 'WTI'],
+      };
+
+      const candidates = BROKER_SYMBOL_ALIASES[symbol] || [symbol];
+      let res: any = null;
+      for (const candidateSym of candidates) {
+        try {
+          res = await metaApiMarketDataFetch(
+            `/historical-market-data/symbols/${candidateSym}/timeframes/${tfNorm}/candles?limit=${limit}`,
+            token,
+            account
+          );
+          if (res && Array.isArray(res) && res.length > 0) break;
+        } catch (_) {
+          // Try next candidate alias
+        }
+      }
       
       const bars = (res || []).map((c: any) => ({
         t: c.time,

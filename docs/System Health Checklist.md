@@ -436,6 +436,18 @@ Tables in non-public schemas (`net`, `cron`, `vault`) cannot be queried directly
 
 ---
 
+## ⚠️ 1M. MT5 EA HFT Micro-Scalping & Spread Invalidation (XAUUSD)
+
+> [!WARNING]
+> **Incident (2026-09-01):** Between 13:59 and 14:22 UTC, 8 rapid-fire Sell orders on `XAUUSD` were opened and closed in 0–3 seconds on the MT5 Master Account. `agent-news`/`agent-day` broadcasted `hft_bias: { "XAUUSD": "SHORT" }` via `pingHFTDirector()`, which `vps-poll` passed as `BIAS:SHORT` to the MT5 EA. The EA executed autonomous `HFT_NATIVE` market scalps using a hardcoded 20-point ($0.20) stop loss, which sits directly inside Exness's $0.20–$0.45 Gold spread, causing instant stop-outs/TPs on tick noise.
+
+### Diagnostic Protocol & Standard Rule:
+1. All live broker orders must strictly originate from verified `trade_opportunities` through `agent-trade`'s PAMM Execution Desk with dynamic ATR stops, account balance risk sizing, and single-trade isolation.
+2. `vps-poll` permanently returns `BIAS:NEUTRAL` so the MT5 EA never fires unmanaged `HFT_NATIVE` blind scalps.
+3. `pingHFTDirector()` in `agent-news` and `agent-day` is deprecated to logging-only, ensuring sentiment is consumed exclusively by AI councils.
+
+---
+
 ## 2. Autonomous Agent Activity
 Verify that the AI agents are actively evaluating the market and producing expected heartbeat logs.
 

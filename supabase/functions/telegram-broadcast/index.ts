@@ -14,8 +14,141 @@ interface DatabaseWebhookPayload {
 // Escape special characters for MarkdownV2 syntax in Telegram
 const escapeMd = (text: string | null | undefined) => {
   if (!text) return "";
-  return text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, "\\$1");
+  return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
 };
+
+// Inside inline code `...`, only ` and \ must be escaped in Telegram MarkdownV2
+const escapeCode = (text: string | null | undefined) => {
+  if (!text) return "";
+  return String(text).replace(/([\\`])/g, "\\$1");
+};
+
+const formatPrice = (val: any, symbol?: string): string => {
+  if (val === null || val === undefined || val === "—") return "—";
+  const num = typeof val === "number" ? val : parseFloat(String(val).replace(/[^0-9.-]/g, ""));
+  if (isNaN(num)) return String(val);
+
+  const sym = (symbol || "").toUpperCase();
+  if (sym.includes("JPY")) {
+    return num.toFixed(2);
+  }
+  if (["EURUSD", "GBPUSD", "AUDUSD", "NZDUSD", "USDCAD", "USDCHF", "EURGBP"].includes(sym)) {
+    return num.toFixed(4);
+  }
+  if (["UKOIL", "USOIL", "XTIUSD", "XBRUSD"].includes(sym)) {
+    return num.toFixed(2);
+  }
+  if (num >= 1000) {
+    return num.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  if (num >= 1) {
+    return num.toFixed(2);
+  }
+  return num.toFixed(4);
+};
+
+function extractCleanThesis(rawSummary: string): string {
+  if (!rawSummary) return "Algorithmic confluence setup";
+
+  // 1. Strip solver / execution desk / post-mortem tags
+  let text = rawSummary
+    .replace(/\[(Adaptive Limit Solver|Trading Central Limit Optimizer|Execution Desk|POST-MORTEM)[^\]]*\]/gi, "")
+    .trim();
+
+  // 2. Extract strategy tag inside brackets if present e.g. [Pattern -> Strategy]
+  let strategyTag = "";
+  const bracketMatch = text.match(/\[([A-Z0-9_\s\-→>]+(?:→|->)[^\]]+)\]/i);
+  if (bracketMatch) {
+    strategyTag = bracketMatch[1]
+      .replace(/^(SWING|DAY|SCALP|S-Tier|A-Tier|B-Tier|C-Tier|BULLISH_[A-Z_]+|BEARISH_[A-Z_]+)[\s\]\-]*/gi, "")
+      .replace(/->/g, "→")
+      .replace(/^[→\s]+/, "")
+      .trim();
+  }
+
+  // 3. Remove all brackets and bracketed tags from the remaining text
+  const cleanWithoutBrackets = text.replace(/\[[^\]]+\]/g, " ");
+
+  // 4. Split by pipes or newlines
+  const parts = cleanWithoutBrackets.split(/[|\n]/).map(p => p.trim()).filter(Boolean);
+  const candidateNotes: string[] = [];
+
+  for (const part of parts) {
+    let clean = part.replace(/^[•\-\*\d\.\s\)]+/, "").replace(/[*_`]/g, "").trim();
+    if (!clean) continue;
+
+    // Filter out boilerplate, math, essays, TP/SL lists, and long numbered entries
+    if (
+      clean.match(/^TP\d/i) ||
+      clean.match(/^R:R/i) ||
+      clean.match(/^Fib Swing/i) ||
+      clean.match(/^(Suggested execution|Given the technical setup|Based on the \w+ analysis|Execution Strategy|Confidence and Probability|Macro Sentiment|Execution Math|Order Type)/i) ||
+      clean.match(/Typical R:R/i) ||
+      clean.match(/R:R should be/i) ||
+      clean.match(/Risk:Reward/i) ||
+      clean.match(/\([0-9\.\s\-\+\/\*]+=\s*[0-9\.:]+\)/) || // math equations
+      clean.match(/^\d+\.\s+/) || // numbered list like "1. The macro context..."
+      clean.length > 120 || // long paragraph
+      clean.length < 5
+    ) {
+      continue;
+    }
+
+    // Look for technical confluences / patterns
+    const lower = clean.toLowerCase();
+    const isTechnicalSignal = [
+      "pattern", "divergence", "pinbar", "engulfing", "rejection", 
+      "support", "resistance", "fvg", "channel", "wedge", "double top", 
+      "double bottom", "head and shoulders", "breakout", "retest", "liquidity sweep", "trend continuation"
+    ].some(term => lower.includes(term));
+
+    if (isTechnicalSignal) {
+      clean = clean.replace(/[:;,\s]+$/, "").trim();
+      if (clean.length > 60) {
+        clean = clean.slice(0, 57) + "...";
+      }
+      const isDuplicate = candidateNotes.some(n => n.toLowerCase() === clean.toLowerCase()) ||
+                          (strategyTag && strategyTag.toLowerCase().includes(clean.toLowerCase()));
+      if (!isDuplicate) {
+        candidateNotes.push(clean);
+      }
+    }
+  }
+
+  // Prioritize punchy, concise candidate notes
+  candidateNotes.sort((a, b) => a.length - b.length);
+
+  const results: string[] = [];
+  if (strategyTag) {
+    if (strategyTag.length > 70) {
+      const subParts = strategyTag.split("→").map(s => s.trim());
+      if (subParts.length === 2 && subParts[0].length < 35) {
+        strategyTag = `${subParts[0]} → ${subParts[1].slice(0, 30)}...`;
+      } else {
+        strategyTag = strategyTag.slice(0, 65) + "...";
+      }
+    }
+    results.push(strategyTag);
+  }
+
+  for (const note of candidateNotes) {
+    if (results.length >= 2) break;
+    results.push(note);
+  }
+
+  if (results.length === 0) {
+    const fallback = parts.find(p => {
+      const c = p.replace(/^[•\-\*\d\.\s\)]+/, "").trim();
+      return c.length > 10 && c.length < 80 && !c.startsWith("TP") && !c.startsWith("R:R") && !c.includes("=");
+    });
+    if (fallback) {
+      return fallback.replace(/^[•\-\*\d\.\s\)]+/, "").slice(0, 60).trim();
+    }
+    return "Technical confluence setup";
+  }
+
+  return results.join(" • ");
+}
 
 serve(async (req) => {
   try {
@@ -86,45 +219,52 @@ serve(async (req) => {
 
       const symbol = escapeMd(record.symbol);
       const side = escapeMd(record.side);
-      const status = escapeMd(record.status);
-      
-      const rawSummary = record.ai_summary || "Automated mathematical setup evaluated by Alpha Engine.";
-      let cleanSummary = rawSummary.split(" | ").map((part: string) => part.trim()).filter((p: string) => p.length > 0).join("\n• ");
-      if (cleanSummary.includes("•")) cleanSummary = "• " + cleanSummary;
-      const aiSummary = escapeMd(cleanSummary);
+      const sideEmoji = record.side === "LONG" ? "🟢" : "🔴";
+      const tier = escapeMd(rawTier);
 
-      // Parse trade levels from JSON plans
-      const entryPrice = record.entry_plan_json?.price ?? record.entry_plan_json?.limit_price ?? record.entry_plan_json?.entry_price ?? "—";
-      const stopLoss   = record.stop_plan_json?.stop  ?? record.stop_plan_json?.stop_price ?? "—";
-      const takeProfit = record.take_profit_json?.tp   ?? record.take_profit_json?.tp_price ?? "—";
-      const orderType  = record.entry_plan_json?.order_type ?? "Limit";
+      // Parse trade levels from JSON plans with asset-aware number formatting
+      const rawEntry = record.entry_plan_json?.price ?? record.entry_plan_json?.limit_price ?? record.entry_plan_json?.entry_price ?? "—";
+      const rawSl    = record.stop_plan_json?.stop  ?? record.stop_plan_json?.stop_price ?? "—";
+      const rawTp    = record.take_profit_json?.tp   ?? record.take_profit_json?.tp_price ?? "—";
+      const rawOrderType = record.entry_plan_json?.order_type ?? (record.side === "LONG" ? "BUY LIMIT" : "SELL LIMIT");
+
+      const entryFormatted = formatPrice(rawEntry, record.symbol);
+      const slFormatted    = formatPrice(rawSl, record.symbol);
+      const tpFormatted    = formatPrice(rawTp, record.symbol);
 
       // R:R formatting
-      const rrMatch   = rawSummary.match(/1:([0-9.]+)/);
-      const tier      = escapeMd(rawTier);
-      const rr        = rrMatch   ? escapeMd(`1:${rrMatch[1]}`) : "—";
+      const rrMatch = (record.ai_summary || "").match(/1:([0-9.]+)/);
+      const rr = rrMatch ? `1:${parseFloat(rrMatch[1]).toFixed(1)}` : "1:1.8";
 
-      const sideEmoji = record.side === "LONG" ? "🟢" : "🔴";
-      const headerEmoji = "🚀";
-      const headerTitle = "*AUTOPILOT PAMM EXECUTED*";
-      const subHeader = "✅ _Trade executed on Master Account\\. View Ledger\\._";
+      const orderTypeDisplay = rawOrderType.toUpperCase().includes("MARKET")
+        ? `${record.side === "LONG" ? "Buy" : "Sell"} Market`
+        : `${record.side === "LONG" ? "Buy" : "Sell"} Limit`;
+
+      // Scale targets
+      const tp1Raw = record.take_profit_json?.tp1;
+      const tp2Raw = record.take_profit_json?.tp2;
+      const tp3Raw = record.take_profit_json?.tp3;
+
+      const targetParts: string[] = [];
+      if (tp1Raw) targetParts.push(`TP1 \`${escapeCode(formatPrice(tp1Raw, record.symbol))}\``);
+      if (tp2Raw) targetParts.push(`TP2 \`${escapeCode(formatPrice(tp2Raw, record.symbol))}\``);
+      if (tp3Raw) targetParts.push(`TP3 \`${escapeCode(formatPrice(tp3Raw, record.symbol))}\``);
+
+      const targetsLine = targetParts.length > 0
+        ? `\n🎯 *Targets:* ${targetParts.join(" • ")}`
+        : "";
+
+      const timeframeDisplay = record.timeframe ? `${record.timeframe.toUpperCase()} ` : "";
+      const thesis = extractCleanThesis(record.ai_summary || "");
 
       const message = `
-${headerEmoji} ${headerTitle} ${headerEmoji}
-${subHeader}
+🚀 *PAMM EXECUTION* \\| ${sideEmoji} *${side} ${symbol}* (${tier})
 
-${sideEmoji} *${symbol}* — *${side}* \\| ${tier}
+• *Entry:* \`${escapeCode(entryFormatted)}\` (${escapeMd(orderTypeDisplay)})
+• *Stop Loss:* \`${escapeCode(slFormatted)}\` \\| *Target:* \`${escapeCode(tpFormatted)}\`
+• *R:R:* ${escapeMd(rr)} \\| *Horizon:* ${escapeMd(timeframeDisplay)}Swing
 
-━━━━━━━━━━━━━━━━━
-📥 *Entry:* \`${escapeMd(String(entryPrice))}\`
-🛑 *Stop Loss:* \`${escapeMd(String(stopLoss))}\`
-🎯 *Take Profit:* \`${escapeMd(String(takeProfit))}\`
-━━━━━━━━━━━━━━━━━
-📐 *R:R Ratio:* ${rr}
-📋 *Order Type:* ${escapeMd(orderType)}
-
-*Institutional Rationale:*
-_${aiSummary}_
+💡 *Setup:* _${escapeMd(thesis)}_${targetsLine}
       `.trim();
 
       const telegramUrl = `https://api.telegram.org/bot${CENTRAL_TELEGRAM_BOT_TOKEN}/sendMessage`;
