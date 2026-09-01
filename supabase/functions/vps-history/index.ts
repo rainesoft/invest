@@ -28,7 +28,11 @@ serve(async (req) => {
 
     if (findError) throw findError;
     if (!trades || trades.length === 0) {
-       return new Response("Trade not found", { status: 404 });
+      console.log(`[VPS History] Ticket ${ticket} not found in user_trades (external/manual trade). Capital reconciled via exness-history-sync.`);
+      return new Response(JSON.stringify({ ok: true, status: "EXTERNAL_SKIPPED", message: `Ticket ${ticket} not found in user_trades; external trade ignored.` }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
     }
 
     const trade = trades[0];
