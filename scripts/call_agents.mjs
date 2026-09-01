@@ -61,47 +61,110 @@ async function callAgent(agentName, body = null) {
 }
 
 async function run() {
+  const args = process.argv.slice(2);
+  const symbolArg = args.find((_, i) => args[i - 1] === '--symbol' || args[i - 1] === '-s') || null;
+  const timeframeArg = args.find((_, i) => args[i - 1] === '--timeframe' || args[i - 1] === '-tf') || null;
+  const isManual = args.includes('--manual') || args.includes('--is_manual') || Boolean(symbolArg);
+  const summaryHours = Number(args.find((_, i) => args[i - 1] === '--hours') || 24);
+
   const startTime = new Date(Date.now() - 60 * 1000).toISOString();
+  console.log(`Starting Multi-Agent Pipeline Run [Manual: ${isManual}, Symbol Target: ${symbolArg || 'ALL'}]...`);
 
   // 1. Run Event-Driven Macro News Scout
   await callAgent('agent-news');
 
-  // 2. Run Intraday M30 Scalper (24 Global Assets)
-  await callAgent('agent-day', {
-    symbols: [
-      "BTCUSD", "ETHUSD", "XAUUSD", "US30", "NAS100", "SPX500", "EURUSD", 
-      "GBPUSD", "AUDUSD", "USDCAD", "USDCHF", "UKOIL", "USOIL", "XAGUSD", 
-      "USDJPY", "GBPJPY", "EURJPY", "GER30", "JP225", "NVDA", "AAPL", "MSFT", "TSLA"
-    ]
-  });
+  if (symbolArg) {
+    const symList = symbolArg.split(',').map(s => s.trim().toUpperCase());
+    console.log(`\nTargeting specific symbol(s): ${symList.join(', ')}`);
+    
+    // Run Intraday M30
+    await callAgent('agent-day', {
+      symbols: symList,
+      is_manual: isManual,
+      timeframe: timeframeArg || '30m'
+    });
 
-  // 3. Run Swing Trader in chunks to avoid 150s Edge Function timeouts
-  await callAgent('agent-swing', { symbols: ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "EURJPY", "GBPJPY"] });
-  await callAgent('agent-swing', { symbols: ["BTCUSD", "ETHUSD"] });
-  await callAgent('agent-swing', { symbols: ["US30", "NAS100", "SPX500", "GER30", "JP225", "XAUUSD", "XAGUSD", "UKOIL", "USOIL"] });
-  await callAgent('agent-swing', { symbols: ["NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META"] });
+    // Run Macro Swing
+    await callAgent('agent-swing', {
+      symbols: symList,
+      is_manual: isManual,
+      timeframe: timeframeArg || '1D'
+    });
+  } else {
+    // 2. Run Intraday M30 Scalper (24 Global Assets)
+    await callAgent('agent-day', {
+      symbols: [
+        "BTCUSD", "ETHUSD", "XAUUSD", "US30", "NAS100", "SPX500", "EURUSD", 
+        "GBPUSD", "AUDUSD", "USDCAD", "USDCHF", "UKOIL", "USOIL", "XAGUSD", 
+        "USDJPY", "GBPJPY", "EURJPY", "GER30", "JP225", "NVDA", "AAPL", "MSFT", "TSLA"
+      ],
+      is_manual: isManual
+    });
 
-  // 4. Summarize Opportunities generated in this run
-  console.log(`\n========================================`);
-  console.log(`SESSION SUMMARY: GENERATED SIGNALS`);
-  console.log(`========================================`);
+    // 3. Run Swing Trader in chunks to avoid 150s Edge Function timeouts
+    await callAgent('agent-swing', { symbols: ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "EURJPY", "GBPJPY"], is_manual: isManual });
+    await callAgent('agent-swing', { symbols: ["BTCUSD", "ETHUSD"], is_manual: isManual });
+    await callAgent('agent-swing', { symbols: ["US30", "NAS100", "SPX500", "GER30", "JP225", "XAUUSD", "XAGUSD", "UKOIL", "USOIL"], is_manual: isManual });
+    await callAgent('agent-swing', { symbols: ["NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META"], is_manual: isManual });
+  }
 
-  const { data: opportunities } = await supabase
+  // 4. Summarize Opportunities generated in this run & recent window
+  console.log(`\n========================================================================================`);
+  console.log(`INSTITUTIONAL SIGNAL ANALYSIS & TIER CLASSIFICATION (Past ${summaryHours} Hours)`);
+  console.log(`========================================================================================`);
+
+  const filterTime = new Date(Date.now() - summaryHours * 60 * 60 * 1000).toISOString();
+  let query = supabase
     .from('trade_opportunities')
     .select('id, symbol, side, status, timeframe, confidence, ai_summary, ai_risks, entry_plan_json, stop_plan_json, take_profit_json, created_at')
-    .gte('created_at', startTime)
-    .order('created_at', { ascending: false });
+    .gte('created_at', filterTime)
+    .order('confidence', { ascending: false });
+
+  if (symbolArg) {
+    const symList = symbolArg.split(',').map(s => s.trim().toUpperCase());
+    query = query.in('symbol', symList);
+  }
+
+  const { data: opportunities, error: queryErr } = await query;
+
+  if (queryErr) {
+    console.error("Error querying opportunities:", queryErr.message);
+    return;
+  }
 
   if (!opportunities || opportunities.length === 0) {
-    console.log("No new opportunities created in this run window.");
+    console.log("No signals found in the specified window.");
   } else {
-    for (const opp of opportunities) {
-      console.log(`\n[${opp.symbol}] ${opp.side} | ${opp.status} | TF: ${opp.timeframe} | Conf: ${opp.confidence}`);
-      console.log(`Summary: ${opp.ai_summary}`);
-      if (opp.entry_plan_json) console.log(`Entry Plan:`, opp.entry_plan_json);
-      if (opp.stop_plan_json) console.log(`Stop Plan:`, opp.stop_plan_json);
-      if (opp.take_profit_json) console.log(`Take Profit Plan:`, opp.take_profit_json);
-    }
+    console.log(`Found ${opportunities.length} signal(s). Ranked by Institutional Tier & Confidence:\n`);
+    
+    opportunities.forEach((opp, idx) => {
+      const conf = opp.confidence ?? 0;
+      const tier = conf >= 90 ? 'S-Tier 🏆' : conf >= 80 ? 'A-Tier 💎' : conf >= 70 ? 'B-Tier ⚡' : 'C-Tier ⚠️';
+      const entry = opp.entry_plan_json?.price ?? opp.entry_plan_json?.order_price ?? 'MKT';
+      const orderType = opp.entry_plan_json?.order_type ?? 'MARKET';
+      const stop = opp.stop_plan_json?.stop ?? opp.stop_plan_json?.stop_price ?? 'N/A';
+      const tp1 = opp.take_profit_json?.tp1 ?? 'N/A';
+      const tp2 = opp.take_profit_json?.tp2 ?? opp.take_profit_json?.tp ?? 'N/A';
+      const tp3 = opp.take_profit_json?.tp3 ?? 'N/A';
+      
+      let rrStr = 'N/A';
+      if (typeof entry === 'number' && typeof stop === 'number' && typeof tp2 === 'number') {
+        const risk = Math.abs(entry - stop);
+        const reward = Math.abs(tp2 - entry);
+        if (risk > 0) rrStr = `1:${(reward / risk).toFixed(2)}`;
+      }
+
+      console.log(`[#${idx + 1}] [${opp.symbol}] ${opp.side} | ${tier} (Conf: ${conf}) | Status: ${opp.status} | TF: ${opp.timeframe}`);
+      console.log(`     Order: ${orderType} @ ${entry} | SL: ${stop} | TP1: ${tp1} | TP2: ${tp2} | TP3: ${tp3} | R:R (TP2): ${rrStr}`);
+      console.log(`     Created: ${opp.created_at}`);
+      if (opp.ai_summary) {
+        console.log(`     Rationale: ${opp.ai_summary.slice(0, 220)}...`);
+      }
+      if (opp.ai_risks && opp.status === 'REJECTED') {
+        console.log(`     Rejection Reason: ${opp.ai_risks}`);
+      }
+      console.log('----------------------------------------------------------------------------------------');
+    });
   }
 }
 
