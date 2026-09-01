@@ -16,18 +16,8 @@ serve(async (req) => {
     // 1. Update heartbeat for all users (since it's a single-bot central architecture)
     await supabase.from("user_risk_settings").update({ vps_last_heartbeat: new Date().toISOString() }).neq("user_id", "00000000-0000-0000-0000-000000000000");
 
-    // 2. Fetch HFT bias
-    const { data: riskSettings } = await supabase
-      .from("user_risk_settings")
-      .select("hft_bias")
-      .eq("user_id", "912d249b-9be8-4691-a11b-5b00f386a804") // use central user
-      .single();
-    
-    const symbol = url.searchParams.get("symbol");
-    let currentBias = "NEUTRAL";
-    if (riskSettings && typeof riskSettings.hft_bias === "object" && riskSettings.hft_bias !== null && symbol) {
-      currentBias = (riskSettings.hft_bias as Record<string, string>)[symbol] || "NEUTRAL";
-    }
+    // 2. Fetch HFT bias (Permanently locked to NEUTRAL to disable unmanaged HFT_NATIVE blind scalps)
+    const currentBias = "NEUTRAL";
 
     // 3. Fetch pending and open trades for the VPS
     const { data: activeTrades, error: fetchError } = await supabase

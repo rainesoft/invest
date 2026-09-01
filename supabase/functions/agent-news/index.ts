@@ -25,29 +25,10 @@ const DRY_RUN                  = Deno.env.get("SCOUT_DRY_RUN") === "true";
 const OPENAI_API_KEY           = Deno.env.get("OPENAI_API_KEY") ?? "";
 const TAVILY_API_KEY           = Deno.env.get("TAVILY_API_KEY") ?? "";
 
-async function pingHFTDirector(supabase: any, symbol: string, bias: string) {
-  try {
-    const { data: riskSettings } = await supabase
-      .from("user_risk_settings")
-      .select("hft_bias")
-      .eq("user_id", "912d249b-9be8-4691-a11b-5b00f386a804")
-      .single();
-
-    let currentBiasMap: Record<string, string> = {};
-    if (riskSettings && typeof riskSettings.hft_bias === "object" && riskSettings.hft_bias !== null) {
-      currentBiasMap = { ...(riskSettings.hft_bias as Record<string, string>) };
-    }
-    currentBiasMap[symbol] = bias;
-
-    await supabase
-      .from("user_risk_settings")
-      .update({ hft_bias: currentBiasMap })
-      .neq("user_id", "00000000-0000-0000-0000-000000000000");
-
-    console.log(`[Hive Mind] Synchronized ${symbol} HFT bias to ${bias}`);
-  } catch (e) {
-    console.error(`[Hive Mind] Failed to synchronize HFT bias for ${symbol}:`, e);
-  }
+async function pingHFTDirector(_supabase: any, symbol: string, bias: string) {
+  // Deprecated: Raw HFT bias injection is disabled to prevent unmanaged MT5 EA micro-scalps.
+  // All trades must flow through structured trade_opportunities and PAMM execution.
+  console.log(`[Hive Mind] (Deprecate HFT Bias) Detected ${symbol} sentiment: ${bias}`);
 }
 
 async function pingAgentSwing(symbol: string) {
