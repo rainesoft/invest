@@ -168,18 +168,29 @@ async function executePendingOrders(supabase: any) {
         entry_plan_json,
         stop_plan_json,
         take_profit_json
-      ),
-      user_risk_settings!inner (
-        sync_trailing_stops,
-        is_live_execution_enabled,
-        vps_last_heartbeat,
-        active_broker
       )
     `)
     .eq("status", "PENDING");
 
   if (fetchError || !pendingTrades || pendingTrades.length === 0) {
     return { status: "success", message: "No pending orders", executed: 0 };
+  }
+
+  // Safely fetch user risk settings without relying on unconstrained PostgREST joins
+  const userIds = Array.from(new Set(pendingTrades.map((t: any) => t.user_id).filter(Boolean)));
+  let settingsMap = new Map<string, any>();
+  if (userIds.length > 0) {
+    const { data: userSettings } = await supabase
+      .from("user_risk_settings")
+      .select("user_id, sync_trailing_stops, is_live_execution_enabled, vps_last_heartbeat, active_broker")
+      .in("user_id", userIds);
+    if (userSettings) {
+      settingsMap = new Map(userSettings.map((s: any) => [s.user_id, s]));
+    }
+  }
+
+  for (const trade of pendingTrades) {
+    trade.user_risk_settings = settingsMap.get(trade.user_id) || {};
   }
 
   const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.london.agiliumtrade.ai";
@@ -317,62 +328,10 @@ async function executePendingOrders(supabase: any) {
   return { status: "success", evaluated: pendingTrades.length, executed: executedCount };
 }
 
-async function processRetryQueue(supabase: any) {
-  const baseUrl = Deno.env.get("META_API_BASE_URL") || "https://mt-client-api-v1.london.agiliumtrade.ai";
-  const MAX_RETRIES = 3;
-
-  const { data: queueItems, error: queueError } = await supabase
-    .from("meta_api_retry_queue")
-    .select("*, user_risk_settings(meta_api_token)")
-    .eq("status", "PENDING")
-    .lte("next_retry_at", new Date().toISOString());
-
-  if (queueError || !queueItems || queueItems.length === 0) {
-    return { status: "success", message: "Queue empty", processed: 0, results: [] };
-  }
-
-  console.log(`[Agent Trade] Processing ${queueItems.length} retry queue items...`);
-  const results = [];
-
-  for (const item of queueItems) {
-    const userToken = item.user_risk_settings?.meta_api_token || Deno.env.get("META_API_TOKEN");
-    if (!userToken) {
-      await supabase.from("meta_api_retry_queue").update({ status: "DEAD_LETTER", last_error: "Missing user token" }).eq("id", item.id);
-      results.push({ id: item.id, status: "DEAD_LETTER", error: "Missing user token" });
-      continue;
-    }
-
-    const apiUrl = `${baseUrl}/users/current/accounts/${item.meta_api_account_id}/trade`;
-    try {
-      const response = await fetch(apiUrl, {
-        method: "POST",
-        headers: { "auth-token": userToken, "Content-Type": "application/json" },
-        body: JSON.stringify(item.api_payload),
-      });
-
-      if (response.ok) {
-        await supabase.from("meta_api_retry_queue").update({ status: "SUCCESS", last_error: null }).eq("id", item.id);
-        results.push({ id: item.id, status: "SUCCESS" });
-      } else {
-        const errText = await response.text();
-        throw new Error(errText);
-      }
-    } catch (e: any) {
-      const newRetryCount = item.retry_count + 1;
-      if (newRetryCount >= MAX_RETRIES) {
-        await supabase.from("meta_api_retry_queue").update({ status: "DEAD_LETTER", retry_count: newRetryCount, last_error: e.message }).eq("id", item.id);
-        results.push({ id: item.id, status: "DEAD_LETTER", error: e.message });
-      } else {
-        const backoffMinutes = Math.pow(2, newRetryCount);
-        const nextRetry = new Date();
-        nextRetry.setMinutes(nextRetry.getMinutes() + backoffMinutes);
-        await supabase.from("meta_api_retry_queue").update({ retry_count: newRetryCount, next_retry_at: nextRetry.toISOString(), last_error: e.message }).eq("id", item.id);
-        results.push({ id: item.id, status: "PENDING_RETRY", next_retry: nextRetry.toISOString() });
-      }
-    }
-  }
-
-  return { status: "success", processed: results.length, results };
+async function processRetryQueue(_supabase: any) {
+  // meta_api_retry_queue was deprecated and dropped in migration 20260822000001_metaapi_cleanup.sql
+  // in favor of zero-latency MT5 VPS execution architecture.
+  return { status: "success", message: "Deprecated queue inactive", processed: 0, results: [] };
 }
 
 
@@ -848,17 +807,17 @@ serve(async (req) => {
            for (const ord of allOrders) {
               pendingOrdersMap.set(ord.id, ord);
 
-              // Auto-clean any broker pending order not recognized in active DB trades AND > 24h old
+              // Auto-clean any broker pending order not recognized in active DB trades AND > 8h old
               if (!knownMap.has(ord.id)) {
                  const orderTime = ord.time ? new Date(ord.time).getTime() : 0;
                  const ageHours = (Date.now() - orderTime) / (1000 * 60 * 60);
-                 if (ageHours >= 24) {
+                 if (ageHours >= 8) {
                     console.log(`[Position Manager] Garbage Collection: Cancelling orphaned broker pending order ${ord.id} (${ord.symbol}, ${ageHours.toFixed(1)}h old)...`);
                     await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
                       method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
                       body: JSON.stringify({ actionType: "ORDER_CANCEL", orderId: ord.id })
                     });
-                    await supabase.from("user_trades").update({ status: "CLOSED", error_message: "Order cancelled (orphaned stale limit order > 24h)" }).eq("meta_api_order_id", ord.id);
+                    await supabase.from("user_trades").update({ status: "CLOSED", error_message: "Order cancelled (orphaned stale limit order > 8h)" }).eq("meta_api_order_id", ord.id);
                  }
               }
            }
@@ -956,17 +915,17 @@ serve(async (req) => {
                     if (!isLong && currentPrice <= tp1) isMissedFill = true;
                  }
 
-                 // 2. Time-Based GC: Is the limit order > 24h old?
+                 // 2. Time-Based GC: Is the limit order > 8h old?
                  let ageHours = 0;
                  if (orderData.time) {
                    const orderTime = new Date(orderData.time).getTime();
                    ageHours = (Date.now() - orderTime) / (1000 * 60 * 60);
                  }
                    
-                 if (ageHours >= 24 || isMissedFill) {
+                 if (ageHours >= 8 || isMissedFill) {
                    const reasonStr = isMissedFill 
                       ? "Missed Fill: Market reached Take Profit target without triggering entry"
-                      : "Stale limit order > 24h";
+                      : "Stale limit order > 8h";
                    console.log(`[Position Manager] Garbage Collection: Cancelling pending order ${orderId} for ${trade.symbol}. Reason: ${reasonStr}`);
                    await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
                      method: "POST", headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
@@ -982,11 +941,11 @@ serve(async (req) => {
           } else {
              // NOT a pending order. Check position.
              
-             // If open_price is null and the order is > 24 hours old, it is a stale unfilled order that was missed or cancelled
+             // If open_price is null and the order is > 8 hours old, it is a stale unfilled order that was missed or cancelled
              const tradeAgeHours = trade.created_at ? (Date.now() - new Date(trade.created_at).getTime()) / (1000 * 60 * 60) : 0;
-             if (trade.open_price === null && tradeAgeHours >= 24) {
+             if (trade.open_price === null && tradeAgeHours >= 8) {
                console.log(`[Position Manager] Garbage Collection: Stale unfilled trade ${trade.id} (${trade.symbol}, ${tradeAgeHours.toFixed(1)}h old, open_price=null). Marking CLOSED.`);
-               await supabase.from("user_trades").update({ status: "CLOSED", error_message: "Order cancelled (Stale unfilled pending order > 24h)" }).eq("id", trade.id);
+               await supabase.from("user_trades").update({ status: "CLOSED", error_message: "Order cancelled (Stale unfilled pending order > 8h)" }).eq("id", trade.id);
                if (trade.opportunity_id) {
                  await supabase.from("trade_opportunities").update({ status: "EXPIRED", closed_at: new Date().toISOString() }).eq("id", trade.opportunity_id).in("status", ["ACTIVE", "APPROVED"]);
                }
@@ -1356,8 +1315,8 @@ serve(async (req) => {
                 newSl = lockSl;
                 actionName = `LOCK_IN_1R (profit +${priceMoveInR.toFixed(1)}R)`;
               }
-            } else if (priceMoveInR >= 1.0) {
-              // Lock in +0.5R Profit (At +1.0R, secure half an R profit rather than just flat BE)
+            } else if (priceMoveInR >= 1.5) {
+              // Lock in +0.5R Profit at +1.5R extension
               const lockSl = isLong
                 ? Number((entryPrice + (riskDist * 0.5)).toFixed(decimals))
                 : Number((entryPrice - (riskDist * 0.5)).toFixed(decimals));
@@ -1366,16 +1325,16 @@ serve(async (req) => {
                 newSl = lockSl;
                 actionName = `LOCK_IN_0.5R (profit +${priceMoveInR.toFixed(1)}R)`;
               }
-            } else if (priceMoveInR >= 0.50) {
-              // At +0.50R, lock Stop Loss at Break-Even (entryPrice) to eliminate all downside risk!
+            } else if (priceMoveInR >= 1.0) {
+              // At +1.0R (TP1 reached), lock Stop Loss at Break-Even (entryPrice) to eliminate all downside risk!
               const beSl = Number(entryPrice.toFixed(decimals));
               const isImprovement = isLong ? beSl > currentSl : beSl < currentSl;
               if (isImprovement) {
                 newSl = beSl;
-                actionName = `BREAK_EVEN_AT_0.5R (profit +${priceMoveInR.toFixed(1)}R)`;
+                actionName = `BREAK_EVEN_AT_1R (profit +${priceMoveInR.toFixed(1)}R)`;
               }
-            } else if (barsElapsed >= 20 && profit > 0 && priceMoveInR >= 0.30) {
-              // Thesis decay: Only move to BE on aged trade once modestly positive
+            } else if (barsElapsed >= 20 && profit > 0 && priceMoveInR >= 0.75) {
+              // Thesis decay: Only move to BE on aged trade once solidly positive
               const beSl = Number(entryPrice.toFixed(decimals));
               const isImprovement = isLong ? beSl > currentSl : beSl < currentSl;
               if (isImprovement) {
@@ -2103,10 +2062,12 @@ serve(async (req) => {
       if (blockedByRiskManager) {
         rejectReason = `Execution Skipped: No volume allocated (10% Account Blowout Protection hard cap reached for users).`;
       }
-      // Preserve technical signal approval in trade_opportunities, log desk skip note
+      // Reconcile status to REJECTED so opportunity is not left hanging as orphaned APPROVED
       await supabase.from("trade_opportunities").update({
+        status: "REJECTED",
         ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + rejectReason,
-        ai_risks: rejectReason
+        ai_risks: rejectReason,
+        closed_at: new Date().toISOString(),
       }).eq("id", signal.id);
       return new Response(JSON.stringify({ ok: true, message: rejectReason }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
