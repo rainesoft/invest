@@ -89,6 +89,18 @@ export type LogicContext = {
   anticipation_horizon_bars?: number;
   anticipation_horizon_hours?: number;
   fibonacci_projections?: FibonacciProjectionsResult | null;
+  sr_flip?: SRFlipDetection | null;
+};
+
+export type SRFlipDetection = {
+  type: 'BULLISH_SR_FLIP' | 'BEARISH_SR_FLIP' | 'NONE';
+  flip_level: number | null;
+  prior_level_type: 'RESISTANCE_TO_SUPPORT' | 'SUPPORT_TO_RESISTANCE' | 'NONE';
+  breakout_bar_ago: number | null;
+  retest_distance_pct: number | null;
+  retest_distance_atr: number | null;
+  holding_confirmed: boolean;
+  narrative?: string;
 };
 
 export function calculateFractals(high: number[], low: number[]) {
@@ -715,6 +727,7 @@ export function getContextSnapshot(
       unfilled_gap_target: null,
       anticipation_horizon_bars: 20,
       anticipation_horizon_hours: 10,
+      sr_flip: null,
     };
   }
 
@@ -846,13 +859,14 @@ export function getContextSnapshot(
   const asianRange = computeAsianRange(timestamps, high, low, close);
   const mean_reversion_target = volProfile.poc || (current_bb_upper !== null && current_bb_lower !== null ? Number(((current_bb_upper + current_bb_lower) / 2).toFixed(5)) : null);
 
-  // Trading Central Chartist, Divergence & Gap Detection
+  // Trading Central Chartist, Divergence, Gap & S/R Flip Detection
   const divResult = detectDivergence(high, low, close, rsi14);
   const macdDivResult = detectMacdDivergence(high, low, close, macdResult.map((m: any) => m.histogram));
   const gapResult = detectPriceGaps(open, close, high, low);
   const channelResult = detectTrendChannels(high, low, close);
   const patternResult = detectGeometricPatterns(high, low, close);
   const fibProjResult = calculateFibonacciProjections(high, low, close);
+  const srFlipResult = detectSRFlip(high, low, close, open, current_atr_14);
 
   return {
     timestamp,
@@ -922,6 +936,7 @@ export function getContextSnapshot(
     anticipation_horizon_bars: 20,
     anticipation_horizon_hours: 10,
     fibonacci_projections: fibProjResult.has_valid_abc ? fibProjResult : null,
+    sr_flip: srFlipResult.type !== 'NONE' ? srFlipResult : null,
   };
 }
 
@@ -2016,6 +2031,175 @@ export function calculateFibonacciProjections(
 
   return defaultResult;
 }
+
+export function detectSRFlip(
+  high: number[],
+  low: number[],
+  close: number[],
+  open: number[],
+  atr: number | null
+): SRFlipDetection {
+  const defaultResult: SRFlipDetection = {
+    type: 'NONE',
+    flip_level: null,
+    prior_level_type: 'NONE',
+    breakout_bar_ago: null,
+    retest_distance_pct: null,
+    retest_distance_atr: null,
+    holding_confirmed: false,
+    narrative: undefined
+  };
+
+  const len = close.length;
+  if (len < 15) return defaultResult;
+
+  const currentPrice = close[len - 1];
+  const currentLow = low[len - 1];
+  const currentHigh = high[len - 1];
+  const currentOpen = open[len - 1];
+  const effectiveAtr = (atr && atr > 0) ? atr : (currentPrice * 0.005);
+
+  // Extract both 5-bar fractals and 3-bar local swing extrema
+  const { bullish_fractals, bearish_fractals } = calculateFractals(high, low);
+  
+  const swingHighs: { index: number; price: number }[] = [...bearish_fractals];
+  const swingLows: { index: number; price: number }[] = [...bullish_fractals];
+
+  for (let i = 2; i < len - 2; i++) {
+    if (high[i] >= high[i-1] && high[i] >= high[i-2] && high[i] >= high[i+1] && high[i] >= high[i+2]) {
+      if (!swingHighs.some(sh => sh.index === i)) {
+        swingHighs.push({ index: i, price: high[i] });
+      }
+    }
+    if (low[i] <= low[i-1] && low[i] <= low[i-2] && low[i] <= low[i+1] && low[i] <= low[i+2]) {
+      if (!swingLows.some(sl => sl.index === i)) {
+        swingLows.push({ index: i, price: low[i] });
+      }
+    }
+  }
+
+  swingHighs.sort((a, b) => a.index - b.index);
+  swingLows.sort((a, b) => a.index - b.index);
+
+  // 1. Check for BULLISH S/R FLIP (Prior Resistance -> New Support)
+  // Look for prior swing highs (resistance) that occurred 4 to 100 bars ago
+  const candidateResistances = swingHighs.filter(f => f.index < len - 2 && f.index >= Math.max(0, len - 100));
+
+  for (let i = candidateResistances.length - 1; i >= 0; i--) {
+    const res = candidateResistances[i];
+    const resLevel = res.price;
+    const resIdx = res.index;
+
+    // Check if price broke above this resistance after it was formed
+    let breakoutFound = false;
+    let breakoutIdx = -1;
+    let maxHighAfterBreakout = resLevel;
+
+    for (let j = resIdx + 1; j < len; j++) {
+      if (close[j] > resLevel + 0.05 * effectiveAtr) {
+        breakoutFound = true;
+        if (breakoutIdx === -1) breakoutIdx = j;
+      }
+      if (high[j] > maxHighAfterBreakout) {
+        maxHighAfterBreakout = high[j];
+      }
+    }
+
+    if (breakoutFound && maxHighAfterBreakout > resLevel + 0.20 * effectiveAtr) {
+      // Check current retest of this resistance level
+      const recentLows = low.slice(Math.max(0, len - 5));
+      const minRecentLow = Math.min(...recentLows);
+      const distanceToLevel = Math.abs(currentPrice - resLevel);
+      const lowDistanceToLevel = Math.abs(minRecentLow - resLevel);
+
+      const isRetesting = (
+        (distanceToLevel <= 0.85 * effectiveAtr || lowDistanceToLevel <= 0.85 * effectiveAtr) ||
+        (currentPrice >= resLevel - 0.40 * effectiveAtr && currentPrice <= resLevel + 1.50 * effectiveAtr)
+      );
+
+      // Holding confirmation: Current close is above the level or within tolerance, and recent low didn't close broken below
+      const isHolding = currentPrice >= resLevel - 0.40 * effectiveAtr && minRecentLow >= resLevel - 0.75 * effectiveAtr;
+
+      if (isRetesting && isHolding) {
+        const distPct = Number((Math.abs(currentPrice - resLevel) / resLevel * 100).toFixed(3));
+        const distAtr = Number((Math.abs(currentPrice - resLevel) / effectiveAtr).toFixed(2));
+        const barsAgo = len - 1 - breakoutIdx;
+
+        return {
+          type: 'BULLISH_SR_FLIP',
+          flip_level: Number(resLevel.toFixed(5)),
+          prior_level_type: 'RESISTANCE_TO_SUPPORT',
+          breakout_bar_ago: barsAgo,
+          retest_distance_pct: distPct,
+          retest_distance_atr: distAtr,
+          holding_confirmed: true,
+          narrative: `Bullish S/R Flip Confirmed: Prior structural resistance at $${resLevel.toFixed(2)} was decisively broken and is now holding as institutional support (retested within ${distAtr}x ATR / ${distPct}%). Current price ($${currentPrice.toFixed(2)}) confirms bullish support hold.`
+        };
+      }
+    }
+  }
+
+  // 2. Check for BEARISH S/R FLIP (Prior Support -> New Resistance)
+  // Look for prior swing lows (support) that occurred 4 to 100 bars ago
+  const candidateSupports = swingLows.filter(f => f.index < len - 2 && f.index >= Math.max(0, len - 100));
+
+  for (let i = candidateSupports.length - 1; i >= 0; i--) {
+    const sup = candidateSupports[i];
+    const supLevel = sup.price;
+    const supIdx = sup.index;
+
+    // Check if price broke below this support after it was formed
+    let breakdownFound = false;
+    let breakdownIdx = -1;
+    let minLowAfterBreakdown = supLevel;
+
+    for (let j = supIdx + 1; j < len; j++) {
+      if (close[j] < supLevel - 0.05 * effectiveAtr) {
+        breakdownFound = true;
+        if (breakdownIdx === -1) breakdownIdx = j;
+      }
+      if (low[j] < minLowAfterBreakdown) {
+        minLowAfterBreakdown = low[j];
+      }
+    }
+
+    if (breakdownFound && minLowAfterBreakdown < supLevel - 0.20 * effectiveAtr) {
+      // Check current retest of this support level
+      const recentHighs = high.slice(Math.max(0, len - 5));
+      const maxRecentHigh = Math.max(...recentHighs);
+      const distanceToLevel = Math.abs(currentPrice - supLevel);
+      const highDistanceToLevel = Math.abs(maxRecentHigh - supLevel);
+
+      const isRetesting = (
+        (distanceToLevel <= 0.85 * effectiveAtr || highDistanceToLevel <= 0.85 * effectiveAtr) ||
+        (currentPrice <= supLevel + 0.40 * effectiveAtr && currentPrice >= supLevel - 1.50 * effectiveAtr)
+      );
+
+      // Holding confirmation: Current close is below the level or within tolerance
+      const isHolding = currentPrice <= supLevel + 0.40 * effectiveAtr && maxRecentHigh <= supLevel + 0.75 * effectiveAtr;
+
+      if (isRetesting && isHolding) {
+        const distPct = Number((Math.abs(currentPrice - supLevel) / supLevel * 100).toFixed(3));
+        const distAtr = Number((Math.abs(currentPrice - supLevel) / effectiveAtr).toFixed(2));
+        const barsAgo = len - 1 - breakdownIdx;
+
+        return {
+          type: 'BEARISH_SR_FLIP',
+          flip_level: Number(supLevel.toFixed(5)),
+          prior_level_type: 'SUPPORT_TO_RESISTANCE',
+          breakout_bar_ago: barsAgo,
+          retest_distance_pct: distPct,
+          retest_distance_atr: distAtr,
+          holding_confirmed: true,
+          narrative: `Bearish S/R Flip Confirmed: Prior structural support at $${supLevel.toFixed(2)} was decisively broken down and is now acting as institutional resistance (retested within ${distAtr}x ATR / ${distPct}%). Current price ($${currentPrice.toFixed(2)}) confirms resistance rejection.`
+        };
+      }
+    }
+  }
+
+  return defaultResult;
+}
+
 
 
 
