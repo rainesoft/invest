@@ -167,12 +167,14 @@ const SwingTradeSchema = z.object({
     "LIQUIDITY_SWEEP_LONG",
     "LIQUIDITY_SWEEP_SHORT",
     "RANGE_BOUNDARY",
+    "MEAN_REVERSION",
     "NONE",
   ]),
   execution_parameters: z.object({
     entry_type: z.enum(["Buy Limit", "Sell Limit", "Buy Stop", "Sell Stop", "Market", "NONE"]),
     suggested_entry_price: z.number().nullable(),
-    atr_multiplier_sl: z.number().nullable().describe("Multiplier for ATR to calculate Stop Loss distance (e.g. 1.5). Required to be 1.0 to 3.0."),
+    suggested_stop_loss: z.number().nullable().optional().describe("Exact numeric stop loss level"),
+    atr_multiplier_sl: z.number().nullable().optional().describe("Multiplier for ATR to calculate Stop Loss distance (e.g. 1.5). Required to be 1.0 to 3.0."),
     take_profit_1: z.number().nullable().describe("Conservative target — first Fib confluence zone"),
     take_profit_2: z.number().nullable().describe("Primary target — strong Fib level or structure"),
     take_profit_3: z.number().nullable().describe(
@@ -497,6 +499,7 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
           entry_type: args.order_type,
           suggested_entry_price: args.entry_price || args.suggested_entry_price,
           suggested_stop_loss: args.stop_loss || args.suggested_stop_loss,
+          atr_multiplier_sl: args.atr_multiplier_sl || 1.5,
           take_profit_1: args.take_profit_1,
           take_profit_2: args.take_profit_2,
           take_profit_3: args.take_profit_3
@@ -666,7 +669,7 @@ serve(async (req) => {
     sessionPriorityList = ['BTCUSD', 'ETHUSD', 'JP225', 'USDJPY', 'GBPJPY', 'EURJPY', 'AUDUSD', 'NZDUSD', 'XAUUSD', 'US30'];
   }
 
-  symbols.sort((a, b) => {
+  symbols.sort((a: any, b: any) => {
     if (a === 'BTCUSD' && b !== 'BTCUSD') return -1;
     if (b === 'BTCUSD' && a !== 'BTCUSD') return 1;
     const aOpen = isMarketOpen(a);
@@ -853,7 +856,15 @@ serve(async (req) => {
                 console.log(`[Validation] TAKE_PROFIT ${signal.symbol} by AI: ${evalResult.reason}`);
                 if (!isManual) {
                   try {
-                    await fetch(`${Deno.env.get("WEBHOOK_URL")}/execution/cancel`, { method: "POST", body: JSON.stringify({ signal_id: signal.id }) });
+                    const functionsUrl = (Deno.env.get("SUPABASE_URL") || "").replace(/\/$/, "") + "/functions/v1";
+                    await fetch(`${functionsUrl}/agent-trade`, {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        "x-webhook-secret": Deno.env.get("WEBHOOK_SECRET") || Deno.env.get("CRON_SECRET") || ""
+                      },
+                      body: JSON.stringify({ action: "AUTO_EJECT", opportunity_id: signal.id })
+                    });
                   } catch (fallbackErr) {
                     console.error(`[Fallback Webhook Error] ${fallbackErr}`);
                   }
@@ -861,16 +872,18 @@ serve(async (req) => {
               } else if (evalResult.action === "TIGHTEN_STOP" || evalResult.action === "REDUCE_RISK") {
                 console.log(`[Validation] ${evalResult.action} ${signal.symbol} by AI: ${evalResult.reason}`);
                 const isLong = signal.side === "LONG";
+                const currentAtr = snapshot.atr_14 || Math.abs(snapshot.current_price * 0.01);
                 const newSl = evalResult.action === "TIGHTEN_STOP" 
-                   ? (isLong ? snapshot.current_price - snapshot.atr_14 : snapshot.current_price + snapshot.atr_14) // Tighten to current price - 1 ATR
+                   ? (isLong ? snapshot.current_price - currentAtr : snapshot.current_price + currentAtr) // Tighten to current price - 1 ATR
                    : null;
                    
                 try {
-                   await fetch(`${Deno.env.get("WEBHOOK_URL")}/agent-trade`, { 
+                   const functionsUrl = (Deno.env.get("SUPABASE_URL") || "").replace(/\/$/, "") + "/functions/v1";
+                   await fetch(`${functionsUrl}/agent-trade`, { 
                        method: "POST", 
                        headers: { 
                            "Content-Type": "application/json",
-                           "x-webhook-secret": Deno.env.get("WEBHOOK_SECRET") || ""
+                           "x-webhook-secret": Deno.env.get("WEBHOOK_SECRET") || Deno.env.get("CRON_SECRET") || ""
                        },
                        body: JSON.stringify({ 
                            action: "MODIFY_ORDER", 
@@ -895,10 +908,10 @@ serve(async (req) => {
         }
 
       const chunkArray = <T>(arr: T[], size: number): T[][] => arr.length > 0 ? [arr.slice(0, size), ...chunkArray(arr.slice(size), size)] : [];
-      const symbolChunks = chunkArray(symbols, 3);
+      const symbolChunks = chunkArray(symbols as string[], 3);
 
       for (const chunk of symbolChunks) {
-        await Promise.all(chunk.map(async (symbol) => {
+        await Promise.all(chunk.map(async (symbol: string) => {
         // --- LOG RESEARCH RUN ---
         await insertAuditLog(supabase, {
           actor_type: "SYSTEM",
@@ -906,25 +919,26 @@ serve(async (req) => {
           payload_json: { symbol, timeframe, agent: "agent-swing" }
         }).catch(e => console.warn(`[Audit] Failed to log RESEARCH_RUN for ${symbol}: ${e.message}`));
 
-        // --- FETCH PENDING NEWS (from agent-news) ---
+        // --- FETCH PENDING NEWS SENTIMENT (from market_context) ---
         let pendingNewsSide: string | null = null;
-        let pendingNewsId: string | null = null;
+        let pendingNewsNarrative: string | null = null;
         try {
           const { data: pendingSentiment } = await supabase
-            .from("trade_opportunities")
-            .select("id, side, risk_summary")
+            .from("market_context")
+            .select("id, macro_bias, narrative")
             .eq("symbol", symbol)
-            .eq("status", "PUBLISHED")
+            .eq("agent_persona", "MACRO_SCOUT")
+            .gt("expires_at", new Date().toISOString())
             .order("created_at", { ascending: false })
             .limit(1);
           
           if (pendingSentiment && pendingSentiment.length > 0) {
              const pending = pendingSentiment[0];
-             pendingNewsSide = pending.side;
-             pendingNewsId = pending.id;
+             pendingNewsSide = pending.macro_bias === "BULLISH" ? "LONG" : pending.macro_bias === "BEARISH" ? "SHORT" : null;
+             pendingNewsNarrative = pending.narrative;
           }
         } catch (pendingErr: any) {
-           console.warn(`[${symbol}] Error checking PUBLISHED: ${pendingErr.message}`);
+           console.warn(`[${symbol}] Error checking market_context: ${pendingErr.message}`);
         }
 
         // --- LAYER -1: MARKET HOURS CHECK ---
@@ -932,7 +946,6 @@ serve(async (req) => {
           console.log(`[Market Hours] Skipping ${symbol} as market is currently closed.`);
           sendEvent({ type: 'progress', message: `[Market Hours] Skipping ${symbol}: Market Closed.` });
           rejections.push({ symbol, reason: "Market is currently closed", layer: "Market Hours" });
-          if (pendingNewsId) await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: "Rejected: Market is currently closed." }).eq("id", pendingNewsId);
           return;
         }
 
@@ -956,7 +969,6 @@ serve(async (req) => {
                reason: `Macro Blackout Window: Halting origination due to High-Impact USD event within ±30m (${evNames})`,
                layer: "Layer 0"
              });
-             if (pendingNewsId) await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: `Rejected: Macro Blackout Window (${evNames}).` }).eq("id", pendingNewsId);
              return; // Skip this symbol completely
           }
         }
@@ -970,14 +982,12 @@ serve(async (req) => {
           } catch (err: any) {
             console.error(`[Data Error] [Trace: ${traceId}] ${symbol}: ${err.message}`);
             rejections.push({ symbol, reason: `Data fetch failed: ${err.message}`, layer: "Data" });
-            if (pendingNewsId) await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: `Rejected: Data fetch failed.` }).eq("id", pendingNewsId);
             return;
           }
 
           if (bars.length < 100) {
             rejections.push({ symbol, reason: `Insufficient data (${bars.length} bars, need 100+)`, layer: "Data" });
             sendEvent({ type: "progress", message: `[${symbol}] Skipped: insufficient data` });
-            if (pendingNewsId) await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: `Rejected: Insufficient data.` }).eq("id", pendingNewsId);
             return;
           }
 
@@ -1016,7 +1026,6 @@ serve(async (req) => {
               payload_json: { symbol, reason: riskValidation.reason },
             });
             rejections.push({ symbol, reason: riskValidation.reason, layer: "Pre-AI Guard" });
-            if (pendingNewsId) await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: `Rejected (Pre-AI Guard): ${riskValidation.reason}` }).eq("id", pendingNewsId);
             return;
           }
 
@@ -1150,40 +1159,29 @@ serve(async (req) => {
           let macroContext = generateMacroContext(symbol, allEvents, headlines);
           macroContext += `\n\nMACRO SENTIMENT SCORE: ${sentimentScore} / 10`;
 
-          if (pendingNewsSide && pendingNewsId) {
-             // Retrieve the original pending details if needed to inject into macroContext
-             // (We fetched pendingNewsId/Side at the top of the loop)
-             try {
-               const { data: pendingSentiment } = await supabase.from("trade_opportunities").select("risk_summary").eq("id", pendingNewsId).single();
-               if (pendingSentiment) {
-                 macroContext += `\n\n[URGENT SENTIMENT OVERRIDE]\nA live Tier-1 macro sentiment event has just fired for this asset, requesting a ${pendingNewsSide} position. Details: ${pendingSentiment.risk_summary}. YOU MUST STRONGLY CONSIDER ALIGNING YOUR TECHNICAL SETUP WITH THIS FUNDAMENTAL DIRECTION.`;
-                 sendEvent({ type: "progress", message: `[${symbol}] Detected PUBLISHED signal (${pendingNewsSide}) from agent-news. Injecting as urgent confluence.` });
-               }
-             } catch (err: any) {
-                 // Ignore
-             }
+          if (pendingNewsSide && pendingNewsNarrative) {
+             macroContext += `\n\n[URGENT SENTIMENT OVERRIDE]\nA live Tier-1 macro sentiment event has just fired for this asset, indicating a ${pendingNewsSide} bias. Details: ${pendingNewsNarrative}. YOU MUST STRONGLY CONSIDER ALIGNING YOUR TECHNICAL SETUP WITH THIS FUNDAMENTAL DIRECTION.`;
+             sendEvent({ type: "progress", message: `[${symbol}] Detected active sentiment (${pendingNewsSide}) from Macro Scout. Injecting as confluence.` });
           } else if (symbol === "XAGUSD" || symbol === "XAUUSD") {
              // Precious Metals Inter-Asset Correlation: Silver inherits Gold macro sentiment (and vice versa)
              const correlatedPeer = symbol === "XAGUSD" ? "XAUUSD" : "XAGUSD";
              try {
-               const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
                const { data: peerNews } = await supabase
-                 .from("trade_opportunities")
-                 .select("side, risk_summary, ai_summary")
+                 .from("market_context")
+                 .select("macro_bias, narrative")
                  .eq("symbol", correlatedPeer)
-                 .eq("status", "PUBLISHED")
-                 .gte("created_at", twoHoursAgo)
+                 .eq("agent_persona", "MACRO_SCOUT")
+                 .gt("expires_at", new Date().toISOString())
                  .order("created_at", { ascending: false })
                  .limit(1)
                  .maybeSingle();
 
                if (peerNews) {
-                 macroContext += `\n\n[PRECIOUS METALS INTER-ASSET CORRELATION]\nA live Tier-1 macro catalyst has fired for benchmark ${correlatedPeer} (${peerNews.side}). Details: ${peerNews.risk_summary}. Due to 90% precious metals correlation, ${symbol} MUST ALIGN with this fundamental macro direction.`;
-                 sendEvent({ type: "progress", message: `[${symbol}] Inherited live macro sentiment (${peerNews.side}) from correlated peer ${correlatedPeer}.` });
+                 const peerSide = peerNews.macro_bias === "BULLISH" ? "LONG" : "SHORT";
+                 macroContext += `\n\n[PRECIOUS METALS INTER-ASSET CORRELATION]\nA live Tier-1 macro catalyst has fired for benchmark ${correlatedPeer} (${peerSide}). Details: ${peerNews.narrative}. Due to 90% precious metals correlation, ${symbol} SHOULD CONSIDER aligning with this fundamental direction.`;
+                 sendEvent({ type: 'progress', message: `[${symbol}] Inherited macro sentiment (${peerSide}) from correlated peer ${correlatedPeer}.` });
                }
-             } catch (err: any) {
-               // Ignore
-             }
+             } catch (e) {}
           }
 
           // === HISTORICAL MEMORY ===
@@ -1275,36 +1273,35 @@ serve(async (req) => {
 
           let evaluation: SwingTrade;
           try {
-            evaluation = await evaluateSwingOpportunity(symbol, snapshot, fib, timeframe, historicalMemory, macroContext, fomcModeActive, inflectionThresholdPct);
+            evaluation = await evaluateSwingOpportunity(symbol as string, snapshot, fib, timeframe, historicalMemory, macroContext, fomcModeActive, inflectionThresholdPct);
             
             // --- SHADOW LEDGER: Log raw AI prediction instantly ---
             if (evaluation && evaluation.recommended_direction !== "NONE") {
                let rawEntry = Number(evaluation.execution_parameters?.suggested_entry_price);
                let rawTP = Number(evaluation.execution_parameters?.take_profit_2 || evaluation.execution_parameters?.take_profit_1);
-               let rawSL = Number(evaluation.execution_parameters?.suggested_stop_loss);
+               let rawSL: number | null = Number((evaluation.execution_parameters as any)?.suggested_stop_loss) || null;
                
                // Fallback to snapshot if AI omitted them
                if (!rawEntry) rawEntry = snapshot.current_price;
-               if (!rawSL) rawSL = evaluation.recommended_direction === "LONG" ? snapshot.safe_long_stop_loss : snapshot.safe_short_stop_loss;
+               if (!rawSL) rawSL = evaluation.recommended_direction === "LONG" ? (snapshot.safe_long_stop_loss || null) : (snapshot.safe_short_stop_loss || null);
                
                const { error: shadowErr } = await supabase.from("shadow_ledger").insert({
-                  symbol: symbol,
+                  symbol: symbol as string,
                   timeframe: timeframe.toLowerCase(),
-                  side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
+                  side: evaluation.recommended_direction.trim().toUpperCase(),
                   entry_price: rawEntry,
                   take_profit: rawTP || null,
                   stop_loss: rawSL || null,
                   status: "PENDING"
                });
                if (shadowErr) {
-                 console.error(`[Shadow Ledger] Failed to insert raw signal for ${symbol}: ${shadowErr.message}`);
+                 console.error(`[Shadow Ledger] Failed to insert raw signal for ${symbol as string}: ${shadowErr.message}`);
                }
             }
           } catch (err: any) {
-            console.error(`[AI Error] [Trace: ${traceId}] ${symbol}: ${err.message}`);
-            rejections.push({ symbol, reason: `AI evaluation failed: ${err.message}`, layer: "AI" });
-            sendEvent({ type: "progress", message: `[${symbol}] AI evaluation failed: ${err.message}` });
-            if (pendingNewsId) await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: `Rejected (AI Error): ${err.message}` }).eq("id", pendingNewsId);
+            console.error(`[AI Error] [Trace: ${traceId}] ${symbol as string}: ${err.message}`);
+            rejections.push({ symbol: symbol as string, reason: `AI evaluation failed: ${err.message}`, layer: "AI" });
+            sendEvent({ type: "progress", message: `[${symbol as string}] AI evaluation failed: ${err.message}` });
             return;
           }
 
@@ -1315,7 +1312,7 @@ serve(async (req) => {
           // === FEATURE 4: NEWS-ENHANCED CONFIDENCE BOOST (+8) ===
           // Applies when a high-impact macro event aligns with the trade direction.
           const newsBoost = computeMacroConfidenceBoost(
-            symbol,
+            symbol as string,
             evaluation.recommended_direction,
             allEvents,
             headlines
@@ -1323,17 +1320,17 @@ serve(async (req) => {
           if (newsBoost > 0) {
             adjustedConfidence = Math.min(100, adjustedConfidence + newsBoost);
             confidenceAdjustments.push(`+${newsBoost} News-Macro Alignment`);
-            sendEvent({ type: 'progress', message: `[${symbol}] News-Macro Boost: +${newsBoost} (macro event aligns with ${evaluation.recommended_direction} direction)` });
+            sendEvent({ type: 'progress', message: `[${symbol as string}] News-Macro Boost: +${newsBoost} (macro event aligns with ${evaluation.recommended_direction} direction)` });
           }
 
           // === FEATURE 4B: FOMC WINDOW CONFIDENCE BOOST (+8) ===
           // Extra boost when FOMC window is active, compounding with macro alignment.
           if (fomcModeActive && evaluation.recommended_direction !== "NONE") {
-            const fomcBoost = computeMacroConfidenceBoost(symbol, evaluation.recommended_direction, allEvents, headlines);
+            const fomcBoost = computeMacroConfidenceBoost(symbol as string, evaluation.recommended_direction, allEvents, headlines);
             if (fomcBoost > 0) {
               adjustedConfidence = Math.min(100, adjustedConfidence + 8);
               confidenceAdjustments.push(`+8 FOMC Window Alignment (${fomcPreEventActive ? "pre-event" : "post-event"})`);
-              sendEvent({ type: 'progress', message: `[${symbol}] FOMC Window Boost: +8 (${fomcPreEventActive ? "pre-event" : "post-event"} macro alignment)` });
+              sendEvent({ type: 'progress', message: `[${symbol as string}] FOMC Window Boost: +8 (${fomcPreEventActive ? "pre-event" : "post-event"} macro alignment)` });
             }
           }
 
@@ -1341,28 +1338,19 @@ serve(async (req) => {
           if ((snapshot as any).htf_fib_alignment === true) {
             adjustedConfidence = Math.min(100, adjustedConfidence + 5);
             confidenceAdjustments.push(`+5 HTF Fib Alignment (Daily ${(snapshot as any).htf_fib_daily_level?.toFixed(2)} ≈ Weekly ${(snapshot as any).htf_fib_weekly_level?.toFixed(2)})`);
-            sendEvent({ type: 'progress', message: `[${symbol}] HTF Fib Alignment Bonus: +5 (daily/weekly Fib zones overlap within 0.3%)` });
+            sendEvent({ type: 'progress', message: `[${symbol as string}] HTF Fib Alignment Bonus: +5 (daily/weekly Fib zones overlap within 0.3%)` });
           }
 
-          // === PUBLISHED (agent-news) ALIGNMENT BONUS (+20) ===
+          // === MACRO SCOUT ALIGNMENT BONUS (+20) / PENALTY (-30) ===
           if (pendingNewsSide && evaluation.recommended_direction === pendingNewsSide) {
              adjustedConfidence = Math.min(100, adjustedConfidence + 20);
-             confidenceAdjustments.push(`+20 agent-news Fundamental Confluence (${pendingNewsSide})`);
-             sendEvent({ type: 'progress', message: `[${symbol}] MASSIVE BOOST: Technicals align perfectly with pending agent-news sentiment (${pendingNewsSide})` });
+             confidenceAdjustments.push(`+20 Macro Scout Fundamental Confluence (${pendingNewsSide})`);
+             sendEvent({ type: 'progress', message: `[${symbol as string}] MASSIVE BOOST: Technicals align perfectly with macro sentiment (${pendingNewsSide})` });
           } else if (pendingNewsSide && evaluation.recommended_direction !== "NONE") {
              // Technicals conflict with news
              adjustedConfidence = Math.max(0, adjustedConfidence - 30);
-             confidenceAdjustments.push(`-30 CONFLICT: Technicals contradict pending agent-news sentiment (${pendingNewsSide})`);
-             sendEvent({ type: 'progress', message: `[${symbol}] PENALTY: Technicals contradict pending agent-news sentiment (${pendingNewsSide})` });
-             
-             // Reject the pending news signal due to conflict
-             if (pendingNewsId) {
-                await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: "Rejected: Technicals contradicted fundamental sentiment." }).eq("id", pendingNewsId);
-             }
-          } else if (pendingNewsId && evaluation.recommended_direction === "NONE") {
-             // Technical setup was too weak to trade
-             // Reject the pending news signal due to lack of technical confluence
-             await supabase.from("trade_opportunities").update({ status: "REJECTED", risk_summary: "Rejected: Failed to find technical confluence." }).eq("id", pendingNewsId);
+             confidenceAdjustments.push(`-30 CONFLICT: Technicals contradict macro sentiment (${pendingNewsSide})`);
+             sendEvent({ type: 'progress', message: `[${symbol as string}] PENALTY: Technicals contradict macro sentiment (${pendingNewsSide})` });
           }
 
           // === FEATURE 5: KELLY CRITERION PROBABILITY CALIBRATION ===
@@ -1372,7 +1360,7 @@ serve(async (req) => {
             const { data: wonLostCounts } = await supabase
               .from('trade_opportunities')
               .select('status')
-              .eq('symbol', symbol)
+              .eq('symbol', symbol as string)
               .in('status', ['WON', 'LOST']);
 
             const wonCount = wonLostCounts?.filter((r: any) => r.status === 'WON').length ?? 0;
@@ -1385,15 +1373,15 @@ serve(async (req) => {
               const delta = calibratedProbability - rawProbability;
               if (Math.abs(delta) > 1) {
                 confidenceAdjustments.push(`Kelly: P(win) ${rawProbability.toFixed(1)}% → ${calibratedProbability.toFixed(1)}% (n=${wonCount + lostCount})`);
-                sendEvent({ type: 'progress', message: `[${symbol}] Kelly Calibration: AI probability adjusted ${rawProbability.toFixed(1)}% → ${calibratedProbability.toFixed(1)}%` });
+                sendEvent({ type: 'progress', message: `[${symbol as string}] Kelly Calibration: AI probability adjusted ${rawProbability.toFixed(1)}% → ${calibratedProbability.toFixed(1)}%` });
               }
             }
           } catch (kellyErr: any) {
-            console.warn(`[Kelly] Failed to calibrate probability for ${symbol}: ${kellyErr.message}`);
+            console.warn(`[Kelly] Failed to calibrate probability for ${symbol as string}: ${kellyErr.message}`);
           }
 
           if (confidenceAdjustments.length > 0) {
-            sendEvent({ type: 'progress', message: `[${symbol}] Confidence adjusted: ${confidence} → ${adjustedConfidence} (${confidenceAdjustments.join(', ')})` });
+            sendEvent({ type: 'progress', message: `[${symbol as string}] Confidence adjusted: ${confidence} → ${adjustedConfidence} (${confidenceAdjustments.join(', ')})` });
           }
 
           const tier = getTier(adjustedConfidence);
@@ -1404,7 +1392,7 @@ serve(async (req) => {
               safeRationale = evaluation.thought_process || "No rationale provided.";
           }
 
-          // --- OVERRIDE: ADX FILTER FOR MEAN REVERSION ---
+          // --- OVERRIDE: ADX FILTER FOR MEAN REVERSION ===
           if (evaluation.recommended_direction !== "NONE" && evaluation.strategy_applied === "MEAN_REVERSION" && (snapshot as any).adx_14 && (snapshot as any).adx_14 > 25) {
              evaluation.recommended_direction = "NONE";
              evaluation.thought_process = `[Execution Desk Override] Attempted Mean Reversion in high-momentum environment (ADX > 25). Strategy blocked.`;
@@ -1431,66 +1419,21 @@ serve(async (req) => {
               const prevTier = getTier(adjustedConfidence);
               adjustedConfidence = Math.min(adjustedConfidence, 89);
               confidenceAdjustments.push(`[S-Tier Guard] No LTF OB/FVG/Sweep detected — capped at A-Tier (was ${prevTier})`); 
-              sendEvent({ type: 'progress', message: `[${symbol}] S-Tier OB/FVG Guard: No institutional footprint found on LTF. Signal downgraded from ${prevTier} → A-Tier. Add an LTF OB/FVG entry for full S-Tier.` });
-              console.log(`[S-Tier Guard] [Trace: ${traceId}] ${symbol}: Downgraded from S-Tier — no LTF OB, FVG or Liquidity Sweep present.`);
+              sendEvent({ type: 'progress', message: `[${symbol as string}] S-Tier OB/FVG Guard: No institutional footprint found on LTF. Signal downgraded from ${prevTier} → A-Tier. Add an LTF OB/FVG entry for full S-Tier.` });
+              console.log(`[S-Tier Guard] [Trace: ${traceId}] ${symbol as string}: Downgraded from S-Tier — no LTF OB, FVG or Liquidity Sweep present.`);
             } else {
               const footprint = [hasOB ? 'OB' : '', hasFVG ? 'FVG' : '', hasSweep ? 'Sweep' : ''].filter(Boolean).join(' + ');
-              sendEvent({ type: 'progress', message: `[${symbol}] S-Tier OB/FVG Guard PASSED ✅ — Institutional footprint confirmed: ${footprint}` });
+              sendEvent({ type: 'progress', message: `[${symbol as string}] S-Tier OB/FVG Guard PASSED ✅ — Institutional footprint confirmed: ${footprint}` });
             }
           }
 
-          if (evaluation.recommended_direction === "NONE" || evaluation.recommended_direction === "REQUIRE_LTF_DRILLDOWN" || confidence < 70) {
-            let reason = "";
-            if (evaluation.recommended_direction === "REQUIRE_LTF_DRILLDOWN") {
-              reason = `LTF_ENTRY_WAIT: Macro trend is strong but price is overextended. Waiting for LTF pullback.`;
-              
-              const expiresAt = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
-              const targetDirection = snapshot.trend_alignment.startsWith("BULLISH") ? "LONG" : "SHORT";
-              
-              await supabase.from("trade_watchlists").update({ status: 'CANCELLED' }).eq('symbol', symbol).eq('status', 'WATCHING');
-              await supabase.from("trade_watchlists").insert({
-                symbol,
-                direction: targetDirection,
-                status: "WATCHING",
-                macro_score: String(confidence),
-                source_agent: "agent-swing",
-                current_price: snapshot.current_price,
-                context: snapshot,
-                expires_at: expiresAt
-              });
-            }
-
-            const thoughtSnippet = evaluation.thought_process || (evaluation as any).rationale || (evaluation as any).reasoning || (typeof evaluation === "object" ? JSON.stringify(evaluation) : "No setup identified");
-            if (evaluation.recommended_direction === "REQUIRE_LTF_DRILLDOWN") {
-              reason = "REQUIRE_LTF_DRILLDOWN: Price at HTF boundary. Sending to Sniper for 5m precision entry.";
-            } else {
-              reason = evaluation.recommended_direction === "NONE"
-                ? `No valid swing setup identified: ${thoughtSnippet.slice(0, 200)}`
-                : `Confidence too low (${confidence}) — below 70 threshold`;
-            }
-
-            sendEvent({ type: "progress", message: `[${symbol}] No trade: ${reason.slice(0, 120)}` });
-            const swingFallbackSide: 'LONG' | 'SHORT' = 
-              (snapshot.trend_alignment?.startsWith("BEARISH") || snapshot.htf_trend === "BEARISH") ? "SHORT" : "LONG";
-            const rejectedObj = {
-              symbol,
-              side: (evaluation.recommended_direction !== "NONE" && evaluation.recommended_direction !== "REQUIRE_LTF_DRILLDOWN") 
-                ? evaluation.recommended_direction 
-                : swingFallbackSide,
-              timeframe: timeframe.toLowerCase(),
-              status: "REJECTED",
-              source: "agent-swing",
-              ai_summary: `[SWING][${tier}] ${evaluation.recommended_direction === "NONE" ? "No setup" : "Low confidence"}: ${thoughtSnippet.slice(0, 400)}`,
-              ai_risks: `Rejected by Swing AI: ${reason.slice(0, 200)}`,
-              confidence,
-              trace_id: traceId,
-            };
-            if (pendingNewsId) {
-              await supabase.from("trade_opportunities").update(rejectedObj).eq("id", pendingNewsId);
-            } else {
-              await supabase.from("trade_opportunities").insert(rejectedObj);
-            }
-            rejections.push({ symbol, reason, layer: "Swing AI" });
+          if (evaluation.recommended_direction === "NONE" || adjustedConfidence < 75) {
+            const reason = evaluation.recommended_direction === "NONE"
+              ? "No valid swing setup identified: " + (evaluation.swing_rationale?.structural_confirmation || "Consolidation / CHOP without clear edge")
+              : `Confidence ${adjustedConfidence} below swing minimum (75)`;
+            console.log(`[Swing AI] [Trace: ${traceId}] C-TIER / NO SETUP for ${symbol as string}: ${reason}`);
+            sendEvent({ type: "progress", message: `[${symbol as string}] Skipped: ${reason}` });
+            rejections.push({ symbol: symbol as string, reason, layer: "Swing AI" });
             return;
           }
 
@@ -1511,7 +1454,7 @@ serve(async (req) => {
           }
 
           // Invalidation / Stop Loss: Prioritize structural LTF OB invalidation over wide daily ATR
-          let aiSl = evaluation.execution_parameters.suggested_stop_loss;
+          let aiSl: number = (evaluation.execution_parameters as any)?.suggested_stop_loss;
           if (!aiSl || isNaN(aiSl)) {
             if (ltfOb) {
               aiSl = isLong ? ltfOb - (ltfAtr * 1.25) : ltfOb + (ltfAtr * 1.25);
@@ -1544,12 +1487,12 @@ serve(async (req) => {
                   } : {})
                 }
               })
-              .eq("symbol", symbol)
+              .eq("symbol", symbol as string)
               .eq("agent_persona", "SWING_TRADER")
               .gt("expires_at", new Date().toISOString())
               .then(({ error }) => {
-                if (error) console.warn(`[Market Context] [Trace: ${traceId}] Backfill failed for ${symbol}: ${error.message}`);
-                else console.log(`[Market Context] [Trace: ${traceId}] Daily macro prime backfilled for ${symbol}: ${aiSl} (${evaluation.recommended_direction}, Conf: ${evaluation.confidence_score}%)`);
+                if (error) console.warn(`[Market Context] [Trace: ${traceId}] Backfill failed for ${symbol as string}: ${error.message}`);
+                else console.log(`[Market Context] [Trace: ${traceId}] Daily macro prime backfilled for ${symbol as string}: ${aiSl} (${evaluation.recommended_direction}, Conf: ${evaluation.confidence_score}%)`);
               });
           }
 
@@ -1564,21 +1507,15 @@ serve(async (req) => {
             const widenedSl = isLong
               ? Number((entry - minSwingSlDist).toFixed(5))
               : Number((entry + minSwingSlDist).toFixed(5));
-            console.log(`[${symbol}] [Swing Volatility Guard] SL distance (${currentSlDist.toFixed(4)}) was tighter than 1.25x Daily ATR (${minSwingSlDist.toFixed(4)}). Widening SL: ${sl} → ${widenedSl}`);
+            console.log(`[${symbol as string}] [Swing Volatility Guard] SL distance (${currentSlDist.toFixed(4)}) was tighter than 1.25x Daily ATR (${minSwingSlDist.toFixed(4)}). Widening SL: ${sl} → ${widenedSl}`);
             sl = widenedSl;
-            evaluation.execution_parameters.suggested_stop_loss = sl;
+            (evaluation.execution_parameters as any).suggested_stop_loss = sl;
           }
 
-          evaluation.execution_parameters.suggested_stop_loss = sl;
+          (evaluation.execution_parameters as any).suggested_stop_loss = sl;
           let tp1 = evaluation.execution_parameters.take_profit_1;
           let tp2 = evaluation.execution_parameters.take_profit_2;
           let tp3 = evaluation.execution_parameters.take_profit_3;
-
-          if (!entry || !sl || !tp2) {
-            rejections.push({ symbol, reason: "Missing entry, SL, or TP2", layer: "Execution Desk" });
-            if (pendingNewsId) await supabase.from("trade_opportunities").update({ status: "REJECTED", source: "agent-swing", risk_summary: "Rejected: Incomplete trade parameters." }).eq("id", pendingNewsId);
-            return;
-          }
 
           // === CROSS-AGENT CONFLUENCE & DYNAMIC ORDER TYPE ROUTING ===
           let intradayHasOpposingRejection = false;
@@ -1607,31 +1544,13 @@ serve(async (req) => {
             }
           }
 
-          const isHighBetaAsset = ['UKOIL', 'USOIL', 'XAUUSD', 'XAGUSD', 'US30', 'NAS100', 'SPX500', 'GER30'].includes(symbol);
+          const isHighBetaAsset = ['UKOIL', 'USOIL', 'XAUUSD', 'XAGUSD', 'US30', 'NAS100', 'SPX500', 'GER30'].includes(symbol as string);
 
           if (intradayHasOpposingRejection && isHighBetaAsset) {
-            // High-beta commodity/index experiencing active opposing intraday breakdown/rally.
-            // Strict Cross-Agent Momentum Lock: Reject to prevent buying/selling into a falling knife.
-            const rejectReason = `Cross-Agent Veto: Intraday agent detected active opposing momentum on high-beta ${symbol} (${intradayRejectionDetail}). Counter-trend trade strictly forbidden.`;
-            console.log(`[${symbol}] [Cross-Agent Veto] ${rejectReason}`);
+            const rejectReason = `Cross-Agent Veto: Intraday agent detected active opposing momentum on high-beta ${symbol as string} (${intradayRejectionDetail}). Counter-trend trade strictly forbidden.`;
+            console.log(`[${symbol as string}] [Cross-Agent Veto] ${rejectReason}`);
             
-            const rejectedObj = {
-              symbol,
-              side: isLong ? "LONG" : "SHORT",
-              timeframe: timeframe.toLowerCase(),
-              status: "REJECTED",
-              source: "agent-swing",
-              ai_summary: `[SWING][${tier}] Cross-Agent Veto: ${rejectReason}`,
-              ai_risks: rejectReason,
-              confidence,
-              trace_id: traceId,
-            };
-            if (pendingNewsId) {
-              await supabase.from("trade_opportunities").update(rejectedObj).eq("id", pendingNewsId);
-            } else {
-              await supabase.from("trade_opportunities").insert(rejectedObj);
-            }
-            rejections.push({ symbol, reason: rejectReason, layer: "Cross-Agent Consensus" });
+            rejections.push({ symbol: symbol as string, reason: rejectReason, layer: "Cross-Agent Consensus" });
             return;
           }
 
@@ -1639,33 +1558,29 @@ serve(async (req) => {
           const pendingOrderThreshold = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.15) : (currentPrice * 0.001);
 
           if (intradayHasOpposingRejection) {
-            // Intraday agent detected active breakdown or opposing momentum on forex/stable asset.
-            console.log(`[${symbol}] [Cross-Agent Confluence] Intraday agent rejected ${symbol} (${intradayRejectionDetail}). Converting to pullback LIMIT order entry.`);
+            console.log(`[${symbol as string}] [Cross-Agent Confluence] Intraday agent rejected ${symbol as string} (${intradayRejectionDetail}). Converting to pullback LIMIT order entry.`);
             const maxLimitOffset = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.30) : (currentPrice * 0.005);
             const deepFib = nearestFibs.find(f => isLong ? f.price < currentPrice : f.price > currentPrice);
             let targetLimit = deepFib ? deepFib.price : (isLong ? currentPrice - maxLimitOffset : currentPrice + maxLimitOffset);
             
-            // Clamp target limit within reachable 0.35x ATR
             if (isLong && currentPrice - targetLimit > maxLimitOffset) targetLimit = currentPrice - maxLimitOffset;
             if (!isLong && targetLimit - currentPrice > maxLimitOffset) targetLimit = currentPrice + maxLimitOffset;
 
             entry = Number(targetLimit.toFixed(5));
             order_type = isLong ? "BUY LIMIT" : "SELL LIMIT";
             
-            // Expand SL to 1.35x Daily ATR to withstand intraday momentum
             const wideSlDist = Number((dailyAtr * 1.35).toFixed(5));
             sl = isLong ? Number((entry - wideSlDist).toFixed(5)) : Number((entry + wideSlDist).toFixed(5));
             evaluation.execution_parameters.suggested_entry_price = entry;
             evaluation.execution_parameters.suggested_stop_loss = sl;
             safeRationale += ` [Multi-Timeframe Protection: Intraday counter-momentum (${intradayRejectionDetail}) — Market entry converted to pullback Limit @ $${entry} with 1.35x ATR SL]`;
           } else if (Math.abs(entry - currentPrice) >= pendingOrderThreshold) {
-            // Dynamic limit clamping: prevent placing limit orders excessively far (>0.35x ATR) which causes missed fills
             const maxLimitDist = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.30) : (currentPrice * 0.005);
             const rawLimitDist = Math.abs(entry - currentPrice);
             if (rawLimitDist > maxLimitDist) {
               const clampedEntry = isLong ? (currentPrice - maxLimitDist) : (currentPrice + maxLimitDist);
               entry = Number(clampedEntry.toFixed(5));
-              console.log(`[${symbol}] [Limit Clamping] Limit order entry tightened from distance ${rawLimitDist.toFixed(4)} to ${maxLimitDist.toFixed(4)} @ ${entry} to maximize fill probability.`);
+              console.log(`[${symbol as string}] [Limit Clamping] Limit order entry tightened from distance ${rawLimitDist.toFixed(4)} to ${maxLimitDist.toFixed(4)} @ ${entry} to maximize fill probability.`);
               evaluation.execution_parameters.suggested_entry_price = entry;
             }
 
@@ -1675,7 +1590,6 @@ serve(async (req) => {
               order_type = entry > currentPrice ? "SELL LIMIT" : "SELL STOP";
             }
           } else {
-            // Convert to market order and adjust SL/TP proportionally
             const entryShift = currentPrice - entry;
             entry = currentPrice;
             sl = Number((sl + entryShift).toFixed(5));
@@ -1683,10 +1597,10 @@ serve(async (req) => {
             if (tp1) tp1 = Number((tp1 + entryShift).toFixed(5));
             if (tp2) tp2 = Number((tp2 + entryShift).toFixed(5));
             if (tp3) tp3 = Number((tp3 + entryShift).toFixed(5));
-            console.log(`[${symbol}] Entry too close to live price (Dist: ${Math.abs(entryShift).toFixed(5)}). Converted to ${order_type} to prevent Error 10016. SL/TP adjusted.`);
+            console.log(`[${symbol as string}] Entry too close to live price (Dist: ${Math.abs(entryShift).toFixed(5)}). Converted to ${order_type} to prevent Error 10016. SL/TP adjusted.`);
           }
 
-          // === ASYMMETRIC PRE-FLIGHT RISK GOVERNOR (VAN THARP 3.0% DOLLAR CAP) ===
+          // === ORIGINATION RISK GOVERNOR ===
           const assetContractSizes: Record<string, number> = {
             UKOIL: 1000,
             USOIL: 1000,
@@ -1707,22 +1621,40 @@ serve(async (req) => {
             EURJPY: 100000,
             GBPJPY: 100000,
           };
-          const contractSize = assetContractSizes[symbol] || 1;
+          const contractSize = assetContractSizes[symbol as string] || 1;
           const minLot = 0.01;
           const maxPermissibleCapitalRisk = 45.0; // 3.0% hard cap on $1,500 standard base portfolio
-          const maxAllowableStopDistance = maxPermissibleCapitalRisk / (minLot * contractSize);
+          
+          let pointValueUsd = contractSize;
+          if ((symbol as string).endsWith("JPY") && currentPrice > 0) {
+            pointValueUsd = contractSize / currentPrice;
+          } else if (symbol === "GER30") {
+            pointValueUsd = contractSize * 1.1;
+          }
+
+          const maxAllowableStopDistance = maxPermissibleCapitalRisk / (minLot * pointValueUsd);
+          const maxPermissibleEntryOffset = Math.max((dailyAtr || 1) * 1.0, currentPrice * 0.015);
 
           if (maxAllowableStopDistance > 0 && Math.abs(entry - sl) > maxAllowableStopDistance) {
-            const rawRisk = Math.abs(entry - sl) * minLot * contractSize;
-            console.log(`[${symbol}] [Origination Risk Governor] Raw risk ($${rawRisk.toFixed(2)}) exceeds $${maxPermissibleCapitalRisk} cap. Anchoring entry to structural discount ($${entry} → ${isLong ? (sl + maxAllowableStopDistance).toFixed(5) : (sl - maxAllowableStopDistance).toFixed(5)}).`);
-            
-            // Re-anchor limit entry so total dollar risk is strictly capped at $45 (3%)
-            entry = isLong
+            const rawRisk = Math.abs(entry - sl) * minLot * pointValueUsd;
+            const anchoredEntry = isLong
               ? Number((sl + maxAllowableStopDistance).toFixed(5))
               : Number((sl - maxAllowableStopDistance).toFixed(5));
+
+            // Check if anchoring the entry moves it too far (>1.0x ATR or >1.5%) from current market price
+            if (Math.abs(anchoredEntry - currentPrice) > maxPermissibleEntryOffset) {
+              const msg = `Risk ($${rawRisk.toFixed(2)}) exceeds $${maxPermissibleCapitalRisk.toFixed(2)} cap at 0.01 lot minimum and requires entry offset (${Math.abs(anchoredEntry - currentPrice).toFixed(4)}) exceeding 1.0x ATR buffer (${maxPermissibleEntryOffset.toFixed(4)}). Setup rejected to preserve capital.`;
+              console.log(`[${symbol as string}] [Origination Risk Governor] REJECTED: ${msg}`);
+              sendEvent({ type: "progress", message: `[${symbol as string}] REJECTED: ${msg}` });
+              rejections.push({ symbol: symbol as string, reason: msg, layer: "Risk Governor" });
+              return;
+            }
+
+            console.log(`[${symbol as string}] [Origination Risk Governor] Raw risk ($${rawRisk.toFixed(2)}) exceeds $${maxPermissibleCapitalRisk} cap. Anchoring entry to valid structural limit ($${entry} → ${anchoredEntry}).`);
+            entry = anchoredEntry;
             order_type = isLong ? "BUY LIMIT" : "SELL LIMIT";
             evaluation.execution_parameters.suggested_entry_price = entry;
-            safeRationale += ` [Origination Risk Governor: Entry anchored to Limit @ $${entry} so 0.01 lot dollar risk stays strictly within 3% risk cap ($${maxPermissibleCapitalRisk.toFixed(2)})]`;
+            safeRationale += ` [Origination Risk Governor: Entry anchored to Limit @ $${entry} within ATR buffer so 0.01 lot dollar risk stays strictly within 3% risk cap ($${maxPermissibleCapitalRisk.toFixed(2)})]`;
           }
 
           // === TAKE PROFIT DIRECTION & VOLATILITY-NORMALIZED R-MULTIPLE SANITIZATION ===
@@ -1746,14 +1678,14 @@ serve(async (req) => {
           evaluation.execution_parameters.take_profit_2 = tp2;
           evaluation.execution_parameters.take_profit_3 = tp3;
           const riskPct = Math.abs(entry - sl) / entry;
-          const maxRiskPct = ["XAUUSD", "XAGUSD", "BTCUSD", "UKOIL"].includes(symbol) ? 0.15 : 0.10;
+          const maxRiskPct = ["XAUUSD", "XAGUSD", "BTCUSD", "UKOIL"].includes(symbol as string) ? 0.15 : 0.10;
 
           if (riskPct > maxRiskPct) {
             const msg = `Stop loss ${(riskPct * 100).toFixed(2)}% exceeds swing maximum of ${(maxRiskPct * 100).toFixed(0)}%`;
-            sendEvent({ type: "progress", message: `[${symbol}] REJECTED: ${msg}` });
+            sendEvent({ type: "progress", message: `[${symbol as string}] REJECTED: ${msg}` });
             const rejectedObj = {
-              symbol,
-              side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
+              symbol: symbol as string,
+              side: evaluation.recommended_direction.trim().toUpperCase(),
               timeframe: timeframe.toLowerCase(),
               status: "REJECTED",
               source: "agent-swing",
@@ -1765,12 +1697,8 @@ serve(async (req) => {
               confidence: adjustedConfidence,
               trace_id: traceId,
             };
-            if (pendingNewsId) {
-              await supabase.from("trade_opportunities").update(rejectedObj).eq("id", pendingNewsId);
-            } else {
-              await supabase.from("trade_opportunities").insert(rejectedObj);
-            }
-            rejections.push({ symbol, reason: msg, layer: "Execution Desk" });
+            await supabase.from("trade_opportunities").insert(rejectedObj);
+            rejections.push({ symbol: symbol as string, reason: msg, layer: "Execution Desk" });
             return;
           }
 
@@ -1798,10 +1726,10 @@ serve(async (req) => {
               safeRationale += ` [Trading Central Limit Optimizer: Adjusted entry to pullback limit @ $${entry} to enforce institutional 1:1.75 R:R to TP2]`;
             } else {
               const msg = `R:R to TP2 is 1:${rrToTp2.toFixed(2)}, below required 1:${requiredRR} for ${tier}`;
-              sendEvent({ type: "progress", message: `[${symbol}] REJECTED: ${msg}` });
+              sendEvent({ type: "progress", message: `[${symbol as string}] REJECTED: ${msg}` });
               const rejectedObj = {
-                symbol,
-                side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
+                symbol: symbol as string,
+                side: evaluation.recommended_direction.trim().toUpperCase(),
                 timeframe: timeframe.toLowerCase(),
                 status: "REJECTED",
                 source: "agent-swing",
@@ -1813,12 +1741,8 @@ serve(async (req) => {
                 confidence: adjustedConfidence,
                 trace_id: traceId,
               };
-              if (pendingNewsId) {
-                await supabase.from("trade_opportunities").update(rejectedObj).eq("id", pendingNewsId);
-              } else {
-                await supabase.from("trade_opportunities").insert(rejectedObj);
-              }
-              rejections.push({ symbol, reason: msg, layer: "Execution Desk" });
+              await supabase.from("trade_opportunities").insert(rejectedObj);
+              rejections.push({ symbol: symbol as string, reason: msg, layer: "Execution Desk" });
               return;
             }
           }
@@ -1838,8 +1762,8 @@ serve(async (req) => {
           ].filter(Boolean).join(" | ");
 
           const approvedObj = {
-              symbol,
-              side: (evaluation.recommended_direction === "NONE" || !evaluation.recommended_direction) ? "LONG" : evaluation.recommended_direction.trim().toUpperCase(),
+              symbol: symbol as string,
+              side: evaluation.recommended_direction.trim().toUpperCase(),
               timeframe: timeframe.toLowerCase(),
               status: isManual ? "PENDING_APPROVAL" : "APPROVED",
               source: "agent-swing",
@@ -1848,6 +1772,7 @@ serve(async (req) => {
                 order_type,
                 scaled_entries: null,
                 max_holding_bars: 20,
+                horizon_hours: 8,
                 horizon_days: 20,
                 trading_central_levels: tcLevels,
               },
@@ -1869,20 +1794,13 @@ serve(async (req) => {
               trace_id: traceId,
             };
 
-          let dbData, dbError;
-          if (pendingNewsId) {
-            const res = await supabase.from("trade_opportunities").update(approvedObj).eq("id", pendingNewsId).select("id").single();
-            dbData = res.data;
-            dbError = res.error;
-          } else {
-            const res = await supabase.from("trade_opportunities").insert(approvedObj).select("id").single();
-            dbData = res.data;
-            dbError = res.error;
-          }
+          const res = await supabase.from("trade_opportunities").insert(approvedObj).select("id").single();
+          const dbData = res.data as { id: string } | null;
+          const dbError = res.error;
 
-          if (dbError) {
-            console.error(`[DB Error] [Trace: ${traceId}] ${symbol}: ${dbError.message}`);
-            rejections.push({ symbol, reason: dbError.message, layer: "Database" });
+          if (dbError || !dbData) {
+            console.error(`[DB Error] [Trace: ${traceId}] ${symbol}: ${dbError?.message}`);
+            rejections.push({ symbol: symbol as string, reason: dbError?.message || "Failed to insert approved opportunity", layer: "Database" });
             return;
           }
 
@@ -1895,9 +1813,9 @@ serve(async (req) => {
           // Clean up any active sniper watchlists for this symbol to prevent duplicate execution
           await supabase.from("trade_watchlists").update({ status: 'CANCELLED' }).eq('symbol', symbol).eq('status', 'WATCHING');
           
-        sendEvent({
+          sendEvent({
             type: "progress",
-            message: `[${symbol}] ✅ SWING SIGNAL APPROVED — ${tier} | Entry: $${entry.toLocaleString()} | SL: $${sl.toLocaleString()} | TP2: $${tp2.toLocaleString()} | R:R 1:${rrToTp2.toFixed(1)}`,
+            message: `[${symbol as string}] ✅ SWING SIGNAL APPROVED — ${tier} | Entry: $${entry.toLocaleString()} | SL: $${sl.toLocaleString()} | TP2: $${tp2?.toLocaleString()} | R:R 1:${rrToTp2.toFixed(1)}`,
           });
 
           // Update market_context with the approved macro prime and bifurcated scenario tree
@@ -1925,14 +1843,14 @@ serve(async (req) => {
                 alternative_scenario: tcLevels.alternative_scenario,
               }
             })
-            .eq("symbol", symbol)
+            .eq("symbol", symbol as string)
             .eq("agent_persona", "SWING_TRADER")
             .gt("expires_at", new Date().toISOString());
 
           await insertAuditLog(supabase, {
             actor_type: "SYSTEM",
             action: "SWING_SIGNAL_APPROVED",
-            entity_type: "research",
+            entity_type: "trade_opportunities",
             entity_id: dbData.id,
             payload_json: {
               symbol,
@@ -1952,11 +1870,12 @@ serve(async (req) => {
               fib_swing_high: fib.swing_high,
               fib_swing_low: fib.swing_low,
               fibonacci_rationale: safeRationale,
+              trace_id: traceId,
             },
           });
 
           // Note: Telegram broadcasting is handled universally via DB trigger by the telegram-broadcast Edge Function.
-          results.push({ symbol, id: dbData.id, tier, entry, sl, tp1, tp2, tp3, rr_to_tp2: rrToTp2 });
+          results.push({ symbol: symbol as string, id: dbData.id, tier, entry, sl, tp1, tp2, tp3, rr_to_tp2: rrToTp2 });
         } catch (symbolErr: any) {
           console.error(`[Global Error] [Trace: ${traceId}] ${symbol}: ${symbolErr.message}`);
           rejections.push({ symbol, reason: symbolErr.message, layer: "System" });
@@ -1964,7 +1883,7 @@ serve(async (req) => {
       }));
     }
 
-      // Note: pendingNewsId resolution is handled per-symbol inside the for-loop above.
+      // All symbols processed cleanly.
 
       sendEvent({ type: "complete", opportunities: results, rejections });
       return { opportunities: results, rejections };
