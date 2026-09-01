@@ -1308,7 +1308,7 @@ serve(async (req) => {
             }
 
             const maxAllowableStopDistance = maxPermissibleCapitalRisk / (minLot * pointValueUsd);
-            const maxPermissibleEntryOffset = Math.max((snapshot.atr_14 || 1) * 1.0, snapshot.current_price * 0.015);
+            const maxPermissibleEntryOffset = Math.min((snapshot.atr_14 || 1) * 0.25, snapshot.current_price * 0.003);
 
             if (maxAllowableStopDistance > 0 && risk > maxAllowableStopDistance) {
               const rawRisk = risk * minLot * pointValueUsd;
@@ -1317,7 +1317,7 @@ serve(async (req) => {
                 : Number((stop_loss - maxAllowableStopDistance).toFixed(3));
 
               if (Math.abs(anchoredEntry - snapshot.current_price) > maxPermissibleEntryOffset) {
-                const msg = `Risk ($${rawRisk.toFixed(2)}) exceeds $${maxPermissibleCapitalRisk.toFixed(2)} cap at 0.01 lot minimum and entry offset (${Math.abs(anchoredEntry - snapshot.current_price).toFixed(3)}) exceeds 1.0x ATR buffer (${maxPermissibleEntryOffset.toFixed(3)}). Setup rejected to preserve capital.`;
+                const msg = `Risk ($${rawRisk.toFixed(2)}) exceeds $${maxPermissibleCapitalRisk.toFixed(2)} cap at 0.01 lot minimum and entry offset (${Math.abs(anchoredEntry - snapshot.current_price).toFixed(3)}) exceeds tight 0.25x ATR buffer (${maxPermissibleEntryOffset.toFixed(3)}). Setup rejected to preserve capital.`;
                 console.log(`[${symbol}] [Origination Risk Governor] REJECTED: ${msg}`);
                 sendEvent({ type: 'progress', message: `[${symbol}] REJECTED: ${msg}` });
                 rejections.push({ symbol, reason: msg, layer: "Risk Governor" });
@@ -1327,7 +1327,7 @@ serve(async (req) => {
               console.log(`[${symbol}] [Origination Risk Governor] Raw risk ($${rawRisk.toFixed(2)}) exceeds $${maxPermissibleCapitalRisk} cap. Anchoring entry to structural limit ($${entry_price} → ${anchoredEntry}).`);
               entry_price = anchoredEntry;
               risk = Math.abs(entry_price - stop_loss);
-              institutional_rationale += ` [Origination Risk Governor: Entry anchored to $${entry_price} within ATR buffer so 0.01 lot dollar risk stays strictly within 3% risk cap ($${maxPermissibleCapitalRisk.toFixed(2)})]`;
+              institutional_rationale += ` [Origination Risk Governor: Entry anchored to $${entry_price} within tight ATR buffer so 0.01 lot dollar risk stays strictly within 3% risk cap ($${maxPermissibleCapitalRisk.toFixed(2)})]`;
             }
 
             const expectedReturnPct = Math.abs(take_profit - entry_price) / entry_price;
@@ -1510,7 +1510,7 @@ serve(async (req) => {
                 confidence: confidence_score,
                 ai_summary: institutional_rationale,
                 ai_risks: "Managed by AI Risk Officer",
-                model_id: "agent-day",
+                model_id: modelId,
                 model_version: modelVersion,
               })
               .select("id")
