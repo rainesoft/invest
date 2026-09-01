@@ -377,7 +377,7 @@ serve(async (req) => {
     sessionPriorityList = ['JP225', 'USDJPY', 'GBPJPY', 'EURJPY', 'AUDUSD', 'NZDUSD', 'BTCUSD', 'ETHUSD', 'XAUUSD', 'US30'];
   }
 
-  symbols.sort((a, b) => {
+  symbols.sort((a: any, b: any) => {
     const aOpen = isMarketOpen(a);
     const bOpen = isMarketOpen(b);
     if (aOpen && !bOpen) return -1;
@@ -483,8 +483,8 @@ serve(async (req) => {
                     .eq("status", "PENDING")
                     .like("symbol", `%${currency}%`);
                     
-                  if (pendingTrades && pendingTrades.length > 0) {
-                    const tradeIds = pendingTrades.map((t: any) => t.id);
+                  if (pendingTrades && (pendingTrades as any[]).length > 0) {
+                    const tradeIds = (pendingTrades as any[]).map((t: any) => t.id);
                     await supabase.from("user_trades").update({ 
                       status: "REJECTED", 
                       error_message: "Macro Event Breaker: High-Impact news within 30 minutes." 
@@ -660,7 +660,7 @@ serve(async (req) => {
           .from("user_trades")
           .select("*, trade_opportunities!inner(*)")
           .eq("status", "OPEN")
-          .eq("trade_opportunities.model_id", "agent-day");
+          .eq("trade_opportunities.source", "agent-day");
 
         if (openScalps && openScalps.length > 0) {
            for (const trade of openScalps) {
@@ -691,8 +691,8 @@ serve(async (req) => {
                               }).catch(e => console.error("Failed to ping agent-trade:", e));
                            }
                         }
-                    } catch (e) {
-                        console.error("[Runner Handoff] Failed to check price for", trade.symbol, e.message);
+                    } catch (e: any) {
+                        console.error("[Runner Handoff] Failed to check price for", trade.symbol, e?.message);
                     }
                  }
               }
@@ -702,12 +702,24 @@ serve(async (req) => {
         const chunkSize = 10;
         for (let i = 0; i < symbols.length; i += chunkSize) {
           const chunk = symbols.slice(i, i + chunkSize);
-          await Promise.all(chunk.map(async (symbol) => {
+          await Promise.all(chunk.map(async (symbol: string) => {
           try {
             if (isCron && !isMarketOpen(symbol)) {
               console.log(`[Market Hours] Skipping ${symbol}: Market is closed.`);
               sendEvent({ type: 'progress', message: `[Market Hours] Skipping ${symbol}: Market is closed.` });
               return;
+            }
+
+            // --- SESSION-AWARE LIQUIDITY GATE FOR EQUITY INDICES ---
+            const equityIndices = ["US30", "NAS100", "SPX500", "GER30"];
+            if (isCron && equityIndices.includes(symbol)) {
+              const currentUtcHour = new Date().getUTCHours();
+              // Indices experience low volume and spread widening during Asian session (22:00 to 06:00 UTC)
+              if (currentUtcHour >= 22 || currentUtcHour < 6) {
+                console.log(`[Session Gate] Skipping ${symbol}: Outside active index liquidity hours (06:00-22:00 UTC, current: ${currentUtcHour}:00 UTC).`);
+                sendEvent({ type: 'progress', message: `[Session Gate] Skipping ${symbol}: Off-hours low liquidity.` });
+                return;
+              }
             }
             await insertAuditLog(supabase, {
               actor_type: "SYSTEM",
@@ -879,20 +891,20 @@ serve(async (req) => {
               if (symbol === "XAGUSD" || symbol === "XAUUSD") {
                 const correlatedPeer = symbol === "XAGUSD" ? "XAUUSD" : "XAGUSD";
                 try {
-                  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
                   const { data: peerNews } = await supabase
-                    .from("trade_opportunities")
-                    .select("side, risk_summary, ai_summary")
+                    .from("market_context")
+                    .select("macro_bias, narrative")
                     .eq("symbol", correlatedPeer)
-                    .eq("status", "PUBLISHED")
-                    .gte("created_at", twoHoursAgo)
+                    .eq("agent_persona", "MACRO_SCOUT")
+                    .gt("expires_at", new Date().toISOString())
                     .order("created_at", { ascending: false })
                     .limit(1)
                     .maybeSingle();
 
                   if (peerNews) {
-                    fundamental_context += `\n\n[PRECIOUS METALS INTER-ASSET CORRELATION]\nA live Tier-1 macro catalyst has fired for benchmark ${correlatedPeer} (${peerNews.side}). Details: ${peerNews.risk_summary}. Due to 90% precious metals correlation, ${symbol} MUST ALIGN with this fundamental macro direction.`;
-                    sendEvent({ type: 'progress', message: `[${symbol}] Inherited macro sentiment (${peerNews.side}) from correlated peer ${correlatedPeer}.` });
+                    const peerSide = peerNews.macro_bias === "BULLISH" ? "LONG" : "SHORT";
+                    fundamental_context += `\n\n[PRECIOUS METALS INTER-ASSET CORRELATION]\nA live Tier-1 macro catalyst has fired for benchmark ${correlatedPeer} (${peerSide}). Details: ${peerNews.narrative}. Due to 90% precious metals correlation, ${symbol} SHOULD CONSIDER this fundamental macro direction.`;
+                    sendEvent({ type: 'progress', message: `[${symbol}] Inherited macro sentiment (${peerSide}) from correlated peer ${correlatedPeer}.` });
                   }
                 } catch (e) {}
               }
@@ -1051,11 +1063,11 @@ serve(async (req) => {
               if (evaluation && evaluation.recommended_direction !== "NONE") {
                  let rawEntry = Number(evaluation.execution_parameters?.suggested_entry_price);
                  let rawTP = Number(evaluation.execution_parameters?.suggested_take_profit);
-                 let rawSL = Number(evaluation.execution_parameters?.suggested_stop_loss);
+                 let rawSL: number | null = Number(evaluation.execution_parameters?.suggested_stop_loss) || null;
                  
                  // Fallback to snapshot if AI omitted them
                  if (!rawEntry) rawEntry = snapshot.current_price;
-                 if (!rawSL) rawSL = evaluation.recommended_direction === "LONG" ? snapshot.safe_long_stop_loss : snapshot.safe_short_stop_loss;
+                 if (!rawSL) rawSL = evaluation.recommended_direction === "LONG" ? (snapshot.safe_long_stop_loss || null) : (snapshot.safe_short_stop_loss || null);
                  
                  try {
                    await supabase.from("shadow_ledger").insert({
@@ -1067,8 +1079,8 @@ serve(async (req) => {
                       stop_loss: rawSL || null,
                       status: "PENDING"
                    });
-                 } catch (err) {
-                   console.error(`[Shadow Ledger] Failed to insert raw signal for ${symbol}: ${err.message}`);
+                 } catch (err: any) {
+                   console.error(`[Shadow Ledger] Failed to insert raw signal for ${symbol}: ${err?.message}`);
                  }
               }
             } catch (err: any) {
@@ -1138,11 +1150,20 @@ serve(async (req) => {
             console.log(`[Layer B: Cognitive Guard] AI Response for ${symbol}: Valid Setup = ${is_valid}, Direction = ${evaluation.recommended_direction}`);
             console.log(`[Layer B] AI Rationale: ${institutional_rationale}`);
 
-            // --- OVERRIDE: ADX FILTER FOR MEAN REVERSION & BOUNDARY FADES ---
-            const meanReversionStrategies = ["MEAN_REVERSION", "RANGE_BOUNDARY_FADE", "BOUNDARY_REJECTION_SCALP", "ASIAN_RANGE_SWEEP"];
-            if (is_valid && meanReversionStrategies.includes(evaluation.strategy_applied) && snapshot.adx_14 && snapshot.adx_14 >= 22) {
-               is_valid = false;
-               institutional_rationale = `Execution Desk Rejected: Cannot fade high-momentum trend (ADX ${snapshot.adx_14.toFixed(1)} >= 22). Mean reversion strictly requires low-momentum consolidation (ADX < 20).`;
+            // --- OVERRIDE: HTF TREND & ADX FILTER FOR MEAN REVERSION & BOUNDARY FADES ---
+            const meanReversionStrategies = ["MEAN_REVERSION", "RANGE_BOUNDARY_FADE", "BOUNDARY_REJECTION_SCALP", "ASIAN_RANGE_SWEEP", "CONTRARIAN_SCALP", "CONTRARIAN_MEAN_REVERSION"];
+            if (is_valid && meanReversionStrategies.includes(evaluation.strategy_applied)) {
+              const htfOpposing = (snapshot.htf_trend && snapshot.htf_trend !== "CHOP" && (
+                (evaluation.recommended_direction === "LONG" && snapshot.htf_trend === "BEARISH") ||
+                (evaluation.recommended_direction === "SHORT" && snapshot.htf_trend === "BULLISH")
+              ));
+              if (snapshot.adx_14 && snapshot.adx_14 >= 22) {
+                is_valid = false;
+                institutional_rationale = `Execution Desk Rejected: Cannot fade high-momentum trend (ADX ${snapshot.adx_14.toFixed(1)} >= 22). Mean reversion strictly requires low-momentum consolidation (ADX < 20).`;
+              } else if (htfOpposing) {
+                is_valid = false;
+                institutional_rationale = `Execution Desk Rejected: Counter-trend mean reversion against confirmed Higher Timeframe trend (${snapshot.htf_trend}) is strictly forbidden.`;
+              }
             }
 
             if (!is_valid || confidence_score < 70) {
@@ -1176,8 +1197,8 @@ serve(async (req) => {
                   : `AI Confidence Score (${confidence_score}) below 70 threshold.`;
               }
                 
-              console.log(`[Layer B: Cognitive Guard] REJECTED ${symbol} by AI Risk Officer: ${rejectReason}`);
-              sendEvent({ type: 'progress', message: `[Layer B: AI Risk Officer] REJECTED ${symbol}: ${rejectReason}` });
+              console.log(`[Layer B: Cognitive Guard] SKIPPED / C-TIER ${symbol} by AI Risk Officer: ${rejectReason}`);
+              sendEvent({ type: 'progress', message: `[Layer B: AI Risk Officer] Skipped ${symbol}: ${rejectReason}` });
               await insertAuditLog(supabase, {
                 actor_type: "SYSTEM",
                 action: "REJECTED_BY_AI",
@@ -1190,20 +1211,6 @@ serve(async (req) => {
                 layer: "Cognitive AI"
               });
 
-              await supabase.from("trade_opportunities").insert({
-                symbol,
-                side: dbSide,
-                timeframe: timeframe.toLowerCase(),
-                status: "REJECTED",
-                source: "agent-day",
-                ai_summary: rejectReason,
-                ai_risks: "Rejected by AI Risk Officer",
-                model_id: modelId,
-                model_version: modelVersion,
-                risk_summary: `RSI ${snapshot.rsi_14}`,
-                confidence: confidence_score
-              });
-              
               // Hive Mind: Reset HFT bias on major AI rejection
               await pingHFTDirector(symbol, "NEUTRAL");
               return;
@@ -1213,7 +1220,21 @@ serve(async (req) => {
             sendEvent({ type: 'progress', message: `[Layer B: Cognitive Guard] APPROVED by AI Risk Officer.` });
 
             // LAYER C: Structural Risk/Reward Validation
-            const risk = Math.abs(entry_price - stop_loss);
+            // --- HIGH-BETA VOLATILITY FLOOR (1.25x ATR) ---
+            const highBetaAssets = ["XAUUSD", "XAGUSD", "UKOIL", "USOIL", "US30", "NAS100", "SPX500", "GER30"];
+            if (highBetaAssets.includes(symbol)) {
+              const minBetaSlDist = Number(((snapshot.atr_14 || Math.abs(entry_price * 0.01)) * 1.25).toFixed(3));
+              const currentSlDist = Math.abs(entry_price - stop_loss);
+              if (currentSlDist < minBetaSlDist) {
+                const widenedSl = dbSide === "LONG"
+                  ? Number((entry_price - minBetaSlDist).toFixed(3))
+                  : Number((entry_price + minBetaSlDist).toFixed(3));
+                console.log(`[${symbol}] [Volatility Guard] SL distance (${currentSlDist.toFixed(3)}) was tighter than 1.25x ATR (${minBetaSlDist.toFixed(3)}). Widening SL: ${stop_loss} → ${widenedSl}`);
+                stop_loss = widenedSl;
+                institutional_rationale += ` [Volatility Guard: Stop widened to 1.25x ATR ($${stop_loss}) to prevent wick stop-out]`;
+              }
+            }
+            let risk = Math.abs(entry_price - stop_loss);
             let take_profit = evaluation.execution_parameters?.suggested_take_profit;
             if (take_profit) take_profit = Number(take_profit.toFixed(3));
             
@@ -1278,17 +1299,35 @@ serve(async (req) => {
             const contractSize = assetContractSizes[symbol] || 1;
             const minLot = 0.01;
             const maxPermissibleCapitalRisk = 45.0; // 3.0% cap on $1,500 base capital
-            const maxAllowableStopDistance = maxPermissibleCapitalRisk / (minLot * contractSize);
+            
+            let pointValueUsd = contractSize;
+            if (symbol.endsWith("JPY") && snapshot.current_price > 0) {
+              pointValueUsd = contractSize / snapshot.current_price;
+            } else if (symbol === "GER30") {
+              pointValueUsd = contractSize * 1.1;
+            }
+
+            const maxAllowableStopDistance = maxPermissibleCapitalRisk / (minLot * pointValueUsd);
+            const maxPermissibleEntryOffset = Math.max((snapshot.atr_14 || 1) * 1.0, snapshot.current_price * 0.015);
 
             if (maxAllowableStopDistance > 0 && risk > maxAllowableStopDistance) {
-              const rawRisk = risk * minLot * contractSize;
-              console.log(`[${symbol}] [Origination Risk Governor] Raw risk ($${rawRisk.toFixed(2)}) exceeds $${maxPermissibleCapitalRisk} cap. Anchoring entry to structural discount ($${entry_price} → ${dbSide === "LONG" ? (stop_loss + maxAllowableStopDistance).toFixed(3) : (stop_loss - maxAllowableStopDistance).toFixed(3)}).`);
-              
-              entry_price = dbSide === "LONG"
+              const rawRisk = risk * minLot * pointValueUsd;
+              const anchoredEntry = dbSide === "LONG"
                 ? Number((stop_loss + maxAllowableStopDistance).toFixed(3))
                 : Number((stop_loss - maxAllowableStopDistance).toFixed(3));
+
+              if (Math.abs(anchoredEntry - snapshot.current_price) > maxPermissibleEntryOffset) {
+                const msg = `Risk ($${rawRisk.toFixed(2)}) exceeds $${maxPermissibleCapitalRisk.toFixed(2)} cap at 0.01 lot minimum and entry offset (${Math.abs(anchoredEntry - snapshot.current_price).toFixed(3)}) exceeds 1.0x ATR buffer (${maxPermissibleEntryOffset.toFixed(3)}). Setup rejected to preserve capital.`;
+                console.log(`[${symbol}] [Origination Risk Governor] REJECTED: ${msg}`);
+                sendEvent({ type: 'progress', message: `[${symbol}] REJECTED: ${msg}` });
+                rejections.push({ symbol, reason: msg, layer: "Risk Governor" });
+                return;
+              }
+
+              console.log(`[${symbol}] [Origination Risk Governor] Raw risk ($${rawRisk.toFixed(2)}) exceeds $${maxPermissibleCapitalRisk} cap. Anchoring entry to structural limit ($${entry_price} → ${anchoredEntry}).`);
+              entry_price = anchoredEntry;
               risk = Math.abs(entry_price - stop_loss);
-              institutional_rationale += ` [Origination Risk Governor: Entry anchored to $${entry_price} so 0.01 lot dollar risk stays strictly within 3% risk cap ($${maxPermissibleCapitalRisk.toFixed(2)})]`;
+              institutional_rationale += ` [Origination Risk Governor: Entry anchored to $${entry_price} within ATR buffer so 0.01 lot dollar risk stays strictly within 3% risk cap ($${maxPermissibleCapitalRisk.toFixed(2)})]`;
             }
 
             const expectedReturnPct = Math.abs(take_profit - entry_price) / entry_price;
@@ -1460,7 +1499,7 @@ serve(async (req) => {
                 entry_plan_json: {
                   price: entry_price,
                   order_type: order_type,
-                  scaled_entries: evaluation.execution_parameters?.scaled_entries || null,
+                  scaled_entries: (evaluation.execution_parameters as any)?.scaled_entries || null,
                   max_holding_bars: 20,
                   horizon_hours: 10,
                   trading_central_levels: tcLevels,
