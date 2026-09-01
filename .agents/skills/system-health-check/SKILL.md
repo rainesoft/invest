@@ -21,7 +21,7 @@ Whenever the user requests a "system health check", you should:
    - No silent agent crashes are occurring (query `audit_log` for `AGENT_CRASH`).
    - Autonomous agents (`agent-news`, `agent-day`, `agent-swing` split crons) are generating signals and heartbeats.
    - Database Webhook & Cron HTTP responses in `net._http_response` (queried via `public.check_http_response_errors()` RPC) have zero network failures (`Couldn't resolve host name`) and no unhandled 500 server errors.
-   - PostgREST queries avoid unconstrained embedded table joins (Section 1J) and queries targeting `trade_opportunities` by agent name filter by `source` rather than `model_id` UUID (Section 2E).
+   - PostgREST queries avoid unconstrained embedded table joins (Section 1J), queries targeting `trade_opportunities` by agent name filter by `source` rather than `model_id` UUID (Section 2E), and signal inserts strictly normalize `side` to `'LONG' | 'SHORT'` (handling `REQUIRE_LTF_DRILLDOWN` via `trade_watchlists` per Section 2F).
    - Orphaned signals (stuck in `PUBLISHED`, `APPROVED` without `user_trades`, or `PENDING`) are zero, and Execution Desk volume skips explicitly mark `status = 'REJECTED'` (Section 3I).
    - Inter-agent HTTP calls construct sibling URLs using `SUPABASE_URL/functions/v1` and avoid referencing undefined `WEBHOOK_URL` (Section 4B).
    - Closed trades with calculated `profit_usd` are not desynced in `status = 'OPEN'` (reconcile to `WON` or `LOST` via Section 3G, Step 1c).
@@ -32,7 +32,7 @@ Whenever the user requests a "system health check", you should:
    - All TP targets (`tp1`, `tp2`, `tp3`) enforce the 3-Layer Direction Validation against entry prices across `agent-swing`, `agent-trade`, and `vps-poll`, verifying Target 2 satisfies $\ge 1:1.70$ R:R.
    - `vps-history` callback adheres to canonical schema (`profit_usd`, `error_message`, `status = WON | LOST`) and dynamically updates user capital and high-water mark.
    - Stale `ACTIVE` trade opportunities older than 24 hours without live `OPEN` positions are safely expired to `status = 'EXPIRED'` (complying with `trade_opportunities_status_check` constraint).
-   - Completed trades (`WON`/`LOST`/`CLOSED`) have their parent `trade_opportunities` reconciled (`WON` for positive net PnL, `LOST` for negative net PnL, `EXPIRED` for cancelled/missed entries) rather than lingering in `ACTIVE`.
+   - Completed trades (`WON`/`LOST`/`CLOSED`) have their parent `trade_opportunities` reconciled immediately (`WON` for positive net PnL, `LOST` for negative net PnL, `EXPIRED` for cancelled/missed entries) without lingering in `ACTIVE`.
    - `vps-poll` receives fresh MT5 heartbeats (within 60s) and streams live 30m candles (`market_data_pti`).
    - Hourly autonomous SRE watchdog `agent-sre` executed via `agent-sre-poll` audits all 9 subsystem probes (including cron failures, HTTP errors via RPC, agent crashes, pipeline self-healing, VPS heartbeats, market data freshness, treasury solvency, AI model timeout sweeps, and drawdown/circuit-breaker limits), auto-heals status desyncs, and records `SRE_HEARTBEAT`.
    - AI model evaluation timeouts (`API_TIMEOUT` in `audit_log`) are zero or transient, backed by exponential retry resiliency in `agent-day` and `agent-swing`.

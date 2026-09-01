@@ -498,9 +498,23 @@ WHERE macro_bias = 'VOLATILITY_LOCKOUT'
 > **Incident (2026-09-01):** `agent-day` queried `.eq("trade_opportunities.model_id", "agent-day")` in Phase 1B Runner Handoff, resulting in PostgreSQL error `22P02 invalid input syntax for type uuid: "agent-day"` (HTTP 400 Bad Request) because `model_id` is a UUID column.
 
 ### Standard Rule:
-- `model_id` (UUID): Used strictly for referencing registered ML model version UUIDs.
+- `model_id` (UUID): Used strictly for referencing registered ML model version UUIDs. Never insert string agent identifiers like `"agent-day"` into `model_id`.
 - `source` (TEXT): Stores the string agent identifier generating the signal (`'agent-day'`, `'agent-swing'`, `'agent-news'`).
 - Always query `.eq("trade_opportunities.source", "agent-day")` when filtering by agent name.
+
+---
+
+## ⚠️ 2F. Schema Standard — trade_opportunities Side Check Constraint ('LONG' | 'SHORT')
+
+> [!WARNING]
+> **Incident (2026-09-01):** When `agent-swing` evaluated a high-confidence setup with low R:R, it flagged `recommended_direction = "REQUIRE_LTF_DRILLDOWN"`. When inserting into `trade_opportunities` and `shadow_ledger`, the raw string `"REQUIRE_LTF_DRILLDOWN"` was passed to `side`, violating the check constraint `trade_opportunities_side_check` (which strictly permits only `'LONG'` and `'SHORT'`).
+
+### Standard Rule:
+- In `trade_opportunities` and `shadow_ledger`, `side` must always be normalized to strictly `'LONG'` or `'SHORT'`.
+- When an agent sets `recommended_direction` to `"REQUIRE_LTF_DRILLDOWN"`, it must:
+  1. Determine the underlying macro direction bias (`"LONG"` or `"SHORT"`).
+  2. Queue the symbol to `trade_watchlists` for precision entry drilldown.
+  3. Mark the opportunity as `REJECTED` (or `PENDING_DRILLDOWN`) with `side` set to the normalized `"LONG"` or `"SHORT"` direction.
 
 ---
 
