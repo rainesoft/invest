@@ -487,18 +487,64 @@ serve(async (req) => {
       });
     }
 
-    // 2. Dispatch Telegram Incident Notification if issues or remediations occurred
+    // 2. Telemetry Unit Humanizers
+    const vpsLatencyDisplay = vpsMinsAgo === null
+      ? "N/A"
+      : vpsMinsAgo < 1
+        ? `${Math.round(vpsMinsAgo * 60)}s (Optimal)`
+        : vpsMinsAgo < 5
+          ? `${vpsMinsAgo.toFixed(1)}m (Active)`
+          : `${vpsMinsAgo.toFixed(1)}m ⚠️ (Delayed)`;
+
+    const candleLatencyDisplay = candleHoursAgo === null
+      ? "N/A"
+      : candleHoursAgo < 1
+        ? `${Math.round(candleHoursAgo * 60)}m (Real-time)`
+        : `${candleHoursAgo.toFixed(1)}h ⚠️ (Lagging)`;
+
+    const solvencyDisplay = `${solvencyRatio.toFixed(2)}x Reserve Ratio (${solvencyRatio >= 1.5 ? "Healthy" : "Tight"})`;
+    const aiErrorsDisplay = `${apiTimeoutCount} in last hour`;
+
+    // 3. Intelligent Alert Throttling (Suppress identical recurring errors within 4 hours)
+    let shouldNotifyTelegram = false;
     if (!isHealthy || autoRemediations.length > 0) {
+      if (autoRemediations.length > 0) {
+        shouldNotifyTelegram = true;
+      } else {
+        const { data: lastAlert } = await supabase
+          .from("audit_log")
+          .select("created_at, payload_json")
+          .eq("action", "SRE_HEALTH_ALERT")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        const lastAlertTime = lastAlert?.created_at ? new Date(lastAlert.created_at).getTime() : 0;
+        const hoursSinceLastAlert = (Date.now() - lastAlertTime) / (1000 * 60 * 60);
+
+        const prevIssues = JSON.stringify(lastAlert?.payload_json?.issues || []);
+        const currentIssues = JSON.stringify(issues);
+        const isIdenticalAlert = prevIssues === currentIssues;
+
+        if (!isIdenticalAlert || hoursSinceLastAlert >= 4) {
+          shouldNotifyTelegram = true;
+        } else {
+          console.log(`[Agent SRE] Suppressed identical recurring SRE Telegram alert (${hoursSinceLastAlert.toFixed(1)}h since last broadcast).`);
+        }
+      }
+    }
+
+    if (shouldNotifyTelegram) {
       const tgLines = [
-        `🤖 <b>AGENT SRE — SYSTEM HEALTH REPORT</b>`,
+        `🤖 <b>AGENT SRE | SYSTEM HEALTH REPORT</b>`,
         `⏱ <i>${now.toUTCString()}</i>`,
-        ``,
-        isHealthy ? `🟢 <b>Status:</b> Healthy (Self-Healing Executed)` : `🔴 <b>Status:</b> Anomalies Detected (${issues.length})`,
+        `━━━━━━━━━━━━━━━━━━━━━`,
+        isHealthy ? `🟢 <b>Status:</b> Healthy (Self-Healing Executed)` : `🔴 <b>Status:</b> Action Required (${issues.length} Anomal${issues.length > 1 ? "ies" : "y"})`,
         ``,
       ];
 
       if (issues.length > 0) {
-        tgLines.push(`<b>Issues Detected:</b>`);
+        tgLines.push(`<b>Active Incidents:</b>`);
         tgLines.push(...issues);
         tgLines.push(``);
       }
@@ -511,11 +557,11 @@ serve(async (req) => {
         tgLines.push(``);
       }
 
-      tgLines.push(`<b>System Telemetry:</b>`);
-      tgLines.push(`• VPS Latency: <code>${vpsMinsAgo !== null ? `${vpsMinsAgo.toFixed(1)}m` : "N/A"}</code>`);
-      tgLines.push(`• Treasury Solvency: <code>${solvencyRatio.toFixed(2)}x</code>`);
-      tgLines.push(`• Candle Latency: <code>${candleHoursAgo !== null ? `${candleHoursAgo.toFixed(1)}h` : "N/A"}</code>`);
-      tgLines.push(`• AI Timeouts (1h): <code>${apiTimeoutCount}</code>`);
+      tgLines.push(`<b>System Telemetry Health:</b>`);
+      tgLines.push(`• VPS Heartbeat: <code>${vpsLatencyDisplay}</code>`);
+      tgLines.push(`• Candle Feed: <code>${candleLatencyDisplay}</code>`);
+      tgLines.push(`• Treasury Solvency: <code>${solvencyDisplay}</code>`);
+      tgLines.push(`• AI Service Errors: <code>${aiErrorsDisplay}</code>`);
 
       await notifyTelegram(tgLines.join("\n"));
     }
