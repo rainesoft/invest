@@ -143,13 +143,109 @@ function parseNumericString(val: string): number | null {
   return num; // % and regular numbers
 }
 
+function truncateWords(str: string, maxLen: number): string {
+  if (!str || str.length <= maxLen) return str;
+  const truncated = str.slice(0, maxLen);
+  const lastSpace = truncated.lastIndexOf(" ");
+  return (lastSpace > 10 ? truncated.slice(0, lastSpace) : truncated).trim() + "…";
+}
+
+function getSymbolBadge(symbol: string): string {
+  const s = (symbol || "").toUpperCase();
+  if (["AAPL", "MSFT", "TSLA", "AMZN", "NVDA", "META", "GOOGL"].includes(s)) return "🇺🇸";
+  if (["SPX500", "US500", "NAS100", "USTEC", "US30", "DJ30"].includes(s)) return "📈";
+  if (s === "JP225") return "🇯🇵";
+  if (s === "EURUSD") return "🇪🇺🇺🇸";
+  if (s === "GBPUSD") return "🇬🇧🇺🇸";
+  if (s === "USDJPY") return "🇺🇸🇯🇵";
+  if (s === "AUDUSD") return "🇦🇺🇺🇸";
+  if (s === "NZDUSD") return "🇳🇿🇺🇸";
+  if (s === "USDCAD") return "🇺🇸🇨🇦";
+  if (s === "EURJPY") return "🇪🇺🇯🇵";
+  if (s === "GBPJPY") return "🇬🇧🇯🇵";
+  if (s === "AUDJPY") return "🇦🇺🇯🇵";
+  if (s === "CADJPY") return "🇨🇦🇯🇵";
+  if (s === "EURGBP") return "🇪🇺🇬🇧";
+  if (["XAUUSD", "GOLD"].includes(s)) return "🪙";
+  if (["XAGUSD", "SILVER"].includes(s)) return "🥈";
+  if (["UKOIL", "USOIL", "BRENT", "WTI", "XBRUSD", "XTIUSD"].includes(s)) return "🛢";
+  if (["BTCUSD", "ETHUSD"].includes(s)) return "⚡";
+  return "🌐";
+}
+
+function cleanSourceAndTitle(rawTitle: string): { title: string; source: string; isSpam: boolean } {
+  if (!rawTitle) return { title: "", source: "Institutional Wire", isSpam: true };
+
+  let title = rawTitle.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").trim();
+
+  // Check for social / low-tier scraper spam
+  const lower = title.toLowerCase();
+  if (
+    lower.includes("- youtube") || 
+    lower.includes("- reddit") || 
+    lower.includes("- tiktok") || 
+    lower.includes("watch?v=") || 
+    lower.includes("reddit.com") ||
+    lower.includes("youtu.be")
+  ) {
+    // If it's a social video or forum post, strip the tag or mark as lower priority
+    title = title.replace(/\s*-\s*(YouTube|Reddit|TikTok)\b/gi, "").trim();
+  }
+
+  let source = "Institutional Wire";
+
+  // Match known source suffixes
+  const sourceMatch = title.match(/\s*(?:[-–—|]\s*)([A-Za-z0-9\s.]+)(?:$)/);
+  if (sourceMatch) {
+    const candidate = sourceMatch[1].trim();
+    if (["Reuters", "Bloomberg", "MarketWatch", "ForexLive", "CNBC", "Financial Times", "FT", "WSJ", "Wall Street Journal", "Dow Jones", "CoinDesk", "Cointelegraph", "Investing.com", "Equiti", "Noticias de TradingView", "TradingView"].some(s => candidate.toLowerCase().includes(s.toLowerCase()))) {
+      source = candidate.replace(/^Noticias de\s+/i, "");
+      title = title.slice(0, sourceMatch.index).trim();
+    }
+  }
+
+  // Clean trailing punctuation / dashes
+  title = title.replace(/[-–—|:\s]+$/, "").trim();
+  title = truncateWords(title, 110);
+
+  return { title, source, isSpam: false };
+}
+
+function getNewsCatalystCategory(title: string): string {
+  const lower = (title || "").toLowerCase();
+  if (["fed", "powell", "warsh", "williams", "rate hike", "rate cut", "interest rate", "boj", "ecb", "rbnz", "rba", "hawkish", "dovish", "central bank", "yields"].some(k => lower.includes(k))) {
+    return "Central Bank & Rates Policy";
+  }
+  if (["oil", "brent", "wti", "crude", "opec", "energy", "jet-fuel", "tanker", "pipeline", "strait"].some(k => lower.includes(k))) {
+    return "Energy & Commodity Supply";
+  }
+  if (["gdp", "cpi", "ppi", "pce", "inflation", "retail sales", "trade balance"].some(k => lower.includes(k))) {
+    return "Economic Growth & Inflation";
+  }
+  if (["unemployment", "jobless", "nfp", "payrolls", "jobs", "labor"].some(k => lower.includes(k))) {
+    return "Labor Market & Employment";
+  }
+  if (["war", "strike", "iran", "tariffs", "sanctions", "geopolitical", "ceasefire", "military"].some(k => lower.includes(k))) {
+    return "Geopolitics & Global Trade";
+  }
+  if (["gold", "silver", "intervention", "currency", "dxy"].some(k => lower.includes(k))) {
+    return "FX & Sovereign Reserves";
+  }
+  return "Macroeconomic Catalyst";
+}
+
 async function notify(text: string) {
   if (!TG_TOKEN || !TG_CHAT) return;
   const url = `https://api.telegram.org/bot${TG_TOKEN}/sendMessage`;
   await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: TG_CHAT, text, parse_mode: "HTML" }),
+    body: JSON.stringify({
+      chat_id: TG_CHAT,
+      text,
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }),
   }).catch(() => {});
 }
 
@@ -611,21 +707,24 @@ CRITICAL RULES:
           if (finalParsed.confidence >= 85 && (finalParsed.sentiment === "BULLISH" || finalParsed.sentiment === "BEARISH") && validSymbols.includes(finalParsed.symbol)) {
             
             const side = finalParsed.sentiment === "BULLISH" ? "LONG" : "SHORT";
+            const macroBias = finalParsed.sentiment === "BULLISH" ? "BULLISH" : "BEARISH";
             
-            // Check for duplicate sentiment alerts on this symbol in the last 15 minutes to prevent spam
-            const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+            // Check for duplicate sentiment alerts on this symbol in the last 30 minutes to prevent spam
+            // (If sentiment reversed from bullish to bearish, allow immediate broadcast)
+            const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
             const { data: recentContext } = await supabase
               .from("market_context")
-              .select("id")
+              .select("macro_bias, created_at")
               .eq("symbol", finalParsed.symbol)
               .eq("agent_persona", "MACRO_SCOUT")
-              .gte("created_at", fifteenMinsAgo)
+              .gte("created_at", thirtyMinsAgo)
+              .order("created_at", { ascending: false })
               .limit(1);
 
-            const isDuplicate = recentContext && recentContext.length > 0;
+            const lastBias = recentContext?.[0]?.macro_bias;
+            const isDuplicate = Boolean(lastBias && lastBias === macroBias);
 
             // Save macro sentiment context to market_context table (expires in 4 hours)
-            const macroBias = finalParsed.sentiment === "BULLISH" ? "BULLISH" : "BEARISH";
             const { error: ctxErr } = await supabase.from("market_context").insert({
               symbol: finalParsed.symbol,
               agent_persona: "MACRO_SCOUT",
@@ -648,18 +747,31 @@ CRITICAL RULES:
 
             console.log(`[Macro Scout] [Trace: ${traceId}] Sentiment context recorded & agent-swing alerted for:`, side, finalParsed.symbol);
 
-            if (!isDuplicate) {
-              const sentimentEmoji = finalParsed.sentiment === "BULLISH" ? "🟢" : "🔴";
-              const cleanTitle = title.length > 95 ? title.slice(0, 92) + "..." : title;
-              const actionText = side === "LONG" ? "long" : "short";
+            const { title: cleanTitle, source: sourceName, isSpam } = cleanSourceAndTitle(title);
 
-              await notify(
-                `📰 <b>MACRO ALERT</b> | ${sentimentEmoji} <b>${finalParsed.sentiment} ${finalParsed.symbol}</b> (${finalParsed.confidence}%)\n` +
-                `<i>"${cleanTitle}"</i>\n` +
-                `⚡ <b>Action:</b> Scanning ${actionText} swing setups`
-              );
+            if (!isDuplicate && !isSpam && cleanTitle.length >= 10) {
+              const sentimentEmoji = finalParsed.sentiment === "BULLISH" ? "🟢" : "🔴";
+              const symbolBadge = getSymbolBadge(finalParsed.symbol);
+              const catalystCategory = getNewsCatalystCategory(cleanTitle);
+              const actionText = side === "LONG" ? "LONG" : "SHORT";
+
+              const macroCard = [
+                `📰 <b>MACRO CATALYST</b> | ${sentimentEmoji} <b>${finalParsed.sentiment} ${finalParsed.symbol}</b> ${symbolBadge}`,
+                `━━━━━━━━━━━━━━━━━━━━━`,
+                `🔥 <b>Conviction:</b> <code>${finalParsed.confidence}% High Impact</code>`,
+                `🏷 <b>Category:</b> ${catalystCategory}`,
+                ``,
+                `<i>"${cleanTitle}"</i>`,
+                `🌐 <b>Source:</b> <code>${sourceName}</code>`,
+                ``,
+                `⚡ <b>Strategy Impact:</b>`,
+                `• Swing engine scanning <b>${actionText}</b> setups`,
+                `• Macro Bias: ${finalParsed.sentiment === "BULLISH" ? "Upside Momentum" : "Downside Reversal Risk"}`
+              ].join("\n");
+
+              await notify(macroCard);
             } else {
-              console.log(`[Macro Scout] [Trace: ${traceId}] Throttled duplicate telegram broadcast for:`, finalParsed.symbol);
+              console.log(`[Macro Scout] [Trace: ${traceId}] Throttled duplicate/spam telegram broadcast for:`, finalParsed.symbol);
             }
 
             results.push({ rule: "SENTIMENT", action: side, symbol: finalParsed.symbol });
