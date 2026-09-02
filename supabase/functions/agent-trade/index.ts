@@ -443,9 +443,49 @@ serve(async (req) => {
         }
       }
 
-      const tgMessage = `⚠️ <b>AI AUTO-EJECT TRIGGERED (${signal.symbol})</b> ⚠️\n\nThe AI has dynamically downgraded and REJECTED an active signal.\n\n<i>${signal.ai_risks || "AI invalidated the setup."}</i>\n\n<b>Action Taken:</b> Automatically liquidated ${closedCount} open trades via ${isVpsAlive ? "MT5 VPS" : "MetaAPI"} to flatten exposure. ${errorCount > 0 ? `(${errorCount} errors during execution)` : ""}`;
+      let cleanRiskReason = (signal.ai_risks || "AI invalidated the setup due to adverse risk/confluence shifts.").trim();
+      if (cleanRiskReason.length > 200) {
+        cleanRiskReason = cleanRiskReason.slice(0, 197) + "...";
+      }
+
+      let tgMessage: string;
+      if (closedCount > 0) {
+        tgMessage = [
+          `🛡️ <b>RISK ENGINE | EMERGENCY AUTO-EJECT (${signal.symbol})</b>`,
+          `━━━━━━━━━━━━━━━━━━━━━`,
+          `⚠️ <b>Trigger:</b> Active Signal Invalidation`,
+          `<i>${cleanRiskReason}</i>`,
+          ``,
+          `⚡ <b>Action Taken:</b>`,
+          `• Liquidated <b>${closedCount} active position${closedCount > 1 ? "s" : ""}</b> via ${isVpsAlive ? "MT5 VPS" : "MetaAPI"} to flatten exposure`,
+          errorCount > 0 ? `• ⚠️ ${errorCount} error(s) occurred during closure` : `• ✅ All open trades closed successfully`
+        ].join("\n");
+      } else {
+        tgMessage = [
+          `🛡️ <b>RISK ENGINE | SIGNAL CANCELLED (${signal.symbol})</b>`,
+          `━━━━━━━━━━━━━━━━━━━━━`,
+          `ℹ️ <b>Status:</b> Setup Invalidation / Execution Skipped`,
+          `<i>${cleanRiskReason}</i>`,
+          ``,
+          `⚡ <b>Action Taken:</b>`,
+          `• Signal aborted before broker execution (0 live trades affected)`,
+          `• Capital Protected: <b>$0.00 exposure at risk</b>`
+        ].join("\n");
+      }
+
       await notifyTelegram(tgMessage);
-      await insertAuditLog(supabase, { actor_type: "SYSTEM", action: "AUTO_EJECT_EXECUTED", entity_type: "research", entity_id: signal.id, payload_json: { reason: "Signal rejected by agent-risk. Trades automatically liquidated.", closedCount, errorCount, route: isVpsAlive ? "VPS" : "MetaAPI" } });
+      await insertAuditLog(supabase, {
+        actor_type: "SYSTEM",
+        action: "AUTO_EJECT_EXECUTED",
+        entity_type: "research",
+        entity_id: signal.id,
+        payload_json: {
+          reason: cleanRiskReason,
+          closedCount,
+          errorCount,
+          route: isVpsAlive ? "VPS" : "MetaAPI"
+        }
+      });
 
       return new Response(`Auto-eject executed via ${isVpsAlive ? "VPS" : "MetaAPI"}. ${closedCount} trades closed.`, { status: 200 });
     }
