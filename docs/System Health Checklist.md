@@ -584,13 +584,15 @@ If this query returns rows, investigate a routing failure or a hardcoded status 
 
 ---
 
-## ⚠️ 3B. Trade Execution — MT5 Execution Errors (10014, 10015, 10016, 10019)
+## ⚠️ 3B. Trade Execution — MT5 Execution Errors (10013, 10014, 10015, 10016, 10018, 10019)
 
 > [!WARNING]
-> **Incident (2026-08-04, 2026-08-10, 2026-08-24, 2026-08-25):** 
-> - The strategy logic split the minimum lot size (0.01) into two legs (0.005 lots each) and also incorrectly sent `0.01` lots for indices like `US30` which actually require a minimum of `0.1` lots on some brokers. MetaTrader 5 strictly enforces minimum lot sizes and increments, and instantly rejected the trades with `TRADE_RETCODE_INVALID_VOLUME` (Code 10014).
-> - On 2026-08-24, an S-Tier `BUY STOP` order on `BTCUSD` was rejected with `TRADE_RETCODE_INVALID_PRICE` (Code 10015) because live market price had already moved past the breakout entry level before order placement.
-> - On 2026-08-25, an A-Tier EURUSD LONG trade's companion RUNNER leg was rejected with `TRADE_RETCODE_INVALID_STOPS` (Code 10016) because `tp3` was set to `1.13` (below the entry price of `1.16` on a BUY order). The primary SWING leg succeeded using `tp2 = 1.17`, but the RUNNER leg failed.
+> **Incident (2026-08-04, 2026-08-10, 2026-08-24, 2026-08-25, 2026-09-02):** 
+> - **Code 10013 (Invalid Request / Symbol Not Found):** Global indices like `SPX500` and `NAS100` failed execution on MT5 because the broker (Exness) uses custom symbol names (`US500`, `USTEC`, `DE30`).
+> - **Code 10014 (Invalid Volume):** The strategy logic split the minimum lot size (0.01) into two legs (0.005 lots each) and also incorrectly sent `0.01` lots for indices like `US30` which actually require a minimum of `0.1` lots on some brokers. MetaTrader 5 strictly enforces minimum lot sizes and increments, and instantly rejected the trades with `TRADE_RETCODE_INVALID_VOLUME`.
+> - **Code 10015 (Invalid Price / Slipped Breakout Entry):** On 2026-08-24, an S-Tier `BUY STOP` order on `BTCUSD` was rejected with `TRADE_RETCODE_INVALID_PRICE` because live market price had already moved past the breakout entry level before order placement.
+> - **Code 10016 (Invalid Stops / TP Direction Inversion):** On 2026-08-25, an A-Tier EURUSD LONG trade's companion RUNNER leg was rejected with `TRADE_RETCODE_INVALID_STOPS` because `tp3` was set to `1.13` (below the entry price of `1.16` on a BUY order). The primary SWING leg succeeded using `tp2 = 1.17`, but the RUNNER leg failed.
+> - **Code 10018 (Market Closed):** On 2026-09-01 at 21:30 UTC, a `UKOIL` order failed because the energy market was closed during the daily rollover maintenance window.
 
 Monitor for execution blocks on the broker side:
 
@@ -602,11 +604,11 @@ ORDER BY created_at DESC;
 ```
 
 If this query returns rows, investigate the error code:
+- **Code 10013 (Invalid Request / Symbol Alias Mismatch):** The asset symbol requested by the cloud agent (e.g. `SPX500`, `NAS100`, `GER30`) does not match the broker's exact symbol name on MT5 (e.g. `US500`, `USTEC`, `DE30`). Verify that `vps-poll` translates canonical symbols to broker symbols and `RaineInvestEA.mq5`'s `ResolveBrokerSymbol()` helper is active (Section 3K).
 - **Code 10014 (Invalid Volume):** Ensure that the volume algorithms in `agent-trade` and `agent-news` enforce a strict mathematical floor against a dynamic `volumeStep` mapping (e.g. `US30 = 0.1`, `BTCUSD = 0.01`), rather than hardcoding `0.01` universally.
-- **Code 10015 (Invalid Price / Stale Breakout Entry):** A pending stop/limit order (e.g., `BUY STOP` or `SELL STOP`) had an entry price that was invalid relative to current market Ask/Bid (e.g., placing a BUY STOP below or at the current Ask price because price already broke out before the order was submitted). **Diagnostic Action:** When this occurs, ensure the parent `trade_opportunities` status is updated to `REJECTED` rather than remaining stuck in `APPROVED`, and check that `agent-trade` validates live price against order type prior to placing pending orders.
-- **Code 10016 (Invalid Stops / Wrong TP Direction on Multi-Leg Trades):** The Stop Loss or Take Profit was placed too close to the entry price or on the wrong side (e.g., placing a TP below the entry on a LONG trade, or an inverted `tp3` on a RUNNER leg). **Diagnostic Action:**
-  1. Verify the **3-Layer TP Direction Validation**: Ensure `agent-swing`, `agent-trade` (Execution Guard 1), and `vps-poll` validate that for LONG trades, all TP targets (`tp`, `tp1`, `tp2`, `tp3`) satisfy `tp > entry`, and for SHORT trades `tp < entry`. If inverted, fallback to standard R-multiples ($1\text{R}, 2\text{R}, 3\text{R}$).
-  2. If this error occurs for a specific symbol (e.g., `NZDUSD`), check `agent-trade`'s `minDistances` configuration. If the symbol is missing from the dictionary, the AI's ultra-tight stops bypass the widening guard and are instantly rejected by the broker.
+- **Code 10015 (Invalid Price / Stale Breakout Entry):** A pending stop/limit order (e.g., `BUY STOP` or `SELL STOP`) had an entry price that was invalid relative to current market Ask/Bid. When this occurs, ensure the parent `trade_opportunities` status is updated to `REJECTED` rather than remaining stuck in `APPROVED`, and check that `agent-trade` validates live price against order type prior to placing pending orders.
+- **Code 10016 (Invalid Stops / Wrong TP Direction on Multi-Leg Trades):** The Stop Loss or Take Profit was placed too close to the entry price or on the wrong side. Verify the **3-Layer TP Direction Validation**: Ensure `agent-swing`, `agent-trade` (Execution Guard 1), and `vps-poll` validate that for LONG trades all TP targets satisfy `tp > entry`, and for SHORT trades `tp < entry`.
+- **Code 10018 (Market Closed):** The order was submitted during weekend closure or the daily 21:00–23:00 UTC maintenance roll-over window. `agent-day` and `agent-swing` market session guards should block signal generation during closed sessions.
 - **Code 10019 (No Money):** The user's account had insufficient free margin to open the required volume. This is working as intended to protect against margin calls if the account is overleveraged.
 
 ---
@@ -964,16 +966,51 @@ In `/functions/v1/vps-history`, when a ticket is not found in `user_trades`:
 
 ---
 
+## ⚠️ 3K. MT5 Broker Symbol Alias Resolution & Invalid Request Guard (Error 10013)
+
+> [!CAUTION]
+> **Incident (2026-09-02):** Signals generated for `SPX500` and `NAS100` failed on MT5 with `TRADE_RETCODE_INVALID_REQUEST (Code: 10013)` because the broker (Exness) names these assets `US500` and `USTEC` rather than `SPX500` and `NAS100`. The EA attempted `SymbolSelect("SPX500")` which returned `false`, and `OrderSend()` failed with retcode 10013.
+
+### Canonical to Broker Symbol Mapping Table:
+
+| Canonical Cloud Symbol | Exness MT5 Symbol Name | Alternative Candidate Suffixes |
+|---|---|---|
+| `SPX500` | `US500` | `US500m`, `US500_m`, `SPX500m`, `US500.pro` |
+| `NAS100` | `USTEC` | `USTECm`, `USTEC_m`, `NAS100m`, `USTEC.pro` |
+| `GER30` / `GER40` | `DE30` | `DE30m`, `DE30_m`, `GER30m`, `DE30.pro` |
+| `US30` | `US30` | `US30m`, `US30_m`, `DJ30`, `WS30`, `US30.pro` |
+| `JP225` | `JP225` | `JP225m`, `NIKKEI`, `JPN225`, `JP225.pro` |
+| `UKOIL` | `UKOIL` | `UKOILm`, `UKOIL_m`, `BRENT`, `UKOIL.pro` |
+| `USOIL` | `USOIL` | `USOILm`, `USOIL_m`, `WTI`, `USOIL.pro` |
+
+### Architectural Standard:
+1. **`vps-poll` Outbound Translation:** `vps-poll` maps canonical symbols (`SPX500` -> `US500`, `NAS100` -> `USTEC`, `GER30` -> `DE30`) when generating execution CSV lines.
+2. **`RaineInvestEA.mq5` Multi-Candidate Alias Resolver:** In `RaineInvestEA.mq5`, `ResolveBrokerSymbol()` iterates through candidate broker aliases and activates the symbol via `SymbolSelect(candidate, true)` before sending orders or streaming candle bars.
+3. **`RaineInvestEA.mq5` Market Data Tracking:** `TrackedSymbols` array includes all active broker names (`US500`, `USTEC`, `DE30`, `US30`, `JP225`, `USOIL`) with dynamically initialized `lastBarTimes`.
+4. **`agent-sre` Automated Telemetry:** `agent-sre` Probe 4F classifies `Code:10013` as an unmapped symbol alias issue, dispatches actionable Telegram alerts, and auto-heals parent opportunities to `REJECTED`.
+
+---
+
 ## 4. External Integrations
 Verify that external data pipelines and notification systems are alive.
 
 - [ ] **News API Data Feed:** Ensure `agent-news` is successfully fetching and parsing Tavily news articles. (Check Edge Function logs for `agent-news` to ensure no `401 Unauthorized` or timeout errors).
 - [ ] **Market Data Feed:** Confirm `agent-swing` is successfully retrieving real-time candle data for evaluation.
 
-### 4A. Telegram Webhook Diagnostics
+### 4A. Telegram Webhook & Broadcast Diagnostics
 The `telegram-broadcast` edge function is triggered automatically via a Postgres Trigger (`on_signal_generated`) whenever a new `trade_opportunities` row is inserted. It also triggers on `user_trades` updates for rejected executions.
 
-- [ ] **Verify Edge Function Logs:** In the Supabase Dashboard -> Edge Functions, select `telegram-broadcast` and verify there are no `500 Internal Server Error` or `401 Unauthorized` logs.
+> [!CAUTION]
+> **Incident (2026-09-02):** Telegram signal broadcasts for A/S-Tier opportunities failed with `HTTP 400 Bad Request: can't parse entities: Character '(' is reserved` because unescaped parentheses `(${tier})` and `(${escapeMd(orderTypeDisplay)})` were included in MarkdownV2 template literals. All literal parentheses in MarkdownV2 MUST be escaped with `\(` and `\)`.
+
+- [ ] **Verify Edge Function Logs:** In ClickHouse logs (`source = 'function_logs'`), verify `telegram-broadcast` shows `Broadcast complete. Success: >0, Failures: 0`:
+  ```sql
+  SELECT timestamp, event_message 
+  FROM logs 
+  WHERE source = 'function_logs' AND event_message LIKE '%Broadcast complete%'
+  ORDER BY timestamp DESC LIMIT 10;
+  ```
+- [ ] **Verify MarkdownV2 Escaping:** When constructing Telegram MarkdownV2 templates, ensure all reserved characters (`_`, `*`, `[`, `]`, `(`, `)`, `~`, `` ` ``, `>`, `#`, `+`, `-`, `=`, `|`, `{`, `}`, `.`, `!`) outside of markdown constructs are explicitly escaped with backslashes.
 - [ ] **Verify Webhook Secret Sync:** If the `telegram-broadcast` logs show a fast `401 Unauthorized` error when the database attempts to trigger it, the `WEBHOOK_SECRET` environment variable in the Edge Functions is out of sync with the database vault. Run `supabase secrets set WEBHOOK_SECRET=<decrypted_secret> --project-ref ktezlusdkqlfdwqrldtn` (fetching the secret from `vault.decrypted_secrets WHERE name = 'webhook_secret'`) to restore the pipeline.
 - [ ] **Verify Bot Token:** Ensure `TELEGRAM_BOT_TOKEN` is correctly set in the Edge Function secrets. A missing or invalid token will result in HTTP 401 errors from the Telegram API within the edge function logs.
 - [ ] **Test Delivery:** To safely verify delivery without broadcasting a fake signal to all users, you can manually invoke the edge function via the Supabase CLI or HTTP POST using a mock payload that mimics a `REJECTED` user trade for a specific test user's `user_id`.

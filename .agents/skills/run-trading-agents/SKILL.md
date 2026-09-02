@@ -150,3 +150,18 @@ ORDER BY confidence DESC;
 4. **ATR-Calibrated Breathing Room for Metals & Volatile Assets**:
    - For Gold (`XAUUSD`) and Crude Oil (`USOIL`/`UKOIL`), ensure stop losses are placed with at least a $1.0\times\text{ATR}$ to $1.25\times\text{ATR}$ buffer below the structural pivot to prevent premature wick stop-outs before impulsive expansion towards Target 2 / Target 3.
 
+---
+
+## 8. S-Tier Signal Recovery & Mathematical Profitability Playbook
+
+When an asset fails to achieve S-Tier confidence (e.g. confidence < 75 due to mid-range chop or overhead resistance), apply the following institutional recovery protocols:
+
+1. **Adaptive Limit Pullback Anchoring (Discount Entry)**:
+   - Instead of rejecting mid-range chop, anchor a Limit Order at the nearest structural support / 61.8% Golden Pocket Fib. This compresses stop-loss distance and expands R:R to $> 1:3.0$, elevating the setup into S-Tier.
+2. **Breakout Buy Stop Anchor (Momentum Expansion)**:
+   - Place a Buy Stop 0.25x ATR above the contested resistance ceiling (e.g. above $4,332 for XAUUSD) with volume surge verification to capture impulsive expansion towards Target 2 / Target 3 ($4,500).
+3. **Calculating Institutional Trade Profitability ($EV$)**:
+   - Calculate Expected Value: $EV = (P_{\text{win}} \times \text{TP2 Reward}) - (P_{\text{loss}} \times \text{Risk Distance})$.
+   - Compare gross pip/point yields and R:R ratios across the portfolio to prioritize capital allocation to highest-EV setups (e.g. `USOIL` R:R 1:5.21 and `XAUUSD` R:R 1:10.75).
+
+
