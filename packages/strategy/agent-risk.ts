@@ -35,6 +35,25 @@ const CORRELATION_GROUPS: Record<string, { group: string, weight: number }> = {
   'CADJPY': { group: 'JPY_CROSSES', weight: 1 },
 };
 
+// Currency Exposure Decomposition Map (Base and Quote)
+const CURRENCY_DECOMPOSITION: Record<string, { base: string, quote: string }> = {
+  EURUSD: { base: 'EUR', quote: 'USD' },
+  GBPUSD: { base: 'GBP', quote: 'USD' },
+  AUDUSD: { base: 'AUD', quote: 'USD' },
+  NZDUSD: { base: 'NZD', quote: 'USD' },
+  USDJPY: { base: 'USD', quote: 'JPY' },
+  USDCHF: { base: 'USD', quote: 'CHF' },
+  USDCAD: { base: 'USD', quote: 'CAD' },
+  EURJPY: { base: 'EUR', quote: 'JPY' },
+  GBPJPY: { base: 'GBP', quote: 'JPY' },
+  CADJPY: { base: 'CAD', quote: 'JPY' },
+  EURGBP: { base: 'EUR', quote: 'GBP' },
+  XAUUSD: { base: 'XAU', quote: 'USD' },
+  XAGUSD: { base: 'XAG', quote: 'USD' },
+  BTCUSD: { base: 'BTC', quote: 'USD' },
+  ETHUSD: { base: 'ETH', quote: 'USD' },
+};
+
 // Validates if the central AI is allowed to generate a new signal for this asset
 export async function validateGlobalSignal(
   supabase: SupabaseClient,
@@ -148,6 +167,77 @@ export async function validateGlobalSignal(
     }
   }
 
+  // --- BASE/QUOTE CURRENCY EXPOSURE DECOMPOSITION & CONFLICT GUARD ---
+  let assumedSide = 'NONE';
+  if (currentSnapshot) {
+    if (currentSnapshot.trend_alignment?.startsWith('BULLISH')) assumedSide = 'LONG';
+    else if (currentSnapshot.trend_alignment?.startsWith('BEARISH')) assumedSide = 'SHORT';
+  }
+
+  const currencyExposures: Record<string, number> = {};
+  const processedOppIds = new Set<string>();
+
+  const addExposure = (sym: string, side: string) => {
+    const decomp = CURRENCY_DECOMPOSITION[sym];
+    if (!decomp) return;
+    const isLong = side === 'LONG' || side === 'BUY';
+    const baseDelta = isLong ? 1 : -1;
+    const quoteDelta = isLong ? -1 : 1;
+
+    currencyExposures[decomp.base] = (currencyExposures[decomp.base] || 0) + baseDelta;
+    currencyExposures[decomp.quote] = (currencyExposures[decomp.quote] || 0) + quoteDelta;
+  };
+
+  // 1. Tally from live open trades
+  if (openTrades) {
+    for (const ut of openTrades) {
+      if (ut.symbol !== symbol) {
+        addExposure(ut.symbol, ut.side);
+        if (ut.opportunity_id) processedOppIds.add(ut.opportunity_id);
+      }
+    }
+  }
+
+  // 2. Tally from unpicked approved signals (deduplicating if already in user_trades)
+  if (activeSignals) {
+    for (const sig of activeSignals) {
+      if (sig.symbol !== symbol && !processedOppIds.has(sig.id)) {
+        addExposure(sig.symbol, sig.side);
+      }
+    }
+  }
+
+  // Evaluate candidate symbol currency conflict
+  const candidateDecomp = CURRENCY_DECOMPOSITION[symbol];
+  if (candidateDecomp && assumedSide !== 'NONE') {
+    const isCandLong = assumedSide === 'LONG';
+    const candBaseDelta = isCandLong ? 1 : -1;
+    const candQuoteDelta = isCandLong ? -1 : 1;
+
+    const baseExp = currencyExposures[candidateDecomp.base] || 0;
+    const quoteExp = currencyExposures[candidateDecomp.quote] || 0;
+
+    // Check Base Currency Conflict (e.g. portfolio is heavily Short EUR (-2), and candidate proposes Long EUR (+1))
+    if (Math.abs(baseExp) >= 2 && Math.sign(baseExp) !== Math.sign(candBaseDelta)) {
+      const dirText = baseExp > 0 ? "Bullish" : "Bearish";
+      const candText = candBaseDelta > 0 ? "Bullish" : "Bearish";
+      return {
+        valid: false,
+        reason: `REJECTED: Currency Exposure Conflict on ${candidateDecomp.base}. Portfolio is heavily ${dirText} (Net: ${baseExp}). Proposed ${symbol} ${assumedSide} would create a conflicting ${candText} exposure.`
+      };
+    }
+
+    // Check Quote Currency Conflict (e.g. portfolio is heavily Bullish JPY (+2), and candidate proposes Bearish JPY (-1))
+    if (Math.abs(quoteExp) >= 2 && Math.sign(quoteExp) !== Math.sign(candQuoteDelta)) {
+      const dirText = quoteExp > 0 ? "Bullish" : "Bearish";
+      const candText = candQuoteDelta > 0 ? "Bullish" : "Bearish";
+      return {
+        valid: false,
+        reason: `REJECTED: Currency Exposure Conflict on ${candidateDecomp.quote}. Portfolio is heavily ${dirText} (Net: ${quoteExp}). Proposed ${symbol} ${assumedSide} would create a conflicting ${candText} exposure.`
+      };
+    }
+  }
+
   // Guardrail: Comprehensive Portfolio Correlation Basket Limits
   const symbolGroup = CORRELATION_GROUPS[symbol];
   if (symbolGroup && currentSnapshot) {
@@ -156,7 +246,7 @@ export async function validateGlobalSignal(
     // Check signals in trade_opportunities
     if (activeSignals) {
       for (const t of activeSignals) {
-        if (t.symbol !== symbol) {
+        if (t.symbol !== symbol && !processedOppIds.has(t.id)) {
           const activeGroup = CORRELATION_GROUPS[t.symbol];
           if (activeGroup && activeGroup.group === symbolGroup.group) {
             const activeWeight = (t.side === 'LONG' ? 1 : -1) * activeGroup.weight;
@@ -179,16 +269,11 @@ export async function validateGlobalSignal(
       }
     }
 
-    // Estimate the assumed direction of the new signal based on trend alignment
-    let assumedSide = 'NONE';
-    if (currentSnapshot.trend_alignment.startsWith('BULLISH')) assumedSide = 'LONG';
-    else if (currentSnapshot.trend_alignment.startsWith('BEARISH')) assumedSide = 'SHORT';
-
     if (assumedSide !== 'NONE') {
       const assumedWeight = (assumedSide === 'LONG' ? 1 : -1) * symbolGroup.weight;
       const projectedExposure = existingExposure + assumedWeight;
 
-      // If the absolute net exposure exceeds 1, reject to prevent stacked correlation
+      // If the absolute net exposure exceeds 1 in indices/energy, reject to prevent stacked correlation
       if (Math.abs(projectedExposure) > 1) {
         return { valid: false, reason: `REJECTED: Portfolio correlation limit exceeded. Cannot stack multiple correlated ${symbolGroup.group} trades (Current Net Exposure: ${existingExposure}, Projected: ${projectedExposure}).` };
       }

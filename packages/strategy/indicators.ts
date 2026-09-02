@@ -1860,7 +1860,9 @@ export function calculateInstitutionalTradingCentralLevels(
   tp1: number,
   tp2: number,
   direction: "LONG" | "SHORT",
-  minRr = 1.70
+  minRr = 1.70,
+  atr?: number,
+  isHighMomentum = false
 ): TradingCentralLevels {
   const isLong = direction === "LONG";
   const riskDist = Math.abs(currentPrice - pivotSl);
@@ -1876,9 +1878,22 @@ export function calculateInstitutionalTradingCentralLevels(
     // => Entry = Pivot + (TP2 - Pivot) / (1 + 1.75)
     const totalSpan = Math.abs(tp2 - pivotSl);
     const requiredRiskDist = totalSpan / (1 + minRr + 0.05); // 1.75 factor
-    suggestedEntry = isLong
+    let calculatedLimit = isLong
       ? Number((pivotSl + requiredRiskDist).toFixed(5))
       : Number((pivotSl - requiredRiskDist).toFixed(5));
+
+    // Momentum Guard: When breakout momentum is strong (isHighMomentum), clamp max limit offset to 0.15x ATR
+    // so we don't miss high-probability breakouts by waiting for an unreachable deep retracement.
+    if (isHighMomentum && atr && atr > 0) {
+      const maxMomentumOffset = atr * 0.15;
+      if (isLong && currentPrice - calculatedLimit > maxMomentumOffset) {
+        calculatedLimit = Number((currentPrice - maxMomentumOffset).toFixed(5));
+      } else if (!isLong && calculatedLimit - currentPrice > maxMomentumOffset) {
+        calculatedLimit = Number((currentPrice + maxMomentumOffset).toFixed(5));
+      }
+    }
+
+    suggestedEntry = calculatedLimit;
     orderType = isLong ? "BUY LIMIT" : "SELL LIMIT";
   }
 
