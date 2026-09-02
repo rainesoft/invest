@@ -566,6 +566,45 @@ In `packages/execution/index.ts` (`fetchPaperBars`), all fallback market data re
 
 ---
 
+## ⚠️ 2H. Mandatory Dynamic ATR Stop Floor
+
+> [!CAUTION]
+> **Incident (2026-09-02):** A 1D Swing trade on `USDCAD` had an ultra-tight stop loss placed only 7.7 pips away ($0.18\times\text{ ATR}$) due to pivot anchoring, causing the trade to be stopped out by standard spread variance in 2 minutes.
+
+### Standard Rule:
+- **1D Swing Trades (`agent-swing`):** Minimum stop distance must strictly satisfy $\text{Stop Distance} \ge 1.0\times\text{ ATR}(14)$ (minimum 25–35 pips on Forex majors).
+- **30m Day Trades (`agent-day`):** Minimum stop distance must strictly satisfy $\text{Stop Distance} \ge 1.10\times\text{ ATR}(14)$.
+- Strategy engines must verify this floor *after* any limit optimization adjustments before persisting `stop_plan_json`.
+
+---
+
+## ⚠️ 2I. Base/Quote Currency Exposure & Conflict Guard
+
+> [!CAUTION]
+> **Incident (2026-09-02):** The portfolio held strong profitable Bullish JPY exposure on `EURJPY` SHORT and `USDJPY` SHORT (+$80.43 net), but simultaneously opened `GBPJPY` LONG (Bearish JPY), creating an intra-portfolio currency conflict that resulted in an avoidable -$16.90 loss on GBPJPY.
+
+### Standard Rule:
+- In `packages/strategy/agent-risk.ts` (`validateGlobalSignal`), all forex and commodity pairs are decomposed into their Base and Quote currencies:
+  - `EURUSD` LONG $\rightarrow$ $+1\text{ EUR}, -1\text{ USD}$
+  - `USDJPY` SHORT $\rightarrow$ $-1\text{ USD}, +1\text{ JPY}$
+  - `EURJPY` SHORT $\rightarrow$ $-1\text{ EUR}, +1\text{ JPY}$
+- If the portfolio's net active exposure on a specific currency is $|\text{Exposure}| \ge 2$, any new candidate trade proposing an exposure with the **opposite sign** on that currency is strictly rejected with `REJECTED: Currency Exposure Conflict`.
+
+---
+
+## ⚠️ 2J. Momentum-Aware Limit Clamping & Commodity Rollover Blackout
+
+> [!WARNING]
+> **Incident (2026-09-01, 2026-09-02):** 
+> 1. In high-momentum breakouts (`SPX500`, `UKOIL`), the Adaptive Limit Solver insisted on a deep 50% pullback limit, letting price run directly to TP while orders expired unfilled.
+> 2. On 2026-09-01 at 21:30 UTC, a `UKOIL` order failed with MT5 Error `10018 (Market Closed)` during the daily oil maintenance rollover window.
+
+### Standard Rule:
+- **Momentum-Aware Clamping:** When $\text{ADX} \ge 25$, Volume Ratio $\ge 1.20$, or breakout strategy is detected, `calculateInstitutionalTradingCentralLevels()` clamps limit offsets to $\le 0.15\times\text{ ATR}$ from market price to maximize fill probability.
+- **Commodity Rollover Blackout:** `agent-day` skips order generation for `UKOIL` and `USOIL` between `21:00 UTC` and `22:15 UTC` daily.
+
+---
+
 ## ⚠️ 3A. Trade Execution — Status Mismatch (Orphaned PENDING)
 
 > [!WARNING]
