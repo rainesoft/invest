@@ -40,6 +40,8 @@ int OnInit()
      }
      
    RecoverActiveTickets();
+   ArrayResize(lastBarTimes, ArraySize(TrackedSymbols));
+   ArrayInitialize(lastBarTimes, 0);
    EventSetTimer(15);
    Print("RaineInvest VPS Bridge initialized. Polling every 15 seconds.");
    return(INIT_SUCCEEDED);
@@ -83,8 +85,8 @@ void OnDeinit(const int reason)
    Print("RaineInvest VPS Bridge stopped.");
   }
 
-string TrackedSymbols[] = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "EURJPY", "GBPJPY", "XAUUSD", "XAGUSD", "BTCUSD", "UKOIL", "NAS100"};
-datetime lastBarTimes[12];
+string TrackedSymbols[] = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "USDCAD", "USDCHF", "EURJPY", "GBPJPY", "XAUUSD", "XAGUSD", "BTCUSD", "ETHUSD", "UKOIL", "USOIL", "US30", "USTEC", "NAS100", "US500", "SPX500", "DE30", "GER30", "JP225"};
+datetime lastBarTimes[];
 datetime lastHFTTime = 0;
 bool hftOpen = false;
 int rsiHandle = INVALID_HANDLE;
@@ -488,24 +490,97 @@ void CloseTrade(string id, long ticket)
   }
 
 //+------------------------------------------------------------------+
+//| Resolve Broker Symbol Aliases (Exness / Standard MT5 Brokers)     |
+//+------------------------------------------------------------------+
+string ResolveBrokerSymbol(string sym)
+  {
+   // 1. Direct check: Is symbol already selectable and active?
+   if(SymbolSelect(sym, true))
+     {
+      if(SymbolInfoDouble(sym, SYMBOL_BID) > 0 || SymbolInfoInteger(sym, SYMBOL_DIGITS) > 0)
+         return sym;
+     }
+     
+   // 2. Candidate alias table
+   string candidates[];
+   if(sym == "SPX500" || sym == "US500")
+     {
+      string c[] = {"US500", "US500m", "US500_m", "SPX500", "SPX500m", "US500.pro"};
+      ArrayCopy(candidates, c);
+     }
+   else if(sym == "NAS100" || sym == "USTEC")
+     {
+      string c[] = {"USTEC", "USTECm", "USTEC_m", "NAS100", "NAS100m", "USTEC.pro"};
+      ArrayCopy(candidates, c);
+     }
+   else if(sym == "GER30" || sym == "DE30" || sym == "GER40")
+     {
+      string c[] = {"DE30", "DE30m", "DE30_m", "GER30", "GER30m", "GER40", "DE30.pro"};
+      ArrayCopy(candidates, c);
+     }
+   else if(sym == "US30")
+     {
+      string c[] = {"US30", "US30m", "US30_m", "DJ30", "WS30", "US30.pro"};
+      ArrayCopy(candidates, c);
+     }
+   else if(sym == "JP225")
+     {
+      string c[] = {"JP225", "JP225m", "NIKKEI", "JPN225", "JP225.pro"};
+      ArrayCopy(candidates, c);
+     }
+   else if(sym == "UKOIL")
+     {
+      string c[] = {"UKOIL", "UKOILm", "UKOIL_m", "BRENT", "UKOIL.pro"};
+      ArrayCopy(candidates, c);
+     }
+   else if(sym == "USOIL")
+     {
+      string c[] = {"USOIL", "USOILm", "USOIL_m", "WTI", "USOIL.pro"};
+      ArrayCopy(candidates, c);
+     }
+   else
+     {
+      string c[] = {sym, sym + "m", sym + "_m", sym + ".pro", sym + ".c"};
+      ArrayCopy(candidates, c);
+     }
+     
+   for(int i = 0; i < ArraySize(candidates); i++)
+     {
+      string candidate = candidates[i];
+      ResetLastError();
+      if(SymbolSelect(candidate, true))
+        {
+         if(SymbolInfoDouble(candidate, SYMBOL_ASK) > 0 || SymbolInfoInteger(candidate, SYMBOL_DIGITS) > 0)
+           {
+            Print("Resolved symbol alias: ", sym, " -> ", candidate);
+            return candidate;
+           }
+        }
+     }
+     
+   return sym;
+  }
+
+//+------------------------------------------------------------------+
 //| Execute Trade (Sends to Broker via MT5)                          |
 //+------------------------------------------------------------------+
 void ExecuteTrade(string id, string symbol, string side, double volume, double sl, double tp, double entryPrice, string orderTypeStr)
   {
-   Print("Executing trade: ", id, " ", symbol, " ", orderTypeStr, " Vol:", volume, " Entry:", entryPrice, " SL:", sl, " TP:", tp);
+   string brokerSym = ResolveBrokerSymbol(symbol);
+   Print("Executing trade: ", id, " (", symbol, " -> ", brokerSym, ") ", orderTypeStr, " Vol:", volume, " Entry:", entryPrice, " SL:", sl, " TP:", tp);
    
    // Ensure symbol is selected in Market Watch
-   SymbolSelect(symbol, true);
+   SymbolSelect(brokerSym, true);
    
-   int symDigits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-   int stopsLevel = (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   int symDigits = (int)SymbolInfoInteger(brokerSym, SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(brokerSym, SYMBOL_POINT);
+   int stopsLevel = (int)SymbolInfoInteger(brokerSym, SYMBOL_TRADE_STOPS_LEVEL);
    double minStopDist = (stopsLevel + 5) * point;
    
    // Volume Normalization
-   double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-   double maxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-   double lotStep = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   double minLot = SymbolInfoDouble(brokerSym, SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(brokerSym, SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(brokerSym, SYMBOL_VOLUME_STEP);
    if (lotStep <= 0) lotStep = 0.01;
    if (minLot <= 0) minLot = 0.01;
    if (maxLot <= 0) maxLot = 100.0;
@@ -519,15 +594,15 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
    double normTp = (tp > 0) ? NormalizeDouble(tp, symDigits) : 0;
    double normEntry = (entryPrice > 0) ? NormalizeDouble(entryPrice, symDigits) : 0;
    
-   double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
-   double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(brokerSym, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(brokerSym, SYMBOL_BID);
    
    MqlTradeRequest request;
    MqlTradeResult  result;
    ZeroMemory(request);
    ZeroMemory(result);
    
-   request.symbol = symbol;
+   request.symbol = brokerSym;
    request.volume = normVolume;
    request.magic = 410673; // RaineInvest Magic
    request.comment = "RaineInvest AI";
@@ -699,7 +774,8 @@ void PushMarketData()
   {
    for (int s = 0; s < ArraySize(TrackedSymbols); s++)
      {
-      string sym = TrackedSymbols[s];
+      string rawSym = TrackedSymbols[s];
+      string sym = ResolveBrokerSymbol(rawSym);
       SymbolSelect(sym, true); // Ensure symbol is available in Market Watch
       
       datetime currentBarTime = iTime(sym, PERIOD_M30, 0);

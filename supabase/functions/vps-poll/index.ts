@@ -104,6 +104,20 @@ serve(async (req) => {
         }
       }
 
+      const CANONICAL_TO_BROKER_SYMBOLS: Record<string, string> = {
+        SPX500: "US500",
+        NAS100: "USTEC",
+        GER30: "DE30",
+        GER40: "DE30",
+        JP225: "JP225",
+        US30: "US30",
+        UKOIL: "UKOIL",
+        USOIL: "USOIL",
+        BTCUSD: "BTCUSD",
+        ETHUSD: "ETHUSD",
+      };
+      const brokerSymbol = CANONICAL_TO_BROKER_SYMBOLS[trade.symbol] || trade.symbol;
+
       const orderType = opp?.entry_plan_json?.order_type || (trade.side === "LONG" ? "BUY MARKET" : "SELL MARKET");
       let action = "MODIFY";
       if (trade.status === "VPS_PENDING") action = "EXECUTE";
@@ -111,7 +125,7 @@ serve(async (req) => {
       const ticket = trade.meta_api_order_id || "0";
 
       // Format: ID,SYMBOL,SIDE,VOLUME,STOPLOSS,TAKEPROFIT,TRADE_TYPE,ENTRY_PRICE,ORDER_TYPE,ACTION,TICKET
-      csvResponse += `${trade.id},${trade.symbol},${trade.side},${safeVolume},${safeSl},${safeTp},${trade.trade_type},${safeEntry},${orderType},${action},${ticket}\n`;
+      csvResponse += `${trade.id},${brokerSymbol},${trade.side},${safeVolume},${safeSl},${safeTp},${trade.trade_type},${safeEntry},${orderType},${action},${ticket}\n`;
       
       // Lock the trade so it isn't picked up twice by multiple polls
       if (trade.status === "VPS_PENDING") {
