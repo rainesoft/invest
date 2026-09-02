@@ -258,9 +258,9 @@ serve(async (req) => {
       const thesis = extractCleanThesis(record.ai_summary || "");
 
       const message = `
-🚀 *PAMM EXECUTION* \\| ${sideEmoji} *${side} ${symbol}* (${tier})
+🚀 *PAMM EXECUTION* \\| ${sideEmoji} *${side} ${symbol}* \\(${tier}\\)
 
-• *Entry:* \`${escapeCode(entryFormatted)}\` (${escapeMd(orderTypeDisplay)})
+• *Entry:* \`${escapeCode(entryFormatted)}\` \\(${escapeMd(orderTypeDisplay)}\\)
 • *Stop Loss:* \`${escapeCode(slFormatted)}\` \\| *Target:* \`${escapeCode(tpFormatted)}\`
 • *R:R:* ${escapeMd(rr)} \\| *Horizon:* ${escapeMd(timeframeDisplay)}Swing
 
@@ -290,6 +290,13 @@ serve(async (req) => {
       const results = await Promise.allSettled(broadcastPromises);
       const successes = results.filter(r => r.status === "fulfilled").length;
       const failures = results.filter(r => r.status === "rejected").length;
+      if (failures > 0) {
+        results.forEach((r, idx) => {
+          if (r.status === "rejected") {
+            console.error(`[Telegram Broadcast] Error dispatching to ${subscribedUsers[idx]?.chatId}:`, r.reason);
+          }
+        });
+      }
       console.log(`Broadcast complete. Success: ${successes}, Failures: ${failures}`);
 
       return new Response(JSON.stringify({ success: true, successes, failures }), {
