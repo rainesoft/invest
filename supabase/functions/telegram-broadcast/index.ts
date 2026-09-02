@@ -23,6 +23,32 @@ const escapeCode = (text: string | null | undefined) => {
   return String(text).replace(/([\\`])/g, "\\$1");
 };
 
+const getSymbolBadge = (symbol: string): string => {
+  const s = (symbol || "").toUpperCase();
+  if (["AAPL", "MSFT", "TSLA", "AMZN", "NVDA", "META", "GOOGL", "GOOG", "NFLX", "AMD"].includes(s)) return "🇺🇸";
+  if (["SPX500", "US500", "NAS100", "USTEC", "US30", "DJ30", "RUSSELL2000"].includes(s)) return "📈";
+  if (s === "JP225" || s === "NIKKEI") return "🇯🇵";
+  if (s === "GER30" || s === "GER40" || s === "DE40") return "🇩🇪";
+  if (s === "UK100" || s === "FTSE") return "🇬🇧";
+  if (s === "EURUSD") return "🇪🇺🇺🇸";
+  if (s === "GBPUSD") return "🇬🇧🇺🇸";
+  if (s === "USDJPY") return "🇺🇸🇯🇵";
+  if (s === "AUDUSD") return "🇦🇺🇺🇸";
+  if (s === "NZDUSD") return "🇳🇿🇺🇸";
+  if (s === "USDCAD") return "🇺🇸🇨🇦";
+  if (s === "USDCHF") return "🇺🇸🇨🇭";
+  if (s === "EURJPY") return "🇪🇺🇯🇵";
+  if (s === "GBPJPY") return "🇬🇧🇯🇵";
+  if (s === "AUDJPY") return "🇦🇺🇯🇵";
+  if (s === "CADJPY") return "🇨🇦🇯🇵";
+  if (s === "EURGBP") return "🇪🇺🇬🇧";
+  if (["XAUUSD", "GOLD"].includes(s)) return "🪙";
+  if (["XAGUSD", "SILVER"].includes(s)) return "🥈";
+  if (["UKOIL", "USOIL", "BRENT", "WTI", "XBRUSD", "XTIUSD"].includes(s)) return "🛢";
+  if (["BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD"].includes(s)) return "⚡";
+  return "🌐";
+};
+
 const formatPrice = (val: any, symbol?: string): string => {
   if (val === null || val === undefined || val === "—") return "—";
   const num = typeof val === "number" ? val : parseFloat(String(val).replace(/[^0-9.-]/g, ""));
@@ -47,8 +73,29 @@ const formatPrice = (val: any, symbol?: string): string => {
   return num.toFixed(4);
 };
 
+function truncateWords(str: string, maxLen: number): string {
+  if (!str || str.length <= maxLen) return str;
+  const truncated = str.slice(0, maxLen);
+  const lastSpace = truncated.lastIndexOf(" ");
+  return (lastSpace > 10 ? truncated.slice(0, lastSpace) : truncated).trim() + "…";
+}
+
+function normalizeEnumTitle(text: string): string {
+  return text
+    .replace(/DESCENDING_CHANNEL/gi, "Descending Channel")
+    .replace(/ASCENDING_CHANNEL/gi, "Ascending Channel")
+    .replace(/FALLING_WEDGE/gi, "Falling Wedge")
+    .replace(/RISING_WEDGE/gi, "Rising Wedge")
+    .replace(/DOUBLE_TOP/gi, "Double Top")
+    .replace(/DOUBLE_BOTTOM/gi, "Double Bottom")
+    .replace(/HEAD_AND_SHOULDERS/gi, "Head & Shoulders")
+    .replace(/LIQUIDITY_SWEEP/gi, "Liquidity Sweep")
+    .replace(/SNIPER_MODE/gi, "Sniper Mode")
+    .replace(/CHOP/gi, "Range Chop");
+}
+
 function extractCleanThesis(rawSummary: string): string {
-  if (!rawSummary) return "Algorithmic confluence setup";
+  if (!rawSummary) return "Algorithmic S/R & momentum confluence";
 
   // 1. Strip solver / execution desk / post-mortem tags
   let text = rawSummary
@@ -64,49 +111,56 @@ function extractCleanThesis(rawSummary: string): string {
       .replace(/->/g, "→")
       .replace(/^[→\s]+/, "")
       .trim();
+    strategyTag = normalizeEnumTitle(strategyTag);
   }
 
   // 3. Remove all brackets and bracketed tags from the remaining text
   const cleanWithoutBrackets = text.replace(/\[[^\]]+\]/g, " ");
 
-  // 4. Split by pipes or newlines
-  const parts = cleanWithoutBrackets.split(/[|\n]/).map(p => p.trim()).filter(Boolean);
+  // 4. Split by pipes, newlines, or bullets
+  const parts = cleanWithoutBrackets.split(/[|\n•]/).map(p => p.trim()).filter(Boolean);
   const candidateNotes: string[] = [];
 
   for (const part of parts) {
-    let clean = part.replace(/^[•\-\*\d\.\s\)]+/, "").replace(/[*_`]/g, "").trim();
+    let clean = part
+      .replace(/^#+\s+/g, "") // remove markdown header hashtags
+      .replace(/^[•\-\*\d\.\s\)]+/, "")
+      .replace(/[*_`]/g, "")
+      .trim();
+
     if (!clean) continue;
 
-    // Filter out boilerplate, math, essays, TP/SL lists, and long numbered entries
+    // Filter out boilerplate headers, math, essays, TP/SL lists, and long numbered entries
     if (
       clean.match(/^TP\d/i) ||
       clean.match(/^R:R/i) ||
       clean.match(/^Fib Swing/i) ||
-      clean.match(/^(Suggested execution|Given the technical setup|Based on the \w+ analysis|Execution Strategy|Confidence and Probability|Macro Sentiment|Execution Math|Order Type)/i) ||
+      clean.match(/^(Suggested execution|Given the technical setup|Based on the \w+ analysis|Execution Strategy|Confidence and Probability|Macro Sentiment|Execution Math|Order Type|Entry Setup|Setting up the Trade|Trade Plan|Overview|Key Confluences|Technical Analysis|Risk Management)/i) ||
       clean.match(/Typical R:R/i) ||
       clean.match(/R:R should be/i) ||
       clean.match(/Risk:Reward/i) ||
       clean.match(/\([0-9\.\s\-\+\/\*]+=\s*[0-9\.:]+\)/) || // math equations
       clean.match(/^\d+\.\s+/) || // numbered list like "1. The macro context..."
+      clean.endsWith(":") || // trailing header colon
       clean.length > 120 || // long paragraph
       clean.length < 5
     ) {
       continue;
     }
 
+    clean = normalizeEnumTitle(clean);
+
     // Look for technical confluences / patterns
     const lower = clean.toLowerCase();
     const isTechnicalSignal = [
       "pattern", "divergence", "pinbar", "engulfing", "rejection", 
       "support", "resistance", "fvg", "channel", "wedge", "double top", 
-      "double bottom", "head and shoulders", "breakout", "retest", "liquidity sweep", "trend continuation"
+      "double bottom", "head and shoulders", "breakout", "retest", "liquidity sweep", "trend continuation", "sr flip", "s/r flip", "fibonacci", "harmonic"
     ].some(term => lower.includes(term));
 
     if (isTechnicalSignal) {
       clean = clean.replace(/[:;,\s]+$/, "").trim();
-      if (clean.length > 60) {
-        clean = clean.slice(0, 57) + "...";
-      }
+      clean = truncateWords(clean, 58);
       const isDuplicate = candidateNotes.some(n => n.toLowerCase() === clean.toLowerCase()) ||
                           (strategyTag && strategyTag.toLowerCase().includes(clean.toLowerCase()));
       if (!isDuplicate) {
@@ -120,14 +174,7 @@ function extractCleanThesis(rawSummary: string): string {
 
   const results: string[] = [];
   if (strategyTag) {
-    if (strategyTag.length > 70) {
-      const subParts = strategyTag.split("→").map(s => s.trim());
-      if (subParts.length === 2 && subParts[0].length < 35) {
-        strategyTag = `${subParts[0]} → ${subParts[1].slice(0, 30)}...`;
-      } else {
-        strategyTag = strategyTag.slice(0, 65) + "...";
-      }
-    }
+    strategyTag = truncateWords(strategyTag, 60);
     results.push(strategyTag);
   }
 
@@ -138,13 +185,22 @@ function extractCleanThesis(rawSummary: string): string {
 
   if (results.length === 0) {
     const fallback = parts.find(p => {
-      const c = p.replace(/^[•\-\*\d\.\s\)]+/, "").trim();
-      return c.length > 10 && c.length < 80 && !c.startsWith("TP") && !c.startsWith("R:R") && !c.includes("=");
+      const c = p.replace(/^#+\s+/g, "").replace(/^[•\-\*\d\.\s\)]+/, "").replace(/[*_`]/g, "").trim();
+      return (
+        c.length > 10 && 
+        c.length < 80 && 
+        !c.startsWith("TP") && 
+        !c.startsWith("R:R") && 
+        !c.includes("=") &&
+        !c.endsWith(":") &&
+        !c.match(/^(Entry Setup|Setting up|Trade Plan|Overview)/i)
+      );
     });
     if (fallback) {
-      return fallback.replace(/^[•\-\*\d\.\s\)]+/, "").slice(0, 60).trim();
+      const cleanedFallback = fallback.replace(/^#+\s+/g, "").replace(/^[•\-\*\d\.\s\)]+/, "").replace(/[*_`]/g, "").trim();
+      return truncateWords(normalizeEnumTitle(cleanedFallback), 60);
     }
-    return "Technical confluence setup";
+    return "Algorithmic structural S/R & momentum confluence";
   }
 
   return results.join(" • ");
@@ -194,6 +250,22 @@ serve(async (req) => {
         return new Response(`Ignored ${rawTier || "unranked"} signal`, { status: 200 });
       }
 
+      // --- DEDUPLICATION: 15-Minute Cooldown per Symbol & Side ---
+      const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+      const { data: recentOpps } = await supabase
+        .from("trade_opportunities")
+        .select("id")
+        .eq("symbol", record.symbol)
+        .eq("side", record.side)
+        .neq("id", record.id)
+        .gte("created_at", fifteenMinsAgo)
+        .limit(1);
+
+      if (recentOpps && recentOpps.length > 0) {
+        console.log(`[Telegram Broadcast] Throttled duplicate broadcast for ${record.symbol} ${record.side} within 15m window.`);
+        return new Response("Throttled duplicate signal", { status: 200 });
+      }
+
       let subscribedUsers: { chatId: string }[] = [];
 
       // Fetch all users who have configured Telegram credentials
@@ -220,6 +292,7 @@ serve(async (req) => {
       const symbol = escapeMd(record.symbol);
       const side = escapeMd(record.side);
       const sideEmoji = record.side === "LONG" ? "🟢" : "🔴";
+      const flagEmoji = getSymbolBadge(record.symbol);
       const tier = escapeMd(rawTier);
 
       // Parse trade levels from JSON plans with asset-aware number formatting
@@ -232,23 +305,69 @@ serve(async (req) => {
       const slFormatted    = formatPrice(rawSl, record.symbol);
       const tpFormatted    = formatPrice(rawTp, record.symbol);
 
-      // R:R formatting
-      const rrMatch = (record.ai_summary || "").match(/1:([0-9.]+)/);
-      const rr = rrMatch ? `1:${parseFloat(rrMatch[1]).toFixed(1)}` : "1:1.8";
+      // Compute mathematical R:R and percentage metrics if numeric levels exist
+      const numEntry = typeof rawEntry === "number" ? rawEntry : parseFloat(String(rawEntry).replace(/[^0-9.-]/g, ""));
+      const numSl    = typeof rawSl === "number" ? rawSl : parseFloat(String(rawSl).replace(/[^0-9.-]/g, ""));
+      const numTp    = typeof rawTp === "number" ? rawTp : parseFloat(String(rawTp).replace(/[^0-9.-]/g, ""));
+
+      let rrDisplay = "1:2.0";
+      let slPctStr = "";
+      let tpPctStr = "";
+
+      if (!isNaN(numEntry) && !isNaN(numSl) && !isNaN(numTp) && numEntry > 0) {
+        const isLong = record.side === "LONG";
+        const risk = isLong ? (numEntry - numSl) : (numSl - numEntry);
+        const reward = isLong ? (numTp - numEntry) : (numEntry - numTp);
+
+        if (risk > 0 && reward > 0) {
+          const ratio = reward / risk;
+          rrDisplay = `1:${ratio.toFixed(1)}`;
+        }
+
+        const slPct = Math.abs((numSl - numEntry) / numEntry) * 100;
+        const tpPct = Math.abs((numTp - numEntry) / numEntry) * 100;
+        slPctStr = ` \\(\\-${slPct.toFixed(1)}\\%\\)`;
+        tpPctStr = ` \\(\\+${tpPct.toFixed(1)}\\%\\)`;
+      } else {
+        const rrMatch = (record.ai_summary || "").match(/1:([0-9.]+)/);
+        if (rrMatch && parseFloat(rrMatch[1]) >= 1.0) {
+          rrDisplay = `1:${parseFloat(rrMatch[1]).toFixed(1)}`;
+        }
+      }
 
       const orderTypeDisplay = rawOrderType.toUpperCase().includes("MARKET")
         ? `${record.side === "LONG" ? "Buy" : "Sell"} Market`
         : `${record.side === "LONG" ? "Buy" : "Sell"} Limit`;
 
-      // Scale targets
+      // Scale targets (with strict deduplication of identical prices)
       const tp1Raw = record.take_profit_json?.tp1;
       const tp2Raw = record.take_profit_json?.tp2;
       const tp3Raw = record.take_profit_json?.tp3;
 
       const targetParts: string[] = [];
-      if (tp1Raw) targetParts.push(`TP1 \`${escapeCode(formatPrice(tp1Raw, record.symbol))}\``);
-      if (tp2Raw) targetParts.push(`TP2 \`${escapeCode(formatPrice(tp2Raw, record.symbol))}\``);
-      if (tp3Raw) targetParts.push(`TP3 \`${escapeCode(formatPrice(tp3Raw, record.symbol))}\``);
+      const seenTargets = new Set<string>();
+
+      if (tp1Raw) {
+        const f = formatPrice(tp1Raw, record.symbol);
+        if (f !== "—" && !seenTargets.has(f)) {
+          seenTargets.add(f);
+          targetParts.push(`TP1 \`${escapeCode(f)}\``);
+        }
+      }
+      if (tp2Raw) {
+        const f = formatPrice(tp2Raw, record.symbol);
+        if (f !== "—" && !seenTargets.has(f)) {
+          seenTargets.add(f);
+          targetParts.push(`TP2 \`${escapeCode(f)}\``);
+        }
+      }
+      if (tp3Raw) {
+        const f = formatPrice(tp3Raw, record.symbol);
+        if (f !== "—" && !seenTargets.has(f)) {
+          seenTargets.add(f);
+          targetParts.push(`TP3 \`${escapeCode(f)}\``);
+        }
+      }
 
       const targetsLine = targetParts.length > 0
         ? `\n🎯 *Targets:* ${targetParts.join(" • ")}`
@@ -257,15 +376,65 @@ serve(async (req) => {
       const timeframeDisplay = record.timeframe ? `${record.timeframe.toUpperCase()} ` : "";
       const thesis = extractCleanThesis(record.ai_summary || "");
 
-      const message = `
-🚀 *PAMM EXECUTION* \\| ${sideEmoji} *${side} ${symbol}* \\(${tier}\\)
+      // Give the Execution Desk (agent-trade) 1.2s to compute risk allocations and place broker orders
+      await new Promise((resolve) => setTimeout(resolve, 1200));
 
+      const { data: latestOpp } = await supabase
+        .from("trade_opportunities")
+        .select("status, ai_risks, ai_summary")
+        .eq("id", record.id)
+        .single();
+
+      const { data: executedTrades } = await supabase
+        .from("user_trades")
+        .select("id, status, volume, meta_api_order_id")
+        .eq("opportunity_id", record.id);
+
+      const hasLiveTrades = Boolean(executedTrades && executedTrades.length > 0);
+      const isRejected = latestOpp?.status === "REJECTED" || 
+                         (latestOpp?.ai_risks && (latestOpp.ai_risks.includes("Skipped") || latestOpp.ai_risks.includes("Rejected")));
+
+      let headerTitle = `🚀 *PAMM SIGNAL*`;
+      let statusLine = "";
+
+      if (hasLiveTrades) {
+        headerTitle = `🚀 *PAMM LIVE EXECUTION*`;
+        statusLine = `\n• *Status:* ✅ *Executed* \\(Live Order Placed on MT5 VPS\\)`;
+      } else if (isRejected) {
+        headerTitle = `💡 *PAMM INTEL SETUP*`;
+        let skipReason = latestOpp?.ai_risks || record.ai_risks || "Account Risk Heat Reached";
+        if (skipReason.includes("10% Account Blowout Protection")) skipReason = "10% Portfolio Heat Hard Cap Reached";
+        else if (skipReason.includes("Circuit Breaker")) skipReason = "Drawdown Circuit Breaker Active";
+        else if (skipReason.includes("3.0% maximum risk budget")) skipReason = "3% Single-Trade Risk Limit Exceeded";
+        else if (skipReason.includes("Contradictory signal")) skipReason = "Correlated Position Conflict";
+
+        statusLine = `\n• *Status:* ⏸️ *Signal Only* \\(Skipped: ${escapeMd(truncateWords(skipReason, 45))}\\)`;
+      } else if (rawOrderType.toUpperCase().includes("LIMIT")) {
+        headerTitle = `⏳ *PAMM PENDING ORDER*`;
+        statusLine = `\n• *Status:* ⏳ *Pending Order* \\(Awaiting Entry Pullback\\)`;
+      } else {
+        headerTitle = `📡 *PAMM DISPATCH*`;
+        statusLine = `\n• *Status:* 📡 *Signal Dispatched*`;
+      }
+
+      const message = `
+${headerTitle} \\| ${sideEmoji} *${side} ${symbol}* ${flagEmoji} \\(${tier}\\)
+━━━━━━━━━━━━━━━━━━━━━${statusLine}
 • *Entry:* \`${escapeCode(entryFormatted)}\` \\(${escapeMd(orderTypeDisplay)}\\)
-• *Stop Loss:* \`${escapeCode(slFormatted)}\` \\| *Target:* \`${escapeCode(tpFormatted)}\`
-• *R:R:* ${escapeMd(rr)} \\| *Horizon:* ${escapeMd(timeframeDisplay)}Swing
+• *Stop Loss:* \`${escapeCode(slFormatted)}\`${slPctStr} \\| *Target:* \`${escapeCode(tpFormatted)}\`${tpPctStr}
+• *R:R:* ${escapeMd(rrDisplay)} \\| *Horizon:* ${escapeMd(timeframeDisplay)}Swing
 
 💡 *Setup:* _${escapeMd(thesis)}_${targetsLine}
       `.trim();
+
+      const replyMarkup = {
+        inline_keyboard: [
+          [
+            { text: `📊 Chart (${record.symbol})`, url: `https://raineinvest.com/chart?symbol=${encodeURIComponent(record.symbol)}` },
+            { text: "⚡ Active Terminal", url: "https://raineinvest.com/dashboard" }
+          ]
+        ]
+      };
 
       const telegramUrl = `https://api.telegram.org/bot${CENTRAL_TELEGRAM_BOT_TOKEN}/sendMessage`;
       const broadcastPromises = subscribedUsers.map(async (user) => {
@@ -276,6 +445,7 @@ serve(async (req) => {
             chat_id: user.chatId,
             text: message,
             parse_mode: "MarkdownV2",
+            reply_markup: replyMarkup,
             disable_web_page_preview: true,
           }),
         });
@@ -333,7 +503,7 @@ serve(async (req) => {
 
       const message = `
 ❌ *TRADE EXECUTION REJECTED* ❌
-
+━━━━━━━━━━━━━━━━━━━━━
 *Symbol:* ${symbol}
 *Side:* ${side}
 
