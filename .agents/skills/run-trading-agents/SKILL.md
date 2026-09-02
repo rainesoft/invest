@@ -19,7 +19,9 @@ The trading framework operates as a coordinated Hive Mind:
 1. **`agent-news` (Macro Scout & Sentiment)**:
    - Polls high-impact economic calendar events (Forex Factory) and live breaking news feeds (Tavily/RSS).
    - Writes macroeconomic calendar context into `system_settings` (`macro_oracle_context`).
-   - Evaluates crypto/macro sentiment and publishes high-conviction events (`status: "PUBLISHED"`), waking up `agent-swing` for immediate event-driven confluence.
+   - Evaluates crypto/macro sentiment via LLM and Tavily deep-search verification.
+   - Saves macro sentiment context into `market_context` (4-hour TTL) with `macro_bias` (`BULLISH` / `BEARISH`).
+   - Wakes up `agent-swing` via HTTP trigger for immediate event-driven technical confluence.
 
 2. **`agent-day` (Intraday M30 Scalper / Momentum & Value Area Trader)**:
    - Evaluates 30-minute charts across 24 global assets (Forex, Indices, Metals, Oil, Crypto, Tech Equities).
@@ -32,7 +34,7 @@ The trading framework operates as a coordinated Hive Mind:
    - Analyzes 1D and 1W charts for dominant swing ranges, Fibonacci retracements (23.6%, 38.2%, 50%, 61.8%, 78.6%), extensions (127.2%, 141.4%, 161.8%, 200%), and 40-bar trend channels.
    - Algorithmically identifies classical geometric patterns (Triangles, Wedges, Double Tops/Bottoms, Head & Shoulders).
    - Incorporates **S/R Flip Confluence (+10 bonus)** and passes the S-Tier Structural Guard when S/R Flip is confirmed.
-   - Consumes pending news sentiment from `agent-news` (injecting a **+20 confidence boost** when technicals align).
+   - Consumes pending news sentiment from `agent-news` (injecting a **+20 confidence boost** when technicals align, or a **-30 penalty** when technicals contradict macro).
    - Checks Weekly/Daily Fib confluence (**+5 confidence bonus**).
    - Applies ICT/SMC institutional footprints (Order Blocks, FVGs, Liquidity Sweeps).
    - Enforces the **20-Bar Daily Horizon (20 trading days = 480 hours)**.
@@ -60,10 +62,10 @@ Executes the entire 24-asset roster across news, intraday, and swing tiers:
 node scripts/call_agents.mjs
 ```
 
-### 3.2 Targeted Symbol Execution (e.g. XAUUSD)
+### 3.2 Targeted Symbol Execution (e.g. USDJPY, XAUUSD, USOIL)
 Runs `agent-news`, `agent-day`, and `agent-swing` specifically for target symbol(s) in manual/evaluation mode:
 ```bash
-node scripts/call_agents.mjs --symbol XAUUSD --timeframe 1D --hours 48
+node scripts/call_agents.mjs --symbol USDJPY,XAUUSD,USOIL --timeframe 1D --hours 24
 ```
 
 ### 3.3 Deep Diagnostic Audit
@@ -89,14 +91,30 @@ Signals are graded based on calibrated confidence scores:
 
 | Tier | Confidence Score | Confluence Requirements | Target 2 R:R Benchmark | Execution Sizing |
 | :--- | :--- | :--- | :--- | :--- |
-| **S-Tier** | **90 – 99** | Multi-timeframe Fib overlap + S/R flip or SMC Order Block/FVG mitigation + Macro News Alignment (+20) + Trend Channel / Reversal Pattern. | **$\ge 1:1.75$** | **High / 3.0x Multiplier** |
+| **S-Tier** | **90 – 100** | Multi-timeframe Fib overlap + S/R flip or SMC Order Block/FVG mitigation + Macro News Alignment (+20) + Trend Channel / Reversal Pattern. | **$\ge 1:1.75$** | **High / 3.0x Multiplier** |
 | **A-Tier** | **80 – 89** | Key Fib level (50% / 61.8% / 78.6%) + RSI/MACD divergence + Candlestick confirmation (Piercing Line, Harami, Pinbar) + Channel boundary. | **$\ge 1:1.70$** | **Standard 1.0x Sizing** |
 | **B-Tier** | **70 – 79** | Single-timeframe setup, mean-reversion boundary fade, or moderate momentum breakout with volume surge. | **$\ge 1:1.50$** | **0.5x Conservative Sizing** |
 | **C-Tier / Rejection** | **< 70** | Mid-range chop, anemic breakout volume, conflicting divergence, or guardrail failure. | **N/A** | **Sideline / Rejected** |
 
 ---
 
-## 6. Analyzing Generated Signals via Supabase
+## 6. Origination Risk Governor & Contract Sizing Matrix
+
+To safeguard capital from outsized dollar drawdowns on volatile instruments, the engine enforces the **3.0% Max Capital Risk Cap ($45.00 on $1,500 base equity)** at minimum 0.01 lot size:
+
+$$\text{Max Allowable Stop Distance} = \frac{\$45.00}{0.01 \times \text{Point Value USD}}$$
+
+### Contract Sizing Table:
+- **`USOIL` / `UKOIL`**: Contract Size = $1,000\text{ bbl}$ $\implies 0.01\text{ lot} = 10\text{ bbl} \implies \$10.00\text{ per } \$1.00\text{ move}$. Max stop distance $= \$4.50$.
+- **`XAUUSD`**: Contract Size = $100\text{ oz}$ $\implies 0.01\text{ lot} = 1\text{ oz} \implies \$1.00\text{ per } \$1.00\text{ move}$. Max stop distance $= \$45.00$.
+- **`BTCUSD`**: Contract Size = $1\text{ BTC}$ $\implies 0.01\text{ lot} = 0.01\text{ BTC} \implies \$0.01\text{ per } \$1.00\text{ move}$. Max stop distance $= \$4,500$.
+- **`Forex (USD Pairs)`**: Contract Size = $100,000$ $\implies 0.01\text{ lot} = \$0.10\text{ per pip}$. Max stop distance $= 450\text{ pips}$.
+
+When raw ATR stop distance exceeds the cap, the **Adaptive Limit Anchoring** engine recalculates the entry to a pullback limit price within a $0.25\times\text{ATR}$ buffer.
+
+---
+
+## 7. Analyzing Generated Signals via Supabase
 
 Query the `trade_opportunities` table to review the details of all recent signals:
 
@@ -124,17 +142,18 @@ ORDER BY confidence DESC;
 ```
 
 ### Inspecting Guardrail Rejections & Debugging:
-- **`status = 'APPROVED'`**: Signal passed all confluences, verified for Target 2 R:R $\ge 1.70$, and sent to Execution Desk.
+- **`status = 'APPROVED'` / `'ACTIVE'`**: Signal passed all confluences, verified for Target 2 R:R $\ge 1.70$, and sent to Execution Desk / MT5 VPS Engine.
 - **`status = 'REJECTED'`**: Review `ai_risks` and `ai_summary` to identify which filter triggered:
   - **`Pre-AI Guard`**: Asset isolation violation (another active trade exists on this symbol or net USD exposure limit reached).
   - **`Layer 0`**: Macro Blackout Window (high-impact USD central bank announcement within ±30 minutes).
+  - **`Risk Governor`**: Minimum 0.01 lot dollar risk exceeded $45.00 cap and required limit entry offset $> 0.25\times\text{ATR}$.
   - **`Adaptive Limit Solver`**: If market price gave R:R < 1.70, converted to a pullback Limit Order at the exact structural discount.
   - **`Bar-Close Invalidation`**: Confirmed candle close beyond the Pivot Point.
   - **`20-Bar Horizon Expired`**: Setup exceeded its 20-period life (10h intraday / 20 days swing) without fill.
 
 ---
 
-## 7. How to Optimize the Agents for S-Tier Signal Generation
+## 8. How to Optimize the Agents for S-Tier Signal Generation
 
 1. **Leverage News-Technical Confluence (`agent-news` -> `agent-swing`)**:
    - When high-impact catalysts fire in `agent-news`, ensure the news sentiment is written to `market_context` or `system_settings`.
@@ -145,23 +164,21 @@ ORDER BY confidence DESC;
    - For overextended markets, use the **Adaptive Pullback Limit Solver** to ensure entry prices guarantee $\ge 1:1.75$ R:R to Target 2.
 
 3. **Multi-Timeframe Weekly/Daily Fibonacci Convergence**:
-   - Assets where the Daily Fib overlaps the Weekly Fib within 0.3% receive an automatic **+5 confidence boost**. Scanning broad cross-pairs (e.g. `XAUUSD`, `USOIL`, `EURJPY`, `GBPJPY`, `AUDUSD`) increases the frequency of institutional confluence.
+   - Assets where the Daily Fib overlaps the Weekly Fib within 0.3% receive an automatic **+5 confidence boost**. Scanning broad cross-pairs (e.g. `USDJPY`, `XAUUSD`, `USOIL`, `EURJPY`, `GBPJPY`, `AUDUSD`) increases the frequency of institutional confluence.
 
 4. **ATR-Calibrated Breathing Room for Metals & Volatile Assets**:
    - For Gold (`XAUUSD`) and Crude Oil (`USOIL`/`UKOIL`), ensure stop losses are placed with at least a $1.0\times\text{ATR}$ to $1.25\times\text{ATR}$ buffer below the structural pivot to prevent premature wick stop-outs before impulsive expansion towards Target 2 / Target 3.
 
 ---
 
-## 8. S-Tier Signal Recovery & Mathematical Profitability Playbook
+## 9. S-Tier Signal Recovery & Mathematical Profitability Playbook
 
 When an asset fails to achieve S-Tier confidence (e.g. confidence < 75 due to mid-range chop or overhead resistance), apply the following institutional recovery protocols:
 
 1. **Adaptive Limit Pullback Anchoring (Discount Entry)**:
    - Instead of rejecting mid-range chop, anchor a Limit Order at the nearest structural support / 61.8% Golden Pocket Fib. This compresses stop-loss distance and expands R:R to $> 1:3.0$, elevating the setup into S-Tier.
 2. **Breakout Buy Stop Anchor (Momentum Expansion)**:
-   - Place a Buy Stop 0.25x ATR above the contested resistance ceiling (e.g. above $4,332 for XAUUSD) with volume surge verification to capture impulsive expansion towards Target 2 / Target 3 ($4,500).
+   - Place a Buy Stop 0.25x ATR above the contested resistance ceiling with volume surge verification to capture impulsive expansion towards Target 2 / Target 3.
 3. **Calculating Institutional Trade Profitability ($EV$)**:
    - Calculate Expected Value: $EV = (P_{\text{win}} \times \text{TP2 Reward}) - (P_{\text{loss}} \times \text{Risk Distance})$.
-   - Compare gross pip/point yields and R:R ratios across the portfolio to prioritize capital allocation to highest-EV setups (e.g. `USOIL` R:R 1:5.21 and `XAUUSD` R:R 1:10.75).
-
-
+   - Compare gross pip/point yields and R:R ratios across the portfolio to prioritize capital allocation to highest-EV setups (e.g. `USDJPY` R:R 1:3.24 and `USOIL` R:R 1:2.82).
