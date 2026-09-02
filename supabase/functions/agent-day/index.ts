@@ -949,6 +949,22 @@ serve(async (req) => {
               return;
             }
 
+            // --- COMMODITY DAILY ROLLOVER BLACKOUT GUARD ---
+            if (["UKOIL", "USOIL"].includes(symbol)) {
+              const now = new Date();
+              const utcHours = now.getUTCHours();
+              const utcMinutes = now.getUTCMinutes();
+              const totalUtcMins = utcHours * 60 + utcMinutes;
+              // 21:00 UTC (1260 mins) to 22:15 UTC (1335 mins)
+              if (totalUtcMins >= 1260 && totalUtcMins <= 1335) {
+                const rejectReason = `Skipped: Commodity daily rollover maintenance window (21:00-22:15 UTC). Broker returns Error 10018 (Market Closed).`;
+                console.log(`[${symbol}] [Rollover Guard] ${rejectReason}`);
+                sendEvent({ type: 'progress', message: `[${symbol}] ${rejectReason}` });
+                rejections.push({ symbol, reason: rejectReason, layer: "Session Filter" });
+                return;
+              }
+            }
+
             sendEvent({ type: 'progress', message: `[Pre-AI Guard] Validating global signal constraints for ${symbol}...` });
             const riskValidation = await validateGlobalSignal(supabase, symbol, snapshot);
             if (!riskValidation.valid) {
@@ -1213,19 +1229,16 @@ serve(async (req) => {
             sendEvent({ type: 'progress', message: `[Layer B: Cognitive Guard] APPROVED by AI Risk Officer.` });
 
             // LAYER C: Structural Risk/Reward Validation
-            // --- HIGH-BETA VOLATILITY FLOOR (1.25x ATR) ---
-            const highBetaAssets = ["XAUUSD", "XAGUSD", "UKOIL", "USOIL", "US30", "NAS100", "SPX500", "GER30"];
-            if (highBetaAssets.includes(symbol)) {
-              const minBetaSlDist = Number(((snapshot.atr_14 || Math.abs(entry_price * 0.01)) * 1.25).toFixed(3));
-              const currentSlDist = Math.abs(entry_price - stop_loss);
-              if (currentSlDist < minBetaSlDist) {
-                const widenedSl = dbSide === "LONG"
-                  ? Number((entry_price - minBetaSlDist).toFixed(3))
-                  : Number((entry_price + minBetaSlDist).toFixed(3));
-                console.log(`[${symbol}] [Volatility Guard] SL distance (${currentSlDist.toFixed(3)}) was tighter than 1.25x ATR (${minBetaSlDist.toFixed(3)}). Widening SL: ${stop_loss} → ${widenedSl}`);
-                stop_loss = widenedSl;
-                institutional_rationale += ` [Volatility Guard: Stop widened to 1.25x ATR ($${stop_loss}) to prevent wick stop-out]`;
-              }
+            // --- MANDATORY DYNAMIC ATR STOP FLOOR (1.10x ATR on 30m) ---
+            const minSlDist = Math.max((snapshot.atr_14 || Math.abs(entry_price * 0.005)) * 1.10, snapshot.current_price * 0.0008);
+            const currentSlDist = Math.abs(entry_price - stop_loss);
+            if (currentSlDist < minSlDist) {
+              const widenedSl = dbSide === "LONG"
+                ? Number((entry_price - minSlDist).toFixed(5))
+                : Number((entry_price + minSlDist).toFixed(5));
+              console.log(`[${symbol}] [Volatility Guard] SL distance (${currentSlDist.toFixed(5)}) was tighter than 1.10x ATR (${minSlDist.toFixed(5)}). Widening SL: ${stop_loss} → ${widenedSl}`);
+              stop_loss = widenedSl;
+              institutional_rationale += ` [Volatility Guard: Stop widened to 1.10x ATR ($${stop_loss}) to prevent wick stop-out]`;
             }
             let risk = Math.abs(entry_price - stop_loss);
             let take_profit = evaluation.execution_parameters?.suggested_take_profit;
@@ -1470,6 +1483,12 @@ serve(async (req) => {
               }
             }
 
+            const isHighMomentum = Boolean(
+              (snapshot.adx_14 && snapshot.adx_14 >= 25) ||
+              (snapshot.volume_ratio && snapshot.volume_ratio >= 1.20) ||
+              (strategy_applied && (strategy_applied.includes("BREAKOUT") || strategy_applied.includes("MOMENTUM")))
+            );
+
             const tp1 = evaluation.execution_parameters?.take_profit_1 || Number((entry_price + (take_profit - entry_price) * 0.5).toFixed(5));
             const tp2 = take_profit;
             const tcLevels = calculateInstitutionalTradingCentralLevels(
@@ -1478,7 +1497,9 @@ serve(async (req) => {
               tp1,
               tp2,
               dbSide as "LONG" | "SHORT",
-              1.70
+              1.70,
+              snapshot.atr_14,
+              isHighMomentum
             );
 
             const { data, error } = await supabase

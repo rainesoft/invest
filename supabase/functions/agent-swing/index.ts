@@ -1763,13 +1763,21 @@ serve(async (req) => {
           const rrToTp2 = swingRisk > 0 ? Number((rewardTp2 / swingRisk).toFixed(2)) : 0;
           const requiredRR = 1.70;
 
+          const isHighMomentum = Boolean(
+            (snapshot.adx_14 && snapshot.adx_14 >= 25) ||
+            (snapshot.volume_ratio && snapshot.volume_ratio >= 1.20) ||
+            (evaluation.strategy_applied && (evaluation.strategy_applied.includes("BREAKOUT") || evaluation.strategy_applied.includes("MOMENTUM")))
+          );
+
           const tcLevels = calculateInstitutionalTradingCentralLevels(
             currentPrice,
             sl,
             tp1 || Number((entry + (isLong ? swingRisk : -swingRisk)).toFixed(5)),
             tp2 || Number((entry + (isLong ? swingRisk * 2.0 : -swingRisk * 2.0)).toFixed(5)),
             isLong ? "LONG" : "SHORT",
-            1.70
+            1.70,
+            snapshot.atr_14,
+            isHighMomentum
           );
 
           if (rrToTp2 < requiredRR - 0.1) {
@@ -1801,6 +1809,19 @@ serve(async (req) => {
               rejections.push({ symbol: symbol as string, reason: msg, layer: "Execution Desk" });
               return;
             }
+          }
+
+          // === MANDATORY DYNAMIC ATR STOP FLOOR ===
+          // On Daily Swing trades, guarantee that |entry - sl| >= 1.0x Daily ATR (or min 25 pips on Forex)
+          // to prevent premature liquidations from minor intra-minute noise.
+          const mandatoryMinSlDistance = Math.max((dailyAtr || 0) * 1.0, currentPrice * 0.0025);
+          if (Math.abs(entry - sl) < mandatoryMinSlDistance) {
+            const adjustedSl = isLong
+              ? Number((entry - mandatoryMinSlDistance).toFixed(5))
+              : Number((entry + mandatoryMinSlDistance).toFixed(5));
+            console.log(`[${symbol as string}] [Dynamic ATR Floor] SL distance (${Math.abs(entry - sl).toFixed(5)}) was below minimum ${mandatoryMinSlDistance.toFixed(5)} (1.0x Daily ATR). Adjusted SL: ${sl} → ${adjustedSl}`);
+            sl = adjustedSl;
+            evaluation.execution_parameters.suggested_stop_loss = sl;
           }
 
           // === APPROVED — SAVE TO DB ===
