@@ -9,7 +9,7 @@ import { isMarketOpen } from "../../../packages/core/market.ts";
 import { revalidateOpportunity } from "../../../packages/strategy/revalidation.ts";
 
 import { getContextSnapshot, LogicContext, isBullishEngulfing, isBearishRejection, computeHtfFibAlignment, calibrateProbability, computeLiquiditySweepScore, calculateInstitutionalTradingCentralLevels, calculateFibonacciProjections, FibonacciProjection, FibonacciProjectionsResult } from "../../../packages/strategy/indicators.ts";
-import { validateGlobalSignal } from "../../../packages/strategy/agent-risk.ts";
+import { validateGlobalSignal, validateCentralBankIntervention } from "../../../packages/strategy/agent-risk.ts";
 import OpenAI from "npm:openai";
 import { z } from "npm:zod";
 
@@ -1495,6 +1495,21 @@ serve(async (req) => {
           // === DYNAMIC SMC / LTF PRECISION ENTRY & STOP LOSS ANCHORING ===
           const dbSide: "LONG" | "SHORT" = (evaluation.recommended_direction === "LONG" || evaluation.recommended_direction === "BUY" || evaluation.recommended_direction === "BULLISH") ? "LONG" : "SHORT";
           const isLong = dbSide === "LONG";
+
+          // === CENTRAL BANK INTERVENTION & SOVEREIGN YIELD VETO ===
+          const cbValidation = await validateCentralBankIntervention(supabase, symbol as string, dbSide, headlines);
+          if (!cbValidation.valid) {
+            console.log(`[Pre-AI Guard] [Trace: ${traceId}] REJECTED ${symbol}: ${cbValidation.reason}`);
+            sendEvent({ type: "progress", message: `[Pre-AI Guard] Skipped ${symbol}: Central Bank Intervention lockout.` });
+            await insertAuditLog(supabase, {
+              actor_type: "SYSTEM",
+              action: "REJECTED_BY_RISK_PRE_AI",
+              entity_type: "swing_research",
+              payload_json: { symbol, reason: cbValidation.reason },
+            });
+            rejections.push({ symbol: symbol as string, reason: cbValidation.reason || "Central bank intervention lockout", layer: "Pre-AI Guard" });
+            return;
+          }
           const ltfOb = isLong ? (snapshot as any).ltf_bullish_ob_nearest : (snapshot as any).ltf_bearish_ob_nearest;
           const ltfFvg = isLong ? (snapshot as any).ltf_bullish_fvg_nearest : (snapshot as any).ltf_bearish_fvg_nearest;
           const dailyAtr = (snapshot as any).atr_14 || 10;
@@ -1780,36 +1795,15 @@ serve(async (req) => {
             isHighMomentum
           );
 
-          if (rrToTp2 < requiredRR - 0.1) {
-            // Adaptive Trading Central Limit Entry Optimization:
-            const isReachable = Math.abs(tcLevels.suggested_entry_price - currentPrice) <= ((snapshot.atr_14 || Math.abs(currentPrice - sl)) * 2.5);
-            if ((tier === "S-Tier" || tier === "A-Tier" || confidence >= 80) && isReachable) {
-              entry = tcLevels.suggested_entry_price;
-              order_type = isLong ? "BUY LIMIT" : "SELL LIMIT";
-              evaluation.execution_parameters.suggested_entry_price = entry;
-              safeRationale += ` [Trading Central Limit Optimizer: Adjusted entry to pullback limit @ $${entry} to enforce institutional 1:1.75 R:R to TP2]`;
-            } else {
-              const msg = `R:R to TP2 is 1:${rrToTp2.toFixed(2)}, below required 1:${requiredRR} for ${tier}`;
-              sendEvent({ type: "progress", message: `[${symbol as string}] REJECTED: ${msg}` });
-              const rejectedObj = {
-                symbol: symbol as string,
-                side: dbSide,
-                timeframe: timeframe.toLowerCase(),
-                status: "REJECTED",
-                source: "agent-swing",
-                entry_plan_json: { price: entry, order_type, scaled_entries: null, max_holding_bars: 20, horizon_days: 20 },
-                stop_plan_json: { stop: sl, initial: sl, atr: snapshot.atr_14 },
-                take_profit_json: { tp: tp2, tp1, tp2, tp3 },
-                ai_summary: `[SWING][${tier}] ${safeRationale}`,
-                ai_risks: `Rejected by Swing Desk: ${msg}`,
-                confidence: adjustedConfidence,
-                trace_id: traceId,
-              };
-              await supabase.from("trade_opportunities").insert(rejectedObj);
-              rejections.push({ symbol: symbol as string, reason: msg, layer: "Execution Desk" });
-              return;
-            }
-          }
+          // Apply adaptive Trading Central levels (clamped entry + expanded TP2 to enforce institutional 1:1.75 R:R)
+          entry = tcLevels.suggested_entry_price;
+          order_type = tcLevels.order_type;
+          tp1 = tcLevels.tp1;
+          tp2 = tcLevels.tp2;
+          evaluation.execution_parameters.suggested_entry_price = entry;
+          evaluation.execution_parameters.take_profit_1 = tp1;
+          evaluation.execution_parameters.take_profit_2 = tp2;
+          safeRationale += ` [Trading Central Adaptive Levels: Entry @ $${entry} (${order_type}), TP1 @ $${tp1}, TP2 @ $${tp2} (R:R 1:${tcLevels.current_rr_tp2})]`;
 
           // === MANDATORY DYNAMIC ATR STOP FLOOR ===
           // On Daily Swing trades, guarantee that |entry - sl| >= 1.0x Daily ATR (or min 25 pips on Forex)

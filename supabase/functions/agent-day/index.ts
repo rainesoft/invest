@@ -6,7 +6,7 @@ import { insertAuditLog } from "../../../packages/core/audit.ts";
 import { isMarketOpen } from "../../../packages/core/market.ts";
 import { netEdge, transactionCost, slippage } from "../../../packages/strategy/index.ts";
 import { getContextSnapshot, LogicContext, calculatePivotPoints, computeLiquiditySweepScore, calculateInstitutionalTradingCentralLevels } from "../../../packages/strategy/indicators.ts";
-import { validateGlobalSignal } from "../../../packages/strategy/agent-risk.ts";
+import { validateGlobalSignal, validateCentralBankIntervention } from "../../../packages/strategy/agent-risk.ts";
 import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews, detectCentralBankEvent, detectUpcomingFedEvent, computeMacroConfidenceBoost, fetchETFFlowSentiment } from "../../../packages/core/news.ts";
 import { isAutoTradingEnabled } from "../../../packages/core/settings.ts";
 
@@ -982,7 +982,21 @@ serve(async (req) => {
                 reason: riskValidation.reason,
                 layer: "Pre-AI Guard"
               });
-              // We skip AI evaluation entirely and DO NOT save a database signal to prevent C-Tier spam in the Vault
+              return;
+            }
+
+            // --- CENTRAL BANK INTERVENTION & SOVEREIGN YIELD VETO ---
+            const cbValidation = await validateCentralBankIntervention(supabase, symbol, (snapshot.trend_alignment?.startsWith('BULLISH') ? 'LONG' : (snapshot.trend_alignment?.startsWith('BEARISH') ? 'SHORT' : 'LONG')));
+            if (!cbValidation.valid) {
+              console.log(`[Pre-AI Guard] REJECTED ${symbol}: ${cbValidation.reason}`);
+              sendEvent({ type: 'progress', message: `[Pre-AI Guard] Skipped ${symbol}: Central Bank Intervention lockout.` });
+              await insertAuditLog(supabase, {
+                actor_type: "SYSTEM",
+                action: "REJECTED_BY_RISK_PRE_AI",
+                entity_type: "research",
+                payload_json: { symbol, reason: cbValidation.reason },
+              });
+              rejections.push({ symbol, reason: cbValidation.reason || "Central bank intervention lockout", layer: "Pre-AI Guard" });
               return;
             }
 
@@ -1502,6 +1516,12 @@ serve(async (req) => {
               isHighMomentum
             );
 
+            // Apply adaptive Trading Central levels (clamped entry + expanded TP2 to guarantee institutional 1:1.75 R:R)
+            entry_price = tcLevels.suggested_entry_price;
+            order_type = tcLevels.order_type;
+            const finalTp1 = tcLevels.tp1;
+            const finalTp2 = tcLevels.tp2;
+
             const { data, error } = await supabase
               .from("trade_opportunities")
               .insert({
@@ -1519,10 +1539,10 @@ serve(async (req) => {
                   trading_central_levels: tcLevels,
                 },
                 stop_plan_json: { stop: stop_loss, initial: stop_loss, atr: snapshot.atr_14 },
-                take_profit_json: { tp: take_profit, tp1, tp2 },
+                take_profit_json: { tp: finalTp2, tp1: finalTp1, tp2: finalTp2 },
                 risk_summary: `RSI ${snapshot.rsi_14}${snapshot.rsi_divergence && snapshot.rsi_divergence !== 'NONE' ? ` | Div: ${snapshot.rsi_divergence}` : ''}`,
                 confidence: confidence_score,
-                ai_summary: institutional_rationale,
+                ai_summary: `${institutional_rationale}\n\n[Trading Central Adaptive Levels: Entry @ $${entry_price} (${order_type}), TP1 @ $${finalTp1}, TP2 @ $${finalTp2} (R:R 1:${tcLevels.current_rr_tp2})]`,
                 ai_risks: "Managed by AI Risk Officer",
                 model_id: modelId,
                 model_version: modelVersion,
