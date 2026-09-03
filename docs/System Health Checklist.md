@@ -600,8 +600,18 @@ In `packages/execution/index.ts` (`fetchPaperBars`), all fallback market data re
 > 2. On 2026-09-01 at 21:30 UTC, a `UKOIL` order failed with MT5 Error `10018 (Market Closed)` during the daily oil maintenance rollover window.
 
 ### Standard Rule:
-- **Momentum-Aware Clamping:** When $\text{ADX} \ge 25$, Volume Ratio $\ge 1.20$, or breakout strategy is detected, `calculateInstitutionalTradingCentralLevels()` clamps limit offsets to $\le 0.15\times\text{ ATR}$ from market price to maximize fill probability.
+- **Momentum-Aware Clamping & Adaptive TP Expansion:** When $\text{ADX} \ge 25$, Volume Ratio $\ge 1.20$, or breakout strategy is detected, `calculateInstitutionalTradingCentralLevels()` clamps limit offsets to $\le 0.10\times\text{ ATR}$ from market price and adaptively expands `tp2` along Fibonacci extension levels ($127.2\%$ or $161.8\%$) to satisfy the institutional $\ge 1:1.75\text{ R:R}$ requirement without missing fills.
 - **Commodity Rollover Blackout:** `agent-day` skips order generation for `UKOIL` and `USOIL` between `21:00 UTC` and `22:15 UTC` daily.
+
+---
+
+## ⚠️ 2K. Central Bank Currency Intervention & Sovereign Yield Lockout Guard
+
+> [!CAUTION]
+> **Incident (2026-09-02):** On 2026-09-02, `EURJPY` Long orders opened during active Bank of Japan (BOJ) currency intervention headlines. While technicals showed a minor 61.8% Fibonacci support bounce, institutional yen buying driven by central bank intervention drove an immediate stop-out.
+
+### Standard Rule:
+In `packages/strategy/agent-risk.ts`, `validateCentralBankIntervention()` scans `system_settings` (`macro_oracle_context`, `macro_scout_processed_news`) and live breaking headlines for active central bank intervention keywords (e.g., `BOJ intervention`, `Yen intervention`, `unannounced rate hike`, `currency defense`, `SNB intervention`, `hawkish Fed yield surge`). Any trade opposing sovereign intervention flow is strictly vetoed in the Pre-AI risk filter gate (`REJECTED_BY_RISK_PRE_AI`).
 
 ---
 
@@ -1027,6 +1037,30 @@ In `/functions/v1/vps-history`, when a ticket is not found in `user_trades`:
 2. **`RaineInvestEA.mq5` Multi-Candidate Alias Resolver:** In `RaineInvestEA.mq5`, `ResolveBrokerSymbol()` iterates through candidate broker aliases and activates the symbol via `SymbolSelect(candidate, true)` before sending orders or streaming candle bars.
 3. **`RaineInvestEA.mq5` Market Data Tracking:** `TrackedSymbols` array includes all active broker names (`US500`, `USTEC`, `DE30`, `US30`, `JP225`, `USOIL`) with dynamically initialized `lastBarTimes`.
 4. **`agent-sre` Automated Telemetry:** `agent-sre` Probe 4F classifies `Code:10013` as an unmapped symbol alias issue, dispatches actionable Telegram alerts, and auto-heals parent opportunities to `REJECTED`.
+
+---
+
+## ⚠️ 3L. VPS Callback — Unmapped Trade ID & maybeSingle() Query Resiliency
+
+> [!WARNING]
+> **Incident (2026-09-03):** When the MT5 VPS EA sent order fill callbacks to `/functions/v1/vps-callback` for tickets that were external, cancelled, or unmapped, `supabase.from("user_trades").select(...).single()` threw PostgreSQL error `PGRST116 (0 rows)`, resulting in `HTTP 500 Internal Server Error` and causing the EA to retry repeatedly.
+
+### Standard Rule:
+In `/functions/v1/vps-callback`:
+1. Always use `.maybeSingle()` instead of `.single()` when querying `user_trades` and `trade_opportunities` by ID.
+2. If `tradeData` is `null` (unmapped or external trade), do NOT throw an error; return HTTP 200 `OK` (or `SKIPPED`) so the EA acknowledges completion and does not flood server logs with repeated retries.
+
+---
+
+## ⚠️ 3M. Chandelier ATR Trailing Stop Ladder & Stepped Profit Floors for RUNNER Legs
+
+> [!TIP]
+> **Standard:** For `RUNNER` legs on S-Tier and A-Tier setups, `agent-trade`'s Position Manager (`position-manager-poll`) enforces a dual-engine trailing ladder:
+> 1. **Stepped Guaranteed Profit Floors:**
+>    - At $+1.5\text{R}$ progress: Lock in $+0.75\text{R}$ minimum profit.
+>    - At $+2.0\text{R}$ progress: Lock in $+1.25\text{R}$ minimum profit.
+>    - At $+3.0\text{R}$ progress: Lock in $+2.0\text{R}$ minimum profit.
+> 2. **Chandelier ATR Dynamic Trail:** Stop loss trails $2.0\times\text{ ATR}$ behind current price, selecting the higher/more favorable level between the stepped floor and the ATR trail. This protects realized profits while giving runners full leeway to capture 200+ pip mega-trends.
 
 ---
 

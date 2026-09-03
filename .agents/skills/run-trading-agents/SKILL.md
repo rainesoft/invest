@@ -62,10 +62,10 @@ Executes the entire 24-asset roster across news, intraday, and swing tiers:
 node scripts/call_agents.mjs
 ```
 
-### 3.2 Targeted Symbol Execution (e.g. USDJPY, XAUUSD, USOIL)
-Runs `agent-news`, `agent-day`, and `agent-swing` specifically for target symbol(s) in manual/evaluation mode:
+### 3.2 Targeted Symbol Execution (with Automatic Alias Mapping)
+Runs `agent-news`, `agent-day`, and `agent-swing` specifically for target symbol(s). Common aliases like `UKOI` $\to$ `UKOIL`, `GOLD` $\to$ `XAUUSD`, `SILVER` $\to$ `XAGUSD`, `BTC` $\to$ `BTCUSD` are automatically resolved:
 ```bash
-node scripts/call_agents.mjs --symbol USDJPY,XAUUSD,USOIL --timeframe 1D --hours 24
+node scripts/call_agents.mjs --symbol XAUUSD,XAGUSD,BTCUSD,UKOIL --timeframe 1D --hours 24
 ```
 
 ### 3.3 Deep Diagnostic Audit
@@ -108,6 +108,7 @@ $$\text{Max Allowable Stop Distance} = \frac{\$45.00}{0.01 \times \text{Point Va
 - **`USOIL` / `UKOIL`**: Contract Size = $1,000\text{ bbl}$ $\implies 0.01\text{ lot} = 10\text{ bbl} \implies \$10.00\text{ per } \$1.00\text{ move}$. Max stop distance $= \$4.50$.
 - **`XAUUSD`**: Contract Size = $100\text{ oz}$ $\implies 0.01\text{ lot} = 1\text{ oz} \implies \$1.00\text{ per } \$1.00\text{ move}$. Max stop distance $= \$45.00$.
 - **`BTCUSD`**: Contract Size = $1\text{ BTC}$ $\implies 0.01\text{ lot} = 0.01\text{ BTC} \implies \$0.01\text{ per } \$1.00\text{ move}$. Max stop distance $= \$4,500$.
+- **`XAGUSD`**: Contract Size = $5,000\text{ oz}$ $\implies 0.01\text{ lot} = 50\text{ oz} \implies \$50.00\text{ per } \$1.00\text{ move}$. Max stop distance $= \$0.90$.
 - **`Forex (USD Pairs)`**: Contract Size = $100,000$ $\implies 0.01\text{ lot} = \$0.10\text{ per pip}$. Max stop distance $= 450\text{ pips}$.
 
 When raw ATR stop distance exceeds the cap, the **Adaptive Limit Anchoring** engine recalculates the entry to a pullback limit price within a $0.25\times\text{ATR}$ buffer.
@@ -141,16 +142,6 @@ WHERE created_at >= NOW() - INTERVAL '24 hours'
 ORDER BY confidence DESC;
 ```
 
-### Inspecting Guardrail Rejections & Debugging:
-- **`status = 'APPROVED'` / `'ACTIVE'`**: Signal passed all confluences, verified for Target 2 R:R $\ge 1.70$, and sent to Execution Desk / MT5 VPS Engine.
-- **`status = 'REJECTED'`**: Review `ai_risks` and `ai_summary` to identify which filter triggered:
-  - **`Pre-AI Guard`**: Asset isolation violation (another active trade exists on this symbol or net USD exposure limit reached).
-  - **`Layer 0`**: Macro Blackout Window (high-impact USD central bank announcement within ±30 minutes).
-  - **`Risk Governor`**: Minimum 0.01 lot dollar risk exceeded $45.00 cap and required limit entry offset $> 0.25\times\text{ATR}$.
-  - **`Adaptive Limit Solver`**: If market price gave R:R < 1.70, converted to a pullback Limit Order at the exact structural discount.
-  - **`Bar-Close Invalidation`**: Confirmed candle close beyond the Pivot Point.
-  - **`20-Bar Horizon Expired`**: Setup exceeded its 20-period life (10h intraday / 20 days swing) without fill.
-
 ---
 
 ## 8. How to Optimize the Agents for S-Tier Signal Generation
@@ -164,7 +155,7 @@ ORDER BY confidence DESC;
    - For overextended markets, use the **Adaptive Pullback Limit Solver** to ensure entry prices guarantee $\ge 1:1.75$ R:R to Target 2.
 
 3. **Multi-Timeframe Weekly/Daily Fibonacci Convergence**:
-   - Assets where the Daily Fib overlaps the Weekly Fib within 0.3% receive an automatic **+5 confidence boost**. Scanning broad cross-pairs (e.g. `USDJPY`, `XAUUSD`, `USOIL`, `EURJPY`, `GBPJPY`, `AUDUSD`) increases the frequency of institutional confluence.
+   - Assets where the Daily Fib overlaps the Weekly Fib within 0.3% receive an automatic **+5 confidence boost**. Scanning broad cross-pairs (e.g. `USDJPY`, `XAUUSD`, `UKOIL`, `EURJPY`, `GBPJPY`, `AUDUSD`) increases the frequency of institutional confluence.
 
 4. **ATR-Calibrated Breathing Room for Metals & Volatile Assets**:
    - For Gold (`XAUUSD`) and Crude Oil (`USOIL`/`UKOIL`), ensure stop losses are placed with at least a $1.0\times\text{ATR}$ to $1.25\times\text{ATR}$ buffer below the structural pivot to prevent premature wick stop-outs before impulsive expansion towards Target 2 / Target 3.
@@ -181,4 +172,4 @@ When an asset fails to achieve S-Tier confidence (e.g. confidence < 75 due to mi
    - Place a Buy Stop 0.25x ATR above the contested resistance ceiling with volume surge verification to capture impulsive expansion towards Target 2 / Target 3.
 3. **Calculating Institutional Trade Profitability ($EV$)**:
    - Calculate Expected Value: $EV = (P_{\text{win}} \times \text{TP2 Reward}) - (P_{\text{loss}} \times \text{Risk Distance})$.
-   - Compare gross pip/point yields and R:R ratios across the portfolio to prioritize capital allocation to highest-EV setups (e.g. `USDJPY` R:R 1:3.24 and `USOIL` R:R 1:2.82).
+   - Compare gross pip/point yields and R:R ratios across the portfolio to prioritize capital allocation to highest-EV setups (e.g. `UKOIL` R:R 1:1.99 to 1:4.41, `XAUUSD` R:R 1:3.19, and `BTCUSD` R:R 1:3.04).
