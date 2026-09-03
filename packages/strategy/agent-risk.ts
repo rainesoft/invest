@@ -217,23 +217,23 @@ export async function validateGlobalSignal(
     const baseExp = currencyExposures[candidateDecomp.base] || 0;
     const quoteExp = currencyExposures[candidateDecomp.quote] || 0;
 
-    // Check Base Currency Conflict (e.g. portfolio is heavily Short EUR (-2), and candidate proposes Long EUR (+1))
-    if (Math.abs(baseExp) >= 2 && Math.sign(baseExp) !== Math.sign(candBaseDelta)) {
+    // Check Base Currency Conflict (e.g. portfolio is Short EUR (-1), and candidate proposes Long EUR (+1))
+    if (Math.abs(baseExp) >= 1 && Math.sign(baseExp) !== Math.sign(candBaseDelta)) {
       const dirText = baseExp > 0 ? "Bullish" : "Bearish";
       const candText = candBaseDelta > 0 ? "Bullish" : "Bearish";
       return {
         valid: false,
-        reason: `REJECTED: Currency Exposure Conflict on ${candidateDecomp.base}. Portfolio is heavily ${dirText} (Net: ${baseExp}). Proposed ${symbol} ${assumedSide} would create a conflicting ${candText} exposure.`
+        reason: `REJECTED: Currency Exposure Conflict on ${candidateDecomp.base}. Portfolio is currently ${dirText} (Net: ${baseExp}). Proposed ${symbol} ${assumedSide} would create a conflicting ${candText} exposure.`
       };
     }
 
-    // Check Quote Currency Conflict (e.g. portfolio is heavily Bullish JPY (+2), and candidate proposes Bearish JPY (-1))
-    if (Math.abs(quoteExp) >= 2 && Math.sign(quoteExp) !== Math.sign(candQuoteDelta)) {
+    // Check Quote Currency Conflict (e.g. portfolio is Bullish JPY (+1), and candidate proposes Bearish JPY (-1))
+    if (Math.abs(quoteExp) >= 1 && Math.sign(quoteExp) !== Math.sign(candQuoteDelta)) {
       const dirText = quoteExp > 0 ? "Bullish" : "Bearish";
       const candText = candQuoteDelta > 0 ? "Bullish" : "Bearish";
       return {
         valid: false,
-        reason: `REJECTED: Currency Exposure Conflict on ${candidateDecomp.quote}. Portfolio is heavily ${dirText} (Net: ${quoteExp}). Proposed ${symbol} ${assumedSide} would create a conflicting ${candText} exposure.`
+        reason: `REJECTED: Currency Exposure Conflict on ${candidateDecomp.quote}. Portfolio is currently ${dirText} (Net: ${quoteExp}). Proposed ${symbol} ${assumedSide} would create a conflicting ${candText} exposure.`
       };
     }
   }
@@ -503,3 +503,102 @@ Analyze this trade and return your verdict.
     return { approved: true, reason: `Bypassed: AI Error - ${error.message}` };
   }
 }
+
+// ============================================================
+// CENTRAL BANK INTERVENTION & SOVEREIGN YIELD VETO
+// Detects active or impending currency interventions by central banks
+// (e.g. Bank of Japan JPY intervention, Swiss National Bank, Federal Reserve)
+// and strictly rejects trades that oppose the sovereign intervention direction.
+// ============================================================
+export async function validateCentralBankIntervention(
+  supabase: SupabaseClient,
+  symbol: string,
+  side: "LONG" | "SHORT" | string,
+  headlines?: string[] | null
+): Promise<RiskValidationResult> {
+  try {
+    const isLong = side === "LONG" || side === "BUY";
+    const decomp = CURRENCY_DECOMPOSITION[symbol];
+
+    // 1. Fetch recent macro context & scout headlines from system_settings
+    const { data: settings } = await supabase
+      .from("system_settings")
+      .select("key, value")
+      .in("key", ["macro_oracle_context", "macro_scout_processed_news"]);
+
+    const textSources: string[] = [];
+    if (headlines && headlines.length > 0) textSources.push(...headlines);
+
+    if (settings) {
+      for (const s of settings) {
+        if (s.value) {
+          if (typeof s.value === "string") textSources.push(s.value);
+          else if (Array.isArray(s.value)) {
+            s.value.forEach((item: any) => {
+              if (typeof item === "string") textSources.push(item);
+              else if (item?.title || item?.content || item?.forecast) textSources.push(JSON.stringify(item));
+            });
+          }
+        }
+      }
+    }
+
+    const combinedNews = textSources.join(" ").toLowerCase();
+
+    // Specific Central Bank Intervention Patterns:
+    // A. JPY Intervention (BOJ / Ministry of Finance defending Yen)
+    const isJpyIntervention = 
+      /bank of japan.*interven/i.test(combinedNews) ||
+      /yen.*intervention/i.test(combinedNews) ||
+      /boj.*rate hike/i.test(combinedNews) ||
+      /kanda.*intervention/i.test(combinedNews) ||
+      /mof.*currency intervention/i.test(combinedNews) ||
+      /japan.*currency.*warn/i.test(combinedNews);
+
+    if (isJpyIntervention && decomp) {
+      // JPY is Bullish (Strengthening) during active intervention
+      // If JPY is Quote (e.g. USDJPY, EURJPY, GBPJPY): LONG = Short JPY (Opposes intervention!), SHORT = Long JPY (Aligns)
+      if (decomp.quote === "JPY" && isLong) {
+        return {
+          valid: false,
+          reason: `REJECTED: Active Bank of Japan currency intervention regime detected. Going LONG on ${symbol} opposes sovereign Yen defense.`
+        };
+      }
+      if (decomp.base === "JPY" && !isLong) {
+        return {
+          valid: false,
+          reason: `REJECTED: Active Bank of Japan currency intervention regime detected. Going SHORT on ${symbol} opposes sovereign Yen defense.`
+        };
+      }
+    }
+
+    // B. CHF Intervention (SNB FX Intervention)
+    const isChfIntervention = /snb.*interven/i.test(combinedNews) || /swiss national bank.*interven/i.test(combinedNews);
+    if (isChfIntervention && decomp) {
+      if (decomp.quote === "CHF" && isLong) {
+        return {
+          valid: false,
+          reason: `REJECTED: Active SNB currency intervention regime detected. Proposed ${symbol} ${side} opposes sovereign CHF flows.`
+        };
+      }
+    }
+
+    // C. Gold / Metals vs Hawkish Fed Yield Surge
+    const isHawkishFedSurge = 
+      (/hawkish fed/i.test(combinedNews) || /higher for longer/i.test(combinedNews) || /yield surge/i.test(combinedNews) || /rate hike expected/i.test(combinedNews)) &&
+      !(/dovish fed/i.test(combinedNews) || /rate cut/i.test(combinedNews));
+
+    if (isHawkishFedSurge && (symbol.includes("XAU") || symbol.includes("XAG")) && isLong) {
+      return {
+        valid: false,
+        reason: `REJECTED: Active Hawkish Fed & Treasury Yield Surge regime detected. Going LONG on precious metals (${symbol}) opposes macro sovereign rate flow.`
+      };
+    }
+
+    return { valid: true };
+  } catch (err: any) {
+    console.warn(`[Risk Manager] Central Bank Intervention check error: ${err.message}`);
+    return { valid: true }; // Non-blocking on unexpected error
+  }
+}
+
