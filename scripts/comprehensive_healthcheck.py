@@ -64,6 +64,15 @@ def parse_iso(dt_str: str):
     if not dt_str:
         return None
     s = dt_str.replace("Z", "+00:00")
+    import re
+    m = re.match(r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})\.(\d+)([\+\-]\d{2}:?\d{2}|Z)?$", s)
+    if m:
+        base, frac, tz = m.groups()
+        tz = tz or "+00:00"
+        if tz == "Z":
+            tz = "+00:00"
+        frac = (frac + "000000")[:6]
+        s = f"{base}.{frac}{tz}"
     try:
         return datetime.fromisoformat(s)
     except Exception:
