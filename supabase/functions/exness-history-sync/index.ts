@@ -136,7 +136,7 @@ serve(async (req) => {
           .from("user_risk_settings")
           .select("portfolio_capital, high_water_mark_equity")
           .eq("user_id", trade.user_id)
-          .single();
+          .maybeSingle();
           
         if (userRisk) {
             const newCapital = Number(userRisk.portfolio_capital) + userProfitUsd;
@@ -168,7 +168,7 @@ serve(async (req) => {
               .eq("opportunity_id", trade.opportunity_id)
               .eq("trade_type", "RUNNER")
               .eq("status", "OPEN")
-              .single();
+              .maybeSingle();
 
             if (runnerTrade?.meta_api_order_id) {
               try {

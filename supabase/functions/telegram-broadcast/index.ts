@@ -383,7 +383,7 @@ serve(async (req) => {
         .from("trade_opportunities")
         .select("status, ai_risks, ai_summary")
         .eq("id", record.id)
-        .single();
+        .maybeSingle();
 
       const { data: executedTrades } = await supabase
         .from("user_trades")
@@ -488,7 +488,7 @@ ${headerTitle} \\| ${sideEmoji} *${side} ${symbol}* ${flagEmoji} \\(${tier}\\)
         .from('user_risk_settings')
         .select('telegram_chat_id')
         .eq('user_id', record.user_id)
-        .single();
+        .maybeSingle();
 
       const chatId = userSettings?.telegram_chat_id?.trim();
 

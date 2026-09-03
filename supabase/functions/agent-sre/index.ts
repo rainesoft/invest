@@ -147,16 +147,16 @@ serve(async (req) => {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // PROBE 3: Edge Function Agent Crashes
+    // PROBE 3: Edge Function Agent Crashes & Critical Errors
     // ─────────────────────────────────────────────────────────────
     const { data: agentCrashes, error: crashError } = await supabase
       .from("audit_log")
-      .select("id, payload_json, created_at")
-      .eq("action", "AGENT_CRASH")
+      .select("id, action, payload_json, created_at")
+      .or("action.eq.AGENT_CRASH,action.ilike.%CRASH%,action.ilike.%FATAL_ERROR%")
       .gte("created_at", oneHourAgoIso);
 
     if (!crashError && agentCrashes && agentCrashes.length > 0) {
-      issues.push(`🚨 <b>Agent Crashes (${agentCrashes.length} in last hour):</b> Action AGENT_CRASH logged in audit_log.`);
+      issues.push(`🚨 <b>Agent Crashes (${agentCrashes.length} in last hour):</b> Actions logged: ${agentCrashes.map((c: any) => c.action).join(", ")}.`);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -368,11 +368,22 @@ serve(async (req) => {
     // ─────────────────────────────────────────────────────────────
     let vpsMinsAgo: number | null = null;
     let isVpsAlive = false;
-    const { data: vpsRisk } = await supabase
+    let { data: vpsRisk } = await supabase
       .from("user_risk_settings")
       .select("vps_last_heartbeat, is_live_execution_enabled")
       .eq("is_master_account", true)
       .maybeSingle();
+
+    if (!vpsRisk?.vps_last_heartbeat) {
+      const { data: fallbackRisk } = await supabase
+        .from("user_risk_settings")
+        .select("vps_last_heartbeat, is_live_execution_enabled")
+        .not("vps_last_heartbeat", "is", null)
+        .order("vps_last_heartbeat", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (fallbackRisk) vpsRisk = fallbackRisk;
+    }
 
     if (vpsRisk?.vps_last_heartbeat) {
       const hbTime = new Date(vpsRisk.vps_last_heartbeat).getTime();
@@ -382,7 +393,7 @@ serve(async (req) => {
         issues.push(`🔴 <b>MT5 VPS Bridge Disconnected:</b> Last heartbeat was ${vpsMinsAgo.toFixed(1)} mins ago.`);
       }
     } else {
-      issues.push(`⚠️ <b>MT5 VPS Bridge:</b> No heartbeat timestamp found for master account.`);
+      issues.push(`⚠️ <b>MT5 VPS Bridge:</b> No heartbeat timestamp found.`);
     }
 
     // ─────────────────────────────────────────────────────────────

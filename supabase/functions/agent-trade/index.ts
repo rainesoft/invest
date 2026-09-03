@@ -794,7 +794,7 @@ serve(async (req) => {
       }
 
       // --- VPS HEARTBEAT CHECK ---
-      const { data: vpsSettings } = await supabase.from("user_risk_settings").select("vps_last_heartbeat").eq("user_id", "912d249b-9be8-4691-a11b-5b00f386a804").single();
+      const { data: vpsSettings } = await supabase.from("user_risk_settings").select("vps_last_heartbeat").eq("is_master_account", true).maybeSingle();
       let isVpsAlive = false;
       if (vpsSettings?.vps_last_heartbeat) {
          const heartbeatTime = new Date(vpsSettings.vps_last_heartbeat).getTime();
@@ -827,7 +827,7 @@ serve(async (req) => {
                    .from("user_trades")
                    .select(`id, meta_api_order_id, symbol, side, status, trade_type, user_id, open_price, created_at, opportunity_id, trade_opportunities(timeframe, entry_plan_json, stop_plan_json, take_profit_json)`)
                    .eq("meta_api_order_id", posId)
-                   .single();
+                   .maybeSingle();
                    
                  if (recoveredTrade) {
                     orderMap.set(posId, recoveredTrade);

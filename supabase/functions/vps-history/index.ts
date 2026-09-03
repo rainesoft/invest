@@ -63,7 +63,7 @@ serve(async (req) => {
         .from("user_risk_settings")
         .select("portfolio_capital, high_water_mark_equity")
         .eq("user_id", trade.user_id)
-        .single();
+        .maybeSingle();
         
       if (userRisk) {
         const newCapital = Number(userRisk.portfolio_capital || 0) + profitUsd;
