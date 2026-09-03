@@ -33,14 +33,28 @@ serve(async (req) => {
       return new Response("OK", { headers: { "Content-Type": "text/plain" } });
     }
 
-    const { data: tradeData, error: fetchError } = await supabase.from("user_trades").select("opportunity_id").eq("id", tradeId).single();
+    const { data: tradeData, error: fetchError } = await supabase
+      .from("user_trades")
+      .select("opportunity_id")
+      .eq("id", tradeId)
+      .maybeSingle();
+
     if (fetchError) throw fetchError;
+
+    if (!tradeData) {
+      console.log(`[VPS Callback] Trade ${tradeId} not found in user_trades (unmapped or external). Callback acknowledged.`);
+      return new Response("OK", { headers: { "Content-Type": "text/plain" } });
+    }
 
     const { error } = await supabase.from("user_trades").update(updatePayload).eq("id", tradeId);
     if (error) throw error;
 
     if (status === "OPEN" && tradeData?.opportunity_id) {
-      const { data: oppData } = await supabase.from("trade_opportunities").select("ai_summary").eq("id", tradeData.opportunity_id).single();
+      const { data: oppData } = await supabase
+        .from("trade_opportunities")
+        .select("ai_summary")
+        .eq("id", tradeData.opportunity_id)
+        .maybeSingle();
       const existingSummary = oppData?.ai_summary || "";
 
       await supabase.from("trade_opportunities").update({ 
@@ -52,7 +66,11 @@ serve(async (req) => {
       const { data: siblings } = await supabase.from("user_trades").select("status").eq("opportunity_id", tradeData.opportunity_id);
       const hasWorkingTrades = siblings?.some(s => ["OPEN", "VPS_PENDING", "VPS_PROCESSING", "PENDING"].includes(s.status));
       if (!hasWorkingTrades) {
-        const { data: oppData } = await supabase.from("trade_opportunities").select("ai_summary").eq("id", tradeData.opportunity_id).single();
+        const { data: oppData } = await supabase
+          .from("trade_opportunities")
+          .select("ai_summary")
+          .eq("id", tradeData.opportunity_id)
+          .maybeSingle();
         const existingSummary = oppData?.ai_summary || "";
         const failReason = errorMsg ? `Execution Failed: ${errorMsg}` : "Execution Failed on Broker";
         await supabase.from("trade_opportunities").update({
@@ -64,11 +82,10 @@ serve(async (req) => {
       }
     }
 
-    if (error) throw error;
-
     return new Response("OK", { headers: { "Content-Type": "text/plain" } });
   } catch (error: any) {
     console.error("Error updating VPS callback:", error);
     return new Response(`ERROR:${error.message}`, { status: 500 });
   }
 });
+
