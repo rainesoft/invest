@@ -1368,23 +1368,51 @@ for (const [orderId, trade] of orderMap) {
           let newSl: number | null = null;
           let actionName = "";
 
-          // 1. Dynamic ATR Trailing (For RUNNER legs, or mature SWING legs with >= 1.2R profit)
-          if (trade.trade_type === "RUNNER" || (trade.trade_type === "SWING" && priceMoveInR >= 1.2)) {
-            const trailSl = isLong ? currentPrice - (atr * 1.5) : currentPrice + (atr * 1.5);
-            const isImprovement = isLong ? trailSl > currentSl : trailSl < currentSl;
-            const isSafeFromOriginal = isLong ? trailSl > originalSl : trailSl < originalSl;
+          // 1. Dynamic Chandelier ATR Trailing & Stepped R-Locks for RUNNER legs
+          if (trade.trade_type === "RUNNER") {
+            const chandelierSl = isLong ? currentPrice - (atr * 2.0) : currentPrice + (atr * 2.0);
 
-            // Only trail once price has moved at least +0.60R to avoid premature choking
-            if (isImprovement && isSafeFromOriginal && (priceMoveInR >= 0.60 || profit > 0)) {
-              newSl = Number(trailSl.toFixed(decimals));
-              actionName = `TRAIL_${trade.trade_type} (+${priceMoveInR.toFixed(1)}R)`;
-            }
-          }
+            // Stepped Guaranteed Profit Floors
+            let steppedFloor: number | null = null;
+            let floorLabel = "";
 
-          // 2. Multi-Stage Stepped R-Locks (Guaranteed Risk-Free & Profit Locking)
-          if (!newSl) {
             if (priceMoveInR >= 3.0) {
-              // Lock in +2.0R Profit
+              steppedFloor = isLong ? entryPrice + (riskDist * 2.0) : entryPrice - (riskDist * 2.0);
+              floorLabel = "LOCK_IN_2R";
+            } else if (priceMoveInR >= 2.0) {
+              steppedFloor = isLong ? entryPrice + (riskDist * 1.25) : entryPrice - (riskDist * 1.25);
+              floorLabel = "LOCK_IN_1.25R";
+            } else if (priceMoveInR >= 1.5) {
+              steppedFloor = isLong ? entryPrice + (riskDist * 0.75) : entryPrice - (riskDist * 0.75);
+              floorLabel = "LOCK_IN_0.75R";
+            } else if (priceMoveInR >= 0.75 || profit > 0) {
+              steppedFloor = entryPrice; // Breakeven
+              floorLabel = "BREAK_EVEN";
+            }
+
+            let candidateSl: number | null = null;
+            if (steppedFloor !== null) {
+              // Take the most favorable stop level between Chandelier ATR trail and the stepped profit floor
+              candidateSl = isLong
+                ? Math.max(chandelierSl, steppedFloor)
+                : Math.min(chandelierSl, steppedFloor);
+            } else if (priceMoveInR >= 0.5) {
+              candidateSl = chandelierSl;
+            }
+
+            if (candidateSl !== null) {
+              const formattedCandidate = Number(candidateSl.toFixed(decimals));
+              const isImprovement = isLong ? formattedCandidate > currentSl : formattedCandidate < currentSl;
+              const isSafeFromOriginal = isLong ? formattedCandidate >= originalSl : formattedCandidate <= originalSl;
+
+              if (isImprovement && isSafeFromOriginal) {
+                newSl = formattedCandidate;
+                actionName = `CHANDELIER_RUNNER_${floorLabel || 'TRAIL'} (+${priceMoveInR.toFixed(1)}R)`;
+              }
+            }
+          } else {
+            // 2. Multi-Stage Stepped R-Locks for SWING / QUICK_EXIT legs
+            if (priceMoveInR >= 3.0) {
               const lockSl = isLong
                 ? Number((entryPrice + (riskDist * 2.0)).toFixed(decimals))
                 : Number((entryPrice - (riskDist * 2.0)).toFixed(decimals));
@@ -1394,7 +1422,6 @@ for (const [orderId, trade] of orderMap) {
                 actionName = `LOCK_IN_2R (profit +${priceMoveInR.toFixed(1)}R)`;
               }
             } else if (priceMoveInR >= 2.0) {
-              // Lock in +1.0R Profit
               const lockSl = isLong
                 ? Number((entryPrice + (riskDist * 1.0)).toFixed(decimals))
                 : Number((entryPrice - (riskDist * 1.0)).toFixed(decimals));
@@ -1404,7 +1431,6 @@ for (const [orderId, trade] of orderMap) {
                 actionName = `LOCK_IN_1R (profit +${priceMoveInR.toFixed(1)}R)`;
               }
             } else if (priceMoveInR >= 1.5) {
-              // Lock in +0.5R Profit at +1.5R extension
               const lockSl = isLong
                 ? Number((entryPrice + (riskDist * 0.5)).toFixed(decimals))
                 : Number((entryPrice - (riskDist * 0.5)).toFixed(decimals));
@@ -1414,7 +1440,6 @@ for (const [orderId, trade] of orderMap) {
                 actionName = `LOCK_IN_0.5R (profit +${priceMoveInR.toFixed(1)}R)`;
               }
             } else if (priceMoveInR >= 1.0) {
-              // At +1.0R (TP1 reached), lock Stop Loss at Break-Even (entryPrice) to eliminate all downside risk!
               const beSl = Number(entryPrice.toFixed(decimals));
               const isImprovement = isLong ? beSl > currentSl : beSl < currentSl;
               if (isImprovement) {
@@ -1422,7 +1447,6 @@ for (const [orderId, trade] of orderMap) {
                 actionName = `BREAK_EVEN_AT_1R (profit +${priceMoveInR.toFixed(1)}R)`;
               }
             } else if (barsElapsed >= 20 && profit > 0 && priceMoveInR >= 0.75) {
-              // Thesis decay: Only move to BE on aged trade once solidly positive
               const beSl = Number(entryPrice.toFixed(decimals));
               const isImprovement = isLong ? beSl > currentSl : beSl < currentSl;
               if (isImprovement) {
