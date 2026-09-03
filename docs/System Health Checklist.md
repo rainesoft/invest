@@ -1064,6 +1064,18 @@ In `/functions/v1/vps-callback`:
 
 ---
 
+## ⚠️ 3N. Edge Function Query Safety & Zero-Row Exception Resiliency (.maybeSingle())
+
+> [!CAUTION]
+> **Standard:** In Supabase JavaScript/TypeScript Edge Functions, `.single()` strictly throws an unhandled exception (`PGRST116: The result contains 0 rows`) whenever a query matches zero rows or more than one row. In background crons and webhook handlers (e.g. `exness-history-sync`, `vps-history`, `agent-trade`, `telegram-broadcast`), throwing this exception aborts the entire execution loop, preventing subsequent trades or position updates from running.
+
+### Standard Rule:
+1. **Always use `.maybeSingle()`:** Replace all instances of `.single()` with `.maybeSingle()` across background cron jobs, webhook handlers, and position managers.
+2. **Explicit Null Checks:** Check `if (!data) return;` or handle the empty state gracefully without throwing unhandled exceptions.
+3. **Dynamic Master Account Queries:** Query `user_risk_settings` using `.eq("is_master_account", true).maybeSingle()` instead of hardcoded user UUIDs to guarantee portability across environments.
+
+---
+
 ## 4. External Integrations
 Verify that external data pipelines and notification systems are alive.
 

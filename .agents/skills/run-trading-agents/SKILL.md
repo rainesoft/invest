@@ -100,16 +100,16 @@ Signals are graded based on calibrated confidence scores:
 
 ## 6. Origination Risk Governor & Contract Sizing Matrix
 
-To safeguard capital from outsized dollar drawdowns on volatile instruments, the engine enforces the **3.0% Max Capital Risk Cap ($45.00 on $1,500 base equity)** at minimum 0.01 lot size:
+To safeguard capital from outsized dollar drawdowns on volatile instruments, the engine enforces the **3.0% Max Capital Risk Cap ($33.00 on $1,100 base equity)** at minimum 0.01 lot size:
 
-$$\text{Max Allowable Stop Distance} = \frac{\$45.00}{0.01 \times \text{Point Value USD}}$$
+$$\text{Max Allowable Stop Distance} = \frac{\$33.00}{0.01 \times \text{Point Value USD}}$$
 
-### Contract Sizing Table:
-- **`USOIL` / `UKOIL`**: Contract Size = $1,000\text{ bbl}$ $\implies 0.01\text{ lot} = 10\text{ bbl} \implies \$10.00\text{ per } \$1.00\text{ move}$. Max stop distance $= \$4.50$.
-- **`XAUUSD`**: Contract Size = $100\text{ oz}$ $\implies 0.01\text{ lot} = 1\text{ oz} \implies \$1.00\text{ per } \$1.00\text{ move}$. Max stop distance $= \$45.00$.
-- **`BTCUSD`**: Contract Size = $1\text{ BTC}$ $\implies 0.01\text{ lot} = 0.01\text{ BTC} \implies \$0.01\text{ per } \$1.00\text{ move}$. Max stop distance $= \$4,500$.
-- **`XAGUSD`**: Contract Size = $5,000\text{ oz}$ $\implies 0.01\text{ lot} = 50\text{ oz} \implies \$50.00\text{ per } \$1.00\text{ move}$. Max stop distance $= \$0.90$.
-- **`Forex (USD Pairs)`**: Contract Size = $100,000$ $\implies 0.01\text{ lot} = \$0.10\text{ per pip}$. Max stop distance $= 450\text{ pips}$.
+### Contract Sizing Table ($1,100 Base Capital):
+- **`USOIL` / `UKOIL`**: Contract Size = $1,000\text{ bbl}$ $\implies 0.01\text{ lot} = 10\text{ bbl} \implies \$10.00\text{ per } \$1.00\text{ move}$. Max stop distance $= \$3.30$.
+- **`XAUUSD`**: Contract Size = $100\text{ oz}$ $\implies 0.01\text{ lot} = 1\text{ oz} \implies \$1.00\text{ per } \$1.00\text{ move}$. Max stop distance $= \$33.00$.
+- **`BTCUSD`**: Contract Size = $1\text{ BTC}$ $\implies 0.01\text{ lot} = 0.01\text{ BTC} \implies \$0.01\text{ per } \$1.00\text{ move}$. Max stop distance $= \$3,300.00$.
+- **`XAGUSD`**: Contract Size = $5,000\text{ oz}$ $\implies 0.01\text{ lot} = 50\text{ oz} \implies \$50.00\text{ per } \$1.00\text{ move}$. Max stop distance $= \$0.66$.
+- **`Forex (USD Pairs)`**: Contract Size = $100,000$ $\implies 0.01\text{ lot} = \$0.10\text{ per pip}$. Max stop distance $= 330\text{ pips}$.
 
 When raw ATR stop distance exceeds the cap, the **Adaptive Limit Anchoring** engine recalculates the entry to a pullback limit price within a $0.25\times\text{ATR}$ buffer.
 
