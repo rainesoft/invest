@@ -1871,31 +1871,50 @@ export function calculateInstitutionalTradingCentralLevels(
   const minRrSatisfied = currentRr >= minRr;
 
   let suggestedEntry = currentPrice;
+  let finalTp1 = tp1;
+  let finalTp2 = tp2;
   let orderType: "BUY MARKET" | "SELL MARKET" | "BUY LIMIT" | "SELL LIMIT" = isLong ? "BUY MARKET" : "SELL MARKET";
 
   if (!minRrSatisfied && Math.abs(tp2 - pivotSl) > 0) {
-    // Solve for Entry where (TP2 - Entry) / (Entry - Pivot) = 1.75
-    // => Entry = Pivot + (TP2 - Pivot) / (1 + 1.75)
     const totalSpan = Math.abs(tp2 - pivotSl);
     const requiredRiskDist = totalSpan / (1 + minRr + 0.05); // 1.75 factor
     let calculatedLimit = isLong
       ? Number((pivotSl + requiredRiskDist).toFixed(5))
       : Number((pivotSl - requiredRiskDist).toFixed(5));
 
-    // Momentum Guard: When breakout momentum is strong (isHighMomentum), clamp max limit offset to 0.15x ATR
-    // so we don't miss high-probability breakouts by waiting for an unreachable deep retracement.
-    if (isHighMomentum && atr && atr > 0) {
-      const maxMomentumOffset = atr * 0.15;
-      if (isLong && currentPrice - calculatedLimit > maxMomentumOffset) {
-        calculatedLimit = Number((currentPrice - maxMomentumOffset).toFixed(5));
-      } else if (!isLong && calculatedLimit - currentPrice > maxMomentumOffset) {
-        calculatedLimit = Number((currentPrice + maxMomentumOffset).toFixed(5));
-      }
-    }
+    const offsetFromCurrent = Math.abs(currentPrice - calculatedLimit);
+    const maxOffset = (atr && atr > 0) ? (isHighMomentum ? atr * 0.10 : atr * 0.25) : currentPrice * 0.002;
 
-    suggestedEntry = calculatedLimit;
-    orderType = isLong ? "BUY LIMIT" : "SELL LIMIT";
+    // Adaptive Momentum & Fill Optimization:
+    // If the calculated pullback limit is too distant (> maxOffset), do NOT pull entry unreachable distances away.
+    // Instead, clamp entry tight to market price (<= maxOffset) and adaptively expand TP2 to satisfy >= 1.75 R:R!
+    if (offsetFromCurrent > maxOffset || isHighMomentum) {
+      suggestedEntry = isLong
+        ? Number((currentPrice - maxOffset).toFixed(5))
+        : Number((currentPrice + maxOffset).toFixed(5));
+
+      const effectiveRisk = Math.abs(suggestedEntry - pivotSl);
+      const targetReward = effectiveRisk * (minRr + 0.05);
+
+      finalTp2 = isLong
+        ? Number((suggestedEntry + targetReward).toFixed(5))
+        : Number((suggestedEntry - targetReward).toFixed(5));
+
+      finalTp1 = isLong
+        ? Number((suggestedEntry + (targetReward * 0.5)).toFixed(5))
+        : Number((suggestedEntry - (targetReward * 0.5)).toFixed(5));
+
+      orderType = isLong ? "BUY LIMIT" : "SELL LIMIT";
+    } else {
+      suggestedEntry = calculatedLimit;
+      orderType = isLong ? "BUY LIMIT" : "SELL LIMIT";
+    }
   }
+
+  // Recalculate achieved R:R
+  const finalRisk = Math.abs(suggestedEntry - pivotSl);
+  const finalReward = Math.abs(finalTp2 - suggestedEntry);
+  const finalRr = finalRisk > 0 ? Number((finalReward / finalRisk).toFixed(2)) : currentRr;
 
   // Alternative Scenario (Beyond Pivot)
   const altDirection = isLong ? "SHORT" : "LONG";
@@ -1906,10 +1925,10 @@ export function calculateInstitutionalTradingCentralLevels(
   return {
     pivot_point: pivotSl,
     direction,
-    tp1,
-    tp2,
-    current_rr_tp2: currentRr,
-    min_rr_satisfied: minRrSatisfied,
+    tp1: finalTp1,
+    tp2: finalTp2,
+    current_rr_tp2: finalRr,
+    min_rr_satisfied: finalRr >= minRr,
     suggested_entry_price: suggestedEntry,
     order_type: orderType,
     alternative_scenario: {
