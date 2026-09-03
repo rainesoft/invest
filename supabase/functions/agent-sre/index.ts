@@ -186,15 +186,19 @@ serve(async (req) => {
       for (const opp of approvedOpps) {
         const { data: legs } = await supabase.from("user_trades").select("id").eq("opportunity_id", opp.id);
         if (!legs || legs.length === 0) {
-          // If execution was skipped or blocked by risk manager, auto-reconcile to REJECTED
-          const isSkipped = (opp.ai_risks && opp.ai_risks.includes("Execution Skipped")) ||
-                            (opp.ai_summary && opp.ai_summary.includes("[Execution Desk] Execution Skipped"));
-          if (isSkipped) {
+          // If execution was skipped or blocked by risk manager, or stale > 1h, auto-reconcile
+          const isSkipped = (opp.ai_risks && (opp.ai_risks.includes("Execution Skipped") || opp.ai_risks.includes("Rejected by Execution Desk") || opp.ai_risks.includes("REJECTED"))) ||
+                            (opp.ai_summary && (opp.ai_summary.includes("[Execution Desk] Execution Skipped") || opp.ai_summary.includes("Rejected by Execution Desk")));
+          const isStale = opp.created_at <= oneHourAgoIso;
+          if (isSkipped || isStale) {
+            const finalStatus = isSkipped ? "REJECTED" : "EXPIRED";
+            const reason = isSkipped ? (opp.ai_risks || "Execution Skipped by Desk") : "Aged APPROVED signal expired with 0 trades after 1h";
             await supabase.from("trade_opportunities").update({
-              status: "REJECTED",
+              status: finalStatus,
+              ai_risks: opp.ai_risks || reason,
               closed_at: now.toISOString(),
             }).eq("id", opp.id);
-            autoRemediations.push(`Reconciled orphaned APPROVED opportunity ${opp.symbol} (${opp.id}) to REJECTED (Execution Skipped)`);
+            autoRemediations.push(`Reconciled orphaned APPROVED opportunity ${opp.symbol} (${opp.id}) to ${finalStatus} (${reason})`);
           } else {
             issues.push(`⚠️ <b>Orphaned APPROVED Signal:</b> ${opp.symbol} (${opp.id}) has no user_trades legs.`);
           }
@@ -314,9 +318,28 @@ serve(async (req) => {
       const sample = recentFailedTrades[0];
       const errorDesc = getErrorDescription(sample.error_message);
       issues.push(`🚨 <b>Broker Execution Errors (${recentFailedTrades.length} in last hour):</b> ${sample.symbol} ${sample.side} failed with <code>${errorDesc}</code>.`);
+    }
 
-      // Auto-reconcile parent opportunities stuck in APPROVED or ACTIVE
-      for (const ft of recentFailedTrades) {
+    // Auto-reconcile parent opportunities stuck in APPROVED or ACTIVE for any failed trades in last 24h
+    const { data: allRecentFailedTrades } = await supabase
+      .from("user_trades")
+      .select("id, symbol, side, opportunity_id, error_message, created_at")
+      .eq("status", "FAILED")
+      .gte("created_at", twentyFourHoursAgoIso);
+
+    if (allRecentFailedTrades && allRecentFailedTrades.length > 0) {
+      const getErrorDescription = (errMsg: string | null) => {
+        if (!errMsg) return "Unknown broker error";
+        if (errMsg.includes("10013")) return "Code:10013 (Invalid Request / Unmapped Symbol Alias — verify broker symbol e.g. SPX500->US500, NAS100->USTEC)";
+        if (errMsg.includes("10014")) return "Code:10014 (Invalid Volume / Lot Step)";
+        if (errMsg.includes("10015")) return "Code:10015 (Invalid Price / Slipped Breakout Entry)";
+        if (errMsg.includes("10016")) return "Code:10016 (Invalid Stops / TP Direction Mismatch)";
+        if (errMsg.includes("10018")) return "Code:10018 (Market Closed / Session Inactive)";
+        if (errMsg.includes("10019")) return "Code:10019 (Insufficient Free Margin)";
+        return errMsg;
+      };
+
+      for (const ft of allRecentFailedTrades) {
         if (ft.opportunity_id) {
           const { data: opp } = await supabase
             .from("trade_opportunities")
