@@ -73,8 +73,26 @@ async function run() {
   // 1. Run Event-Driven Macro News Scout
   await callAgent('agent-news');
 
+  const SYMBOL_ALIASES = {
+    'UKOI': 'UKOIL',
+    'BRENT': 'UKOIL',
+    'WTI': 'USOIL',
+    'GOLD': 'XAUUSD',
+    'SILVER': 'XAGUSD',
+    'BITCOIN': 'BTCUSD',
+    'BTC': 'BTCUSD',
+    'ETH': 'ETHUSD',
+    'DOW': 'US30',
+    'NAS': 'NAS100',
+    'NASDAQ': 'NAS100',
+    'SPX': 'SPX500'
+  };
+
   if (symbolArg) {
-    const symList = symbolArg.split(',').map(s => s.trim().toUpperCase());
+    const symList = symbolArg.split(',').map(s => {
+      const clean = s.trim().toUpperCase();
+      return SYMBOL_ALIASES[clean] || clean;
+    });
     console.log(`\nTargeting specific symbol(s): ${symList.join(', ')}`);
     
     // Run Intraday M30
@@ -121,7 +139,10 @@ async function run() {
     .order('confidence', { ascending: false });
 
   if (symbolArg) {
-    const symList = symbolArg.split(',').map(s => s.trim().toUpperCase());
+    const symList = symbolArg.split(',').map(s => {
+      const clean = s.trim().toUpperCase();
+      return SYMBOL_ALIASES[clean] || clean;
+    });
     query = query.in('symbol', symList);
   }
 
