@@ -1948,8 +1948,8 @@ for (const [orderId, trade] of orderMap) {
 
     // --- DYNAMIC VOLUME STEP ---
     const minVolumes: Record<string, number> = {
-      US30: 0.1, NAS100: 0.1, SPX500: 0.1, GER30: 0.1,
-      BTCUSD: 0.01, UKOIL: 0.01, XAUUSD: 0.01, XAGUSD: 0.01
+      US30: 0.01, NAS100: 0.01, SPX500: 0.01, GER30: 0.01, JP225: 0.01,
+      BTCUSD: 0.01, ETHUSD: 0.01, UKOIL: 0.01, USOIL: 0.01, XAUUSD: 0.01, XAGUSD: 0.01
     };
     const volumeStep = minVolumes[signal.symbol] || 0.01;
 
@@ -2009,12 +2009,21 @@ for (const [orderId, trade] of orderMap) {
       const pointsAtRisk = Math.abs(entryPrice - stopLoss);
       
       const contractSizes: Record<string, number> = {
-        UKOIL: 1000, XAUUSD: 100, XAGUSD: 5000, US30: 1, NAS100: 1, SPX500: 1, GER30: 1, BTCUSD: 1, EURUSD: 100000, GBPUSD: 100000, USDJPY: 100000,
+        UKOIL: 1000, USOIL: 1000, XAUUSD: 100, XAGUSD: 5000,
+        US30: 1, NAS100: 1, SPX500: 1, GER30: 1, JP225: 1,
+        BTCUSD: 1, ETHUSD: 1,
+        EURUSD: 100000, GBPUSD: 100000, USDJPY: 100000,
+        AUDUSD: 100000, NZDUSD: 100000, USDCAD: 100000, USDCHF: 100000,
+        EURJPY: 100000, GBPJPY: 100000, CADJPY: 100000, AUDJPY: 100000, EURGBP: 100000,
+        AAPL: 1, MSFT: 1, NVDA: 1, AMZN: 1, TSLA: 1, META: 1, GOOGL: 1,
       };
       const contractSize = contractSizes[signal.symbol] || 100000;
       let pointValueUsd = contractSize;
-      if (signal.symbol.endsWith("JPY")) pointValueUsd = contractSize / entryPrice;
-      else if (signal.symbol === "GER30") pointValueUsd = contractSize * 1.1;
+      if ((signal.symbol.endsWith("JPY") || signal.symbol === "JP225") && entryPrice > 0) {
+        pointValueUsd = contractSize / entryPrice;
+      } else if (signal.symbol === "GER30" || signal.symbol === "EURGBP") {
+        pointValueUsd = contractSize * 1.1;
+      }
 
       for (const user of users) {
         if (isManual && payload.user_id !== user.user_id) continue;

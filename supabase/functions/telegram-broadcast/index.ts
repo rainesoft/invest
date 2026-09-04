@@ -326,8 +326,8 @@ serve(async (req) => {
 
         const slPct = Math.abs((numSl - numEntry) / numEntry) * 100;
         const tpPct = Math.abs((numTp - numEntry) / numEntry) * 100;
-        slPctStr = ` \\(\\-${slPct.toFixed(1)}\\%\\)`;
-        tpPctStr = ` \\(\\+${tpPct.toFixed(1)}\\%\\)`;
+        slPctStr = ` \\(\\-${escapeMd(slPct.toFixed(1))}\\%\\)`;
+        tpPctStr = ` \\(\\+${escapeMd(tpPct.toFixed(1))}\\%\\)`;
       } else {
         const rrMatch = (record.ai_summary || "").match(/1:([0-9.]+)/);
         if (rrMatch && parseFloat(rrMatch[1]) >= 1.0) {
@@ -466,6 +466,17 @@ ${headerTitle} \\| ${sideEmoji} *${side} ${symbol}* ${flagEmoji} \\(${tier}\\)
             console.error(`[Telegram Broadcast] Error dispatching to ${subscribedUsers[idx]?.chatId}:`, r.reason);
           }
         });
+        await supabase.from("audit_log").insert({
+          actor_type: "SYSTEM",
+          action: "TELEGRAM_BROADCAST_FAILURE",
+          payload_json: {
+            symbol: record.symbol,
+            opportunity_id: record.id,
+            failures,
+            successes,
+            errors: results.filter(r => r.status === "rejected").map((r: any) => String(r.reason?.message || r.reason))
+          }
+        }).catch(() => {});
       }
       console.log(`Broadcast complete. Success: ${successes}, Failures: ${failures}`);
 

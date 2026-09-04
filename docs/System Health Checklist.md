@@ -448,6 +448,27 @@ Tables in non-public schemas (`net`, `cron`, `vault`) cannot be queried directly
 
 ---
 
+## ⚠️ 1N. HTTP Response Silent Error Sweep (HTTP 200 with Unhandled Runtime Errors)
+
+> [!CAUTION]
+> **Incident (2026-09-04):** Deno Edge Functions returned HTTP 200 status codes while the response body contained unhandled runtime exceptions (`{"error":"ReferenceError: strategy_applied is not defined"}`). Because `pg_net` and `pg_cron` only flag HTTP status >= 400 or transport timeouts, silent crashes bypassed standard cron failure checks.
+
+### Diagnostic Protocol & Standard Rule:
+1. Scan `net._http_response` for silent exceptions in response bodies:
+   ```sql
+   SELECT id, status_code, created, substring(content from 1 for 200) as content_preview
+   FROM net._http_response
+   WHERE content ILIKE '%System Error%'
+      OR content ILIKE '%ReferenceError%'
+      OR content ILIKE '%TypeError%'
+      OR content ILIKE '%Unhandled%'
+   ORDER BY created DESC
+   LIMIT 10;
+   ```
+2. When caught, inspect the associated edge function and ensure all internal catch blocks log `AGENT_CRASH` to `audit_log` with stack traces.
+
+---
+
 ## 2. Autonomous Agent Activity
 Verify that the AI agents are actively evaluating the market and producing expected heartbeat logs.
 
@@ -612,6 +633,26 @@ In `packages/execution/index.ts` (`fetchPaperBars`), all fallback market data re
 
 ### Standard Rule:
 In `packages/strategy/agent-risk.ts`, `validateCentralBankIntervention()` scans `system_settings` (`macro_oracle_context`, `macro_scout_processed_news`) and live breaking headlines for active central bank intervention keywords (e.g., `BOJ intervention`, `Yen intervention`, `unannounced rate hike`, `currency defense`, `SNB intervention`, `hawkish Fed yield surge`). Any trade opposing sovereign intervention flow is strictly vetoed in the Pre-AI risk filter gate (`REJECTED_BY_RISK_PRE_AI`).
+
+---
+
+## ⚠️ 2L. Cross-Asset Contract Size & Sizing Sanity (JP225, Multi-Asset CFDs)
+
+> [!CAUTION]
+> **Incident (2026-09-04):** `JP225` (Nikkei 225) swing signals were systematically rejected by `agent-trade`'s 10% Account Blowout Protection ($1,448,080 calculated risk on 0.01 lot position vs $110 max permitted risk). `contractSizes` lacked `JP225: 1` and defaulted to `100,000` units without converting Yen quotes to USD (dividing by USDJPY ~145.0).
+
+### Standard Rule:
+In `supabase/functions/agent-trade/index.ts` and `packages/strategy/agent-risk.ts`:
+1. All traded symbols must have explicit contract size entries:
+   - Forex Majors & Crosses: `100,000`
+   - `XAUUSD`: `100` (oz)
+   - `XAGUSD`: `5,000` (oz)
+   - `BTCUSD`: `1` (coin)
+   - `ETHUSD`: `1` (coin)
+   - `UKOIL` / `USOIL`: `1,000` (barrels)
+   - `NAS100` / `US30` / `SPX500` / `GER30`: `1` (index point)
+   - `JP225`: `1` (index point in JPY, requiring division by `USDJPY` price ~145.0 to yield USD risk)
+2. Always sanity-check calculated lot risk: `lotRiskUsd` for 0.01 lot on any standard index or commodity setup should not exceed ~$15–$50 on normal ATR parameters.
 
 ---
 
@@ -1076,6 +1117,17 @@ In `/functions/v1/vps-callback`:
 
 ---
 
+## ⚠️ 3O. Index CFD Minimum Lot & Granular Volume Step Safeguards
+
+> [!WARNING]
+> **Incident (2026-09-04):** `agent-trade` clamped minimum order volume for `NAS100`, `US30`, `SPX500`, and `GER30` to `0.10` lots. On standard broker accounts with ~$1,100 balance, a 0.10 lot position with normal ATR stops calculated to a 3.5%–4.2% capital risk, exceeding the user's 3.0% max risk threshold and causing valid index signals to be dropped.
+
+### Standard Rule:
+1. `minVolumes` in `agent-trade` should be configured to `0.01` for indices (`NAS100`, `US30`, `SPX500`, `GER30`, `JP225`) whenever the broker supports 0.01 lot micro-CFDs.
+2. If calculated lot size falls between `0.01` and `0.10`, the execution engine allocates the trade at the smallest valid increment rather than rejecting it outright.
+
+---
+
 ## 4. External Integrations
 Verify that external data pipelines and notification systems are alive.
 
@@ -1086,16 +1138,17 @@ Verify that external data pipelines and notification systems are alive.
 The `telegram-broadcast` edge function is triggered automatically via a Postgres Trigger (`on_signal_generated`) whenever a new `trade_opportunities` row is inserted. It also triggers on `user_trades` updates for rejected executions.
 
 > [!CAUTION]
-> **Incident (2026-09-02):** Telegram signal broadcasts for A/S-Tier opportunities failed with `HTTP 400 Bad Request: can't parse entities: Character '(' is reserved` because unescaped parentheses `(${tier})` and `(${escapeMd(orderTypeDisplay)})` were included in MarkdownV2 template literals. All literal parentheses in MarkdownV2 MUST be escaped with `\(` and `\)`.
+> **Incident (2026-09-02 & 2026-09-04):** Telegram signal broadcasts for A/S-Tier opportunities failed with `HTTP 400 Bad Request: can't parse entities: Character '(' is reserved` or `Character '.' is reserved` because unescaped parentheses `(${tier})` or unescaped decimal points in percentage strings (`${slPctStr}`) were inserted into MarkdownV2 template literals. All reserved characters in MarkdownV2 MUST be escaped with `escapeMd()`.
 
-- [ ] **Verify Edge Function Logs:** In ClickHouse logs (`source = 'function_logs'`), verify `telegram-broadcast` shows `Broadcast complete. Success: >0, Failures: 0`:
+- [ ] **Verify Edge Function Logs & Audit Log:** In ClickHouse logs (`source = 'function_logs'`), verify `telegram-broadcast` shows `Broadcast complete. Success: >0, Failures: 0`. Additionally, query `audit_log` for any `TELEGRAM_BROADCAST_FAILURE` events:
   ```sql
-  SELECT timestamp, event_message 
-  FROM logs 
-  WHERE source = 'function_logs' AND event_message LIKE '%Broadcast complete%'
-  ORDER BY timestamp DESC LIMIT 10;
+  SELECT action, payload_json, created_at
+  FROM audit_log
+  WHERE action = 'TELEGRAM_BROADCAST_FAILURE'
+    AND created_at > NOW() - INTERVAL '24 hours'
+  ORDER BY created_at DESC;
   ```
-- [ ] **Verify MarkdownV2 Escaping:** When constructing Telegram MarkdownV2 templates, ensure all reserved characters (`_`, `*`, `[`, `]`, `(`, `)`, `~`, `` ` ``, `>`, `#`, `+`, `-`, `=`, `|`, `{`, `}`, `.`, `!`) outside of markdown constructs are explicitly escaped with backslashes.
+- [ ] **Verify MarkdownV2 Escaping:** When constructing Telegram MarkdownV2 templates, ensure all reserved characters (`_`, `*`, `[`, `]`, `(`, `)`, `~`, `` ` ``, `>`, `#`, `+`, `-`, `=`, `|`, `{`, `}`, `.`, `!`) outside of markdown constructs are explicitly escaped with backslashes using `escapeMd()`.
 - [ ] **Verify Webhook Secret Sync:** If the `telegram-broadcast` logs show a fast `401 Unauthorized` error when the database attempts to trigger it, the `WEBHOOK_SECRET` environment variable in the Edge Functions is out of sync with the database vault. Run `supabase secrets set WEBHOOK_SECRET=<decrypted_secret> --project-ref ktezlusdkqlfdwqrldtn` (fetching the secret from `vault.decrypted_secrets WHERE name = 'webhook_secret'`) to restore the pipeline.
 - [ ] **Verify Bot Token:** Ensure `TELEGRAM_BOT_TOKEN` is correctly set in the Edge Function secrets. A missing or invalid token will result in HTTP 401 errors from the Telegram API within the edge function logs.
 - [ ] **Test Delivery:** To safely verify delivery without broadcasting a fake signal to all users, you can manually invoke the edge function via the Supabase CLI or HTTP POST using a mock payload that mimics a `REJECTED` user trade for a specific test user's `user_id`.
@@ -1115,6 +1168,24 @@ When Edge Functions call other sibling Edge Functions directly via HTTP POST:
   await fetch(`${functionsUrl}/agent-trade`, { ... });
   ```
 - Always pass authorization headers (`x-webhook-secret` or `x-cron-secret`) fetched from `Deno.env.get("WEBHOOK_SECRET") || Deno.env.get("CRON_SECRET")`.
+
+---
+
+## ⚠️ 4C. Telegram MarkdownV2 Reserved Decimal Point (`.`) & String Interpolation Standard
+
+> [!CAUTION]
+> **Incident (2026-09-04):** In `telegram-broadcast/index.ts`, dynamic price and percentage strings (e.g. `slPctStr = \`(-${slPct.toFixed(1)}%)\``) produced unescaped periods (e.g. `\(\-2.7\%\)`), causing Telegram's API to reject all signals with `400 Bad Request: can't parse entities: Character '.' is reserved at offset...`.
+
+### Standard Rule:
+In any Telegram broadcast formatting:
+1. Wrap all dynamic number formatters (including `.toFixed()`, percentage calculations, and price levels) with `escapeMd()`:
+   ```typescript
+   const slPctStr = slDistance > 0 ? ` \\(${escapeMd(`-${slPct.toFixed(1)}%`)}\\)` : "";
+   const tpPctStr = tpDistance > 0 ? ` \\(${escapeMd(`+${tpPct.toFixed(1)}%`)}\\)` : "";
+   ```
+2. When a Telegram API error occurs, `telegram-broadcast` must catch the exception, log full error details, and insert an audit event `TELEGRAM_BROADCAST_FAILURE` to ensure immediate detection by `agent-sre` and engineers.
+
+---
 
 
 ## 5. API Quotas & External Dependency Balances

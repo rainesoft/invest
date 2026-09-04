@@ -60,12 +60,17 @@ SELECT jsonb_pretty(jsonb_build_object(
       'id', sub.id,
       'status_code', sub.status_code,
       'error_msg', sub.error_msg,
+      'content', substring(sub.content from 1 for 200),
       'created', sub.created
     )), '[]'::jsonb)
     FROM (
-      SELECT id, status_code, error_msg, created
+      SELECT id, status_code, error_msg, content, created
       FROM net._http_response
-      WHERE error_msg IS NOT NULL OR status_code >= 400
+      WHERE error_msg IS NOT NULL 
+         OR status_code >= 400
+         OR content ILIKE '%System Error%'
+         OR content ILIKE '%ReferenceError%'
+         OR content ILIKE '%TypeError%'
       ORDER BY created DESC
       LIMIT 10
     ) sub

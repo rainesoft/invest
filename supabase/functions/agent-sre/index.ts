@@ -146,17 +146,32 @@ serve(async (req) => {
       issues.push(`⚠️ <b>HTTP / Webhook Errors (${httpErrors.length} in last hour):</b> Status ${httpErrors[0].status_code || "ERR"}: ${httpErrors[0].error_msg || "HTTP Error"}`);
     }
 
+    // Probe 2B: Unhandled System Errors inside HTTP 200 Responses
+    try {
+      const { data: systemErrorResponses } = await supabase
+        .from("net._http_response")
+        .select("id, status_code, content, created")
+        .or("content.ilike.%System Error%,content.ilike.%ReferenceError%,content.ilike.%TypeError%")
+        .gte("created", oneHourAgoIso)
+        .limit(5);
+
+      if (systemErrorResponses && systemErrorResponses.length > 0) {
+        issues.push(`🚨 <b>Unhandled System Errors in Responses (${systemErrorResponses.length} in last hour):</b> Response contains Reference/Type error.`);
+      }
+    } catch (_) { /* non-blocking */ }
+
     // ─────────────────────────────────────────────────────────────
     // PROBE 3: Edge Function Agent Crashes & Critical Errors
     // ─────────────────────────────────────────────────────────────
     const { data: agentCrashes, error: crashError } = await supabase
       .from("audit_log")
       .select("id, action, payload_json, created_at")
-      .or("action.eq.AGENT_CRASH,action.ilike.%CRASH%,action.ilike.%FATAL_ERROR%")
+      .or("action.eq.AGENT_CRASH,action.eq.TELEGRAM_BROADCAST_FAILURE,action.ilike.%CRASH%,action.ilike.%FATAL_ERROR%")
       .gte("created_at", oneHourAgoIso);
 
     if (!crashError && agentCrashes && agentCrashes.length > 0) {
-      issues.push(`🚨 <b>Agent Crashes (${agentCrashes.length} in last hour):</b> Actions logged: ${agentCrashes.map((c: any) => c.action).join(", ")}.`);
+      const crashActions = Array.from(new Set(agentCrashes.map((c: any) => c.action))).join(", ");
+      issues.push(`🚨 <b>Agent & Broadcast Failures (${agentCrashes.length} in last hour):</b> ${crashActions}.`);
     }
 
     // ─────────────────────────────────────────────────────────────

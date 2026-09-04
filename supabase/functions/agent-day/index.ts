@@ -1500,7 +1500,7 @@ serve(async (req) => {
             const isHighMomentum = Boolean(
               (snapshot.adx_14 && snapshot.adx_14 >= 25) ||
               (snapshot.volume_ratio && snapshot.volume_ratio >= 1.20) ||
-              (strategy_applied && (strategy_applied.includes("BREAKOUT") || strategy_applied.includes("MOMENTUM")))
+              (evaluation.strategy_applied && (evaluation.strategy_applied.includes("BREAKOUT") || evaluation.strategy_applied.includes("MOMENTUM")))
             );
 
             const tp1 = evaluation.execution_parameters?.take_profit_1 || Number((entry_price + (take_profit - entry_price) * 0.5).toFixed(5));
@@ -1605,6 +1605,11 @@ serve(async (req) => {
           } catch (globalErr: any) {
             console.error(`[Global Error] Unexpected error processing ${symbol}: ${globalErr.message}`);
             sendEvent({ type: 'progress', message: `[System Error] ${globalErr.message}` });
+            await insertAuditLog(supabase, {
+              actor_type: "SYSTEM",
+              action: "AGENT_CRASH",
+              payload_json: { agent: "agent-day", symbol, error: globalErr.message, stack: globalErr.stack },
+            }).catch(() => {});
             rejections.push({
               symbol,
               reason: `System Error: ${globalErr.stack}`,
