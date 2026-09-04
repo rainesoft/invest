@@ -152,6 +152,213 @@ async function notifyTelegram(htmlText: string) {
   }
 }
 
+// --- NEWS DEFENSE SHIELD & PRE-EVENT RISK MANAGEMENT ---
+const CURRENCY_IMPACT_MAP: Record<string, string[]> = {
+  USD: ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "XAUUSD", "XAGUSD", "US30", "NAS100", "SPX500"],
+  GBP: ["GBPUSD", "GBPJPY", "EURGBP", "GBPAUD", "GBPCAD", "GBPCHF"],
+  EUR: ["EURUSD", "EURJPY", "EURGBP", "EURAUD", "EURCAD", "EURCHF"],
+  CAD: ["USDCAD", "CADJPY", "EURCAD", "GBPCAD"],
+  JPY: ["USDJPY", "EURJPY", "GBPJPY", "AUDJPY", "CADJPY"],
+  AUD: ["AUDUSD", "AUDJPY", "EURAUD", "GBPAUD", "AUDCAD", "AUDNZD"],
+  NZD: ["NZDUSD", "NZDJPY", "EURNZD", "GBPNZD", "AUDNZD"],
+  CHF: ["USDCHF", "EURCHF", "GBPCHF"],
+};
+
+async function evaluateNewsDefenseShield(
+  supabase: any,
+  openTrades: any[],
+  pendingOrdersMap: Map<string, any>,
+  isVpsAlive: boolean
+) {
+  try {
+    const { data: oracleRow } = await supabase
+      .from("system_settings")
+      .select("value")
+      .eq("key", "macro_oracle_context")
+      .maybeSingle();
+
+    const events = Array.isArray(oracleRow?.value) ? oracleRow.value : [];
+    if (events.length === 0) return;
+
+    const now = Date.now();
+    const imminentEvents = events.filter((e: any) => {
+      if (e.impact !== "High" || !e.date) return false;
+      const eventTime = new Date(e.date).getTime();
+      const diffMins = (eventTime - now) / 60000;
+      return diffMins >= -5 && diffMins <= 25;
+    });
+
+    if (imminentEvents.length === 0) return;
+
+    const { data: masterSettings } = await supabase
+      .from("user_risk_settings")
+      .select("news_shield_enabled, news_auto_flatten_enabled, news_cancel_pending_orders, news_alert_minutes_before")
+      .eq("is_master_account", true)
+      .maybeSingle();
+
+    const isShieldEnabled = masterSettings?.news_shield_enabled !== false;
+    if (!isShieldEnabled) return;
+
+    const autoFlatten = masterSettings?.news_auto_flatten_enabled === true;
+    const cancelPending = masterSettings?.news_cancel_pending_orders !== false;
+    const alertMinutesBefore = Number(masterSettings?.news_alert_minutes_before) || 15;
+
+    const { data: alertCacheRow } = await supabase
+      .from("system_settings")
+      .select("value")
+      .eq("key", "macro_shield_processed_alerts")
+      .maybeSingle();
+
+    let processedAlerts: string[] = Array.isArray(alertCacheRow?.value) ? alertCacheRow.value : [];
+    const alertSet = new Set(processedAlerts);
+
+    for (const event of imminentEvents) {
+      const eventTime = new Date(event.date).getTime();
+      const diffMins = (eventTime - now) / 60000;
+      const eventId = `[NEWS_SHIELD:${event.country}_${(event.title || "").replace(/\s+/g, '_')}_${event.date}]`;
+      const affectedSymbols = CURRENCY_IMPACT_MAP[event.country] || [];
+
+      if (affectedSymbols.length === 0) continue;
+
+      // STAGE 1: Pre-News Warning Alert (T - 15m to T - 5m)
+      if (diffMins > 0 && diffMins <= (alertMinutesBefore + 5) && !alertSet.has(eventId)) {
+        const exposedTrades = (openTrades || []).filter((t: any) => affectedSymbols.includes(t.symbol) && t.status === "OPEN");
+        const exposedPendingOrders = Array.from(pendingOrdersMap.values()).filter((ord: any) => affectedSymbols.includes(ord.symbol));
+
+        let tradeDetailsHtml = "";
+        if (exposedTrades.length > 0) {
+          tradeDetailsHtml = "\n\n<b>⚠️ Live Open Positions Detected:</b>\n" +
+            exposedTrades.map((t: any) => `• <b>${t.symbol}</b> (${t.side}) - Ticket: <code>${t.meta_api_order_id || t.id}</code>`).join("\n");
+        }
+        if (exposedPendingOrders.length > 0) {
+          tradeDetailsHtml += "\n\n<b>⏳ Resting Limit/Stop Orders:</b>\n" +
+            exposedPendingOrders.map((ord: any) => `• <b>${ord.symbol}</b> (${ord.type}) @ ${ord.openPrice || ord.limitPrice}`).join("\n");
+        }
+        if (!tradeDetailsHtml) {
+          tradeDetailsHtml = "\n\n<i>No active positions exposed on this currency.</i>";
+        }
+
+        const scheduledTimeStr = new Date(event.date).toLocaleTimeString("en-US", { timeZone: "UTC", hour: "2-digit", minute: "2-digit" });
+        const alertCard = [
+          `🚨 <b>PRE-NEWS SHIELD ALERT</b> | <b>${event.country} HIGH IMPACT</b>`,
+          `━━━━━━━━━━━━━━━━━━━━━`,
+          `📰 <b>Event:</b> ${event.title}`,
+          `⏰ <b>Scheduled In:</b> <code>${Math.max(1, Math.round(diffMins))} minutes</code> (${scheduledTimeStr} UTC)`,
+          `📊 <b>Forecast:</b> ${event.forecast || "N/A"} | <b>Previous:</b> ${event.previous || "N/A"}`,
+          tradeDetailsHtml,
+          ``,
+          `🛡️ <b>Shield Actions Active:</b>`,
+          `• <code>VOLATILITY_LOCKOUT</code> active (AI entries blocked)`,
+          cancelPending ? `• Resting limit orders will be canceled at T-5m` : `• Resting limit order cancel disabled`,
+          autoFlatten ? `• Live positions will be auto-flattened at T-5m` : `• Live positions NOT auto-closed (Manual Risk Mode)`
+        ].join("\n");
+
+        await notifyTelegram(alertCard);
+
+        // Inject VOLATILITY_LOCKOUT for affected symbols (expires in 15 mins post-event)
+        for (const sym of affectedSymbols) {
+          await supabase.from("market_context").insert({
+            symbol: sym,
+            agent_persona: "MACRO_SHIELD",
+            timeframe: "M1",
+            macro_bias: "VOLATILITY_LOCKOUT",
+            narrative: `Pre-News Lockout: ${event.title} (${event.country}) scheduled at ${scheduledTimeStr} UTC`,
+            expires_at: new Date(eventTime + 15 * 60 * 1000).toISOString(),
+            trace_id: crypto.randomUUID()
+          });
+        }
+
+        alertSet.add(eventId);
+        processedAlerts = [eventId, ...processedAlerts].slice(0, 100);
+        await supabase.from("system_settings").upsert({
+          key: "macro_shield_processed_alerts",
+          value: processedAlerts,
+          updated_at: new Date().toISOString()
+        });
+
+        await insertAuditLog(supabase, {
+          actor_type: "SYSTEM",
+          action: "NEWS_SHIELD_ALERT",
+          payload_json: {
+            event: event.title,
+            country: event.country,
+            diff_mins: diffMins,
+            affected_symbols: affectedSymbols,
+            exposed_trades_count: exposedTrades.length,
+            exposed_orders_count: exposedPendingOrders.length
+          }
+        });
+      }
+
+      // STAGE 2: T - 5m Pre-Spike Execution Gate
+      if (diffMins <= 5 && diffMins >= -2) {
+        // 1. Cancel resting pending orders on affected symbols
+        if (cancelPending && META_API_TOKEN && META_API_ACCOUNT_ID) {
+          for (const [ordId, ord] of pendingOrdersMap.entries()) {
+            if (affectedSymbols.includes(ord.symbol)) {
+              console.log(`[News Shield] Cancelling resting order ${ordId} (${ord.symbol}) ahead of ${event.title}...`);
+              try {
+                await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                  method: "POST",
+                  headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                  body: JSON.stringify({ actionType: "ORDER_CANCEL", orderId: ordId })
+                });
+                await supabase.from("user_trades")
+                  .update({ status: "CLOSED", error_message: `Pre-News Shield: Cancelled ahead of ${event.title}` })
+                  .eq("meta_api_order_id", ordId);
+                pendingOrdersMap.delete(ordId);
+              } catch (err: any) {
+                console.error(`[News Shield] Error cancelling order ${ordId}:`, err);
+              }
+            }
+          }
+        }
+
+        // 2. Optional Auto-Flatten open market positions
+        if (autoFlatten && (openTrades || []).length > 0) {
+          const matchingTrades = openTrades.filter((t: any) => affectedSymbols.includes(t.symbol) && t.status === "OPEN");
+          for (const trade of matchingTrades) {
+            const orderId = trade.meta_api_order_id;
+            if (!orderId) continue;
+            console.log(`[News Shield] Auto-Flattening position ${orderId} (${trade.symbol}) ahead of ${event.title}...`);
+            try {
+              if (isVpsAlive) {
+                await supabase.from("user_trades")
+                  .update({ status: "VPS_CLOSE", error_message: `Pre-News Auto-Flatten: ${event.title}` })
+                  .eq("meta_api_order_id", orderId);
+              } else if (META_API_TOKEN && META_API_ACCOUNT_ID) {
+                await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                  method: "POST",
+                  headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                  body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: orderId })
+                });
+                await supabase.from("user_trades")
+                  .update({ status: "CLOSED", error_message: `Pre-News Auto-Flatten: ${event.title}` })
+                  .eq("meta_api_order_id", orderId);
+              }
+
+              await insertAuditLog(supabase, {
+                actor_type: "SYSTEM",
+                action: "NEWS_PRE_EVENT_FLATTEN",
+                payload_json: {
+                  event: event.title,
+                  symbol: trade.symbol,
+                  order_id: orderId,
+                  side: trade.side
+                }
+              });
+            } catch (err: any) {
+              console.error(`[News Shield] Error flattening position ${orderId}:`, err);
+            }
+          }
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error("[News Shield] Execution error:", err);
+  }
+}
+
 async function executePendingOrders(supabase: any) {
   const { data: pendingTrades, error: fetchError } = await supabase
     .from("user_trades")
@@ -203,6 +410,20 @@ async function executePendingOrders(supabase: any) {
   let executedCount = 0;
 
   for (const symbol in groupedBySymbol) {
+    // Guard: Volatility Lockout (Pre/Post-News Protection)
+    const { data: lockout } = await supabase
+      .from("market_context")
+      .select("id")
+      .in("symbol", [symbol, "GLOBAL"])
+      .eq("macro_bias", "VOLATILITY_LOCKOUT")
+      .gt("expires_at", new Date().toISOString())
+      .limit(1);
+
+    if (lockout && lockout.length > 0) {
+      console.log(`[Agent Trade] Skipping pending order execution for ${symbol} due to active VOLATILITY_LOCKOUT.`);
+      continue;
+    }
+
     const bars = await fetchRecentBars(supabase, symbol, 1);
     if (bars.length === 0) continue;
     const currentPrice = bars[0].c;
@@ -375,7 +596,7 @@ serve(async (req) => {
       }
     } else if (authHeader) {
       const token = authHeader.replace("Bearer ", "");
-      const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+      const { data: { user }, error: authError } = await (supabase.auth as any).getUser(token);
       
       if (authError || !user) {
         return new Response("Unauthorized JWT", { status: 401 });
@@ -512,8 +733,8 @@ serve(async (req) => {
       }
 
       // Exempt Crypto from weekend defense because Crypto trades 24/7
-      const vulnerableTrades = openTrades.filter(t => t.symbol ? !isCrypto(t.symbol) : true);
-      const uniqueOrders = [...new Set(vulnerableTrades.map(t => t.meta_api_order_id))];
+      const vulnerableTrades = openTrades.filter((t: any) => t.symbol ? !isCrypto(t.symbol) : true);
+      const uniqueOrders = [...new Set(vulnerableTrades.map((t: any) => t.meta_api_order_id))];
 
       if (uniqueOrders.length === 0) {
         console.log("[Weekend Defense] Open trades exist but all are 24/7 crypto. No weekend liquidation needed.");
@@ -538,7 +759,7 @@ serve(async (req) => {
 
       for (const orderId of uniqueOrders) {
         try {
-          const tradeData = openTrades.find(t => t.meta_api_order_id === orderId);
+          const tradeData = openTrades.find((t: any) => t.meta_api_order_id === orderId);
           if (!tradeData) continue;
 
           let position = null;
@@ -759,7 +980,7 @@ serve(async (req) => {
         return new Response("Missing MetaAPI credentials", { status: 500 });
       }
 
-      const { data: openTrades, error } = await supabase
+      const { data: openTradesData, error } = await supabase
         .from("user_trades")
         .select(`
           id, meta_api_order_id, symbol, side, status, trade_type, user_id, open_price, created_at, opportunity_id,
@@ -770,9 +991,7 @@ serve(async (req) => {
         .in("status", ["OPEN", "VPS_CLOSE", "VPS_PENDING"])
         .not("meta_api_order_id", "is", null);
 
-      if (error || !openTrades || openTrades.length === 0) {
-        return new Response(JSON.stringify({ message: "No open trades to manage" }), { status: 200 });
-      }
+      const openTrades = openTradesData || [];
 
       const orderMap = new Map<string, any>();
       const knownMap = new Map<string, any>();
@@ -803,8 +1022,6 @@ serve(async (req) => {
       if (!isVpsAlive) {
          console.warn("[Position Manager] WARNING: VPS Heartbeat is DEAD. Failing over to MetaAPI for all modifications.");
       }
-
-
 
       // --- REVERSE SYNC: ORPHAN RECOVERY & PENDING ORDERS ---
       const pendingOrdersMap = new Map<string, any>();
@@ -888,6 +1105,15 @@ serve(async (req) => {
         }
       } catch (e) {
         console.error("[Position Manager] Reverse/Orders-Sync failed:", e);
+      }
+
+      // --- NEWS DEFENSE SHIELD (Pre-Event Alerts, Volatility Lockout & Auto-Defense) ---
+      await evaluateNewsDefenseShield(supabase, openTrades, pendingOrdersMap, isVpsAlive).catch((err) => {
+        console.error("[Position Manager] News defense shield error:", err);
+      });
+
+      if (orderMap.size === 0 && pendingOrdersMap.size === 0) {
+        return new Response(JSON.stringify({ message: "No open trades or pending orders to manage" }), { status: 200 });
       }
 
       const moves: { symbol: string; action: string; from: number; to: number }[] = [];
@@ -1726,6 +1952,7 @@ for (const [orderId, trade] of orderMap) {
         XAGUSD: 0.05, XAUUSD: 0.50, UKOIL: 0.05, BTCUSD: 25,
         EURUSD: 0.0003, GBPUSD: 0.0003, USDJPY: 0.03, US30: 5, NAS100: 5,
         AUDUSD: 0.0003, NZDUSD: 0.0003, EURJPY: 0.03, GBPJPY: 0.03,
+        JP225: 15, AAPL: 0.15, MSFT: 0.25, NVDA: 0.20, AMZN: 0.20, TSLA: 0.30, META: 0.35, GOOGL: 0.20,
       };
       const buffer = spreadBuffers[signal.symbol] || 0;
       if (buffer > 0) {
@@ -1776,6 +2003,7 @@ for (const [orderId, trade] of orderMap) {
       XAGUSD: 0.30, XAUUSD: 2.00, UKOIL: 0.30, BTCUSD: 150,
       EURUSD: 0.0010, GBPUSD: 0.0010, USDJPY: 0.15, US30: 30, NAS100: 30,
       AUDUSD: 0.0010, NZDUSD: 0.0020, EURJPY: 0.15, GBPJPY: 0.15,
+      JP225: 150, AAPL: 1.50, MSFT: 2.00, NVDA: 1.50, AMZN: 1.50, TSLA: 2.50, META: 3.00, GOOGL: 1.50,
     };
     
     if (defaultEntryPrice) {
@@ -2225,9 +2453,20 @@ for (const [orderId, trade] of orderMap) {
         let legBVolume = 0;
 
         if (allowRunnerLeg && alloc.volume >= volumeStep * 2) {
-          legAVolume = Math.floor((alloc.volume / 2) / volumeStep) * volumeStep;
-          if (legAVolume < volumeStep) legAVolume = alloc.volume; // Default to full volume on single leg if too small
-          legBVolume = Math.floor((alloc.volume - legAVolume) / volumeStep) * volumeStep;
+          // Asymmetric Profit Banking (Global Best Practice): 70% to Leg A (Quick Exit / Swing), 30% to Leg B (Runner)
+          legAVolume = Math.round((alloc.volume * 0.70) / volumeStep) * volumeStep;
+          if (legAVolume < volumeStep) legAVolume = alloc.volume;
+          legBVolume = Number((alloc.volume - legAVolume).toFixed(2));
+          
+          if (legBVolume < volumeStep) {
+            legAVolume = alloc.volume;
+            legBVolume = 0;
+          } else if (legAVolume < legBVolume) {
+            // Guarantee Leg A (profit banking) is always >= Leg B (runner)
+            const temp = legAVolume;
+            legAVolume = legBVolume;
+            legBVolume = temp;
+          }
         }
 
         const legARisk = alloc.volume > 0 ? Number(((alloc.risk_amount * legAVolume) / alloc.volume).toFixed(2)) : alloc.risk_amount;
