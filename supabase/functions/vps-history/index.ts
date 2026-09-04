@@ -23,7 +23,7 @@ serve(async (req) => {
     // 1. Find the trade in user_trades
     const { data: trades, error: findError } = await supabase
       .from("user_trades")
-      .select("id, user_id, opportunity_id, symbol, volume, risk_amount")
+      .select("id, user_id, opportunity_id, symbol, volume, risk_amount, trade_type")
       .eq("meta_api_order_id", ticket);
 
     if (findError) throw findError;
@@ -56,6 +56,21 @@ serve(async (req) => {
       .eq("id", trade.id);
 
     if (updateError) throw updateError;
+
+    // 2b. Companion Breakeven Trigger
+    if (finalStatus === "WON" && trade.trade_type === "QUICK_EXIT" && trade.opportunity_id) {
+      const { data: runnerTrade } = await supabase
+        .from("user_trades")
+        .select("id, symbol, status")
+        .eq("opportunity_id", trade.opportunity_id)
+        .eq("trade_type", "RUNNER")
+        .in("status", ["OPEN", "VPS_PROCESSING"])
+        .maybeSingle();
+
+      if (runnerTrade) {
+        console.log(`[VPS History] QUICK_EXIT WON on ${trade.symbol}. Companion RUNNER ${runnerTrade.id} is active and protected at Breakeven.`);
+      }
+    }
 
     // 3. Update user_risk_settings (Drawdown Breaker: Capital & HWM)
     if (trade.user_id) {

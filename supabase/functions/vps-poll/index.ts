@@ -23,7 +23,7 @@ serve(async (req) => {
     const { data: activeTrades, error: fetchError } = await supabase
       .from("user_trades")
       .select(`
-        id, symbol, side, volume, trade_type, status, meta_api_order_id,
+        id, symbol, side, volume, trade_type, status, meta_api_order_id, opportunity_id,
         trade_opportunities (
           entry_plan_json,
           stop_plan_json,
@@ -83,7 +83,8 @@ serve(async (req) => {
       
       // Symbol-specific precision helper
       const getDecimals = (sym: string) => {
-        if (["US30", "NAS100", "SPX500", "GER30", "BTCUSD", "XAUUSD", "XAGUSD", "UKOIL"].includes(sym)) return 2;
+        if (["US30", "NAS100", "SPX500", "GER30", "BTCUSD", "ETHUSD", "XAUUSD", "XAGUSD", "UKOIL", "USOIL", "AAPL", "MSFT", "NVDA", "AMZN", "TSLA", "META", "GOOGL"].includes(sym)) return 2;
+        if (sym === "JP225") return 1;
         if (sym.endsWith("JPY")) return 3;
         return 5;
       };
@@ -93,6 +94,21 @@ serve(async (req) => {
       let safeSl = stopLossRaw > 0 ? Number(stopLossRaw.toFixed(decimals)) : 0;
       let safeTp = targetTP > 0 ? Number(targetTP.toFixed(decimals)) : 0;
       let safeVolume = Number(trade.volume.toFixed(2));
+
+      // Check for Companion Quick Exit Breakeven Lock on RUNNER legs
+      if (trade.trade_type === "RUNNER" && trade.status === "OPEN" && trade.opportunity_id) {
+        const { data: qeLeg } = await supabase
+          .from("user_trades")
+          .select("status, profit_usd")
+          .eq("opportunity_id", trade.opportunity_id)
+          .eq("trade_type", "QUICK_EXIT")
+          .maybeSingle();
+
+        if (qeLeg?.status === "WON") {
+          // Breakeven Lock: Set SL to entry price
+          safeSl = safeEntry;
+        }
+      }
 
       // Validate SL direction only for fresh pending orders (allow trailing/profit SL for OPEN trades)
       if (trade.status === "VPS_PENDING" && safeEntry > 0 && safeSl > 0) {
@@ -115,6 +131,13 @@ serve(async (req) => {
         USOIL: "USOIL",
         BTCUSD: "BTCUSD",
         ETHUSD: "ETHUSD",
+        AAPL: "AAPL",
+        MSFT: "MSFT",
+        NVDA: "NVDA",
+        AMZN: "AMZN",
+        TSLA: "TSLA",
+        META: "META",
+        GOOGL: "GOOGL",
       };
       const brokerSymbol = CANONICAL_TO_BROKER_SYMBOLS[trade.symbol] || trade.symbol;
 

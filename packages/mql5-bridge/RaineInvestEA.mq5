@@ -13,6 +13,8 @@ string InpSupabaseURL = "https://ktezlusdkqlfdwqrldtn.supabase.co";
 string InpUserID = "912d249b-9be8-4691-a11b-5b00f386a804"; 
 string InpVPSSecret = "f4751d7f27496451f31eafbd3c937ab8036ce26ef30415b3"; 
 // -----------------------------------------
+#define MAGIC_PAMM 410673
+#define MAGIC_HFT  410674
 
 input bool InpDemoMode = false; // HFT Demo Mode (simulates execution)
 input double InpHFTLotSize = 0.01; // HFT Fixed Micro-Lot Size
@@ -56,7 +58,7 @@ void RecoverActiveTickets()
    for(int i=0; i<PositionsTotal(); i++)
      {
       ulong ticket = PositionGetTicket(i);
-      if(PositionGetString(POSITION_COMMENT) == "RaineInvest AI" || PositionGetString(POSITION_COMMENT) == "RaineInvest AI" || PositionGetInteger(POSITION_MAGIC) == 410673)
+      if(PositionGetString(POSITION_COMMENT) == "RaineInvest AI" || PositionGetInteger(POSITION_MAGIC) == MAGIC_PAMM)
         {
          int size = ArraySize(activeTickets);
          ArrayResize(activeTickets, size+1);
@@ -66,7 +68,7 @@ void RecoverActiveTickets()
    for(int i=0; i<OrdersTotal(); i++)
      {
       ulong ticket = OrderGetTicket(i);
-      if(OrderGetString(ORDER_COMMENT) == "RaineInvest AI" || OrderGetString(ORDER_COMMENT) == "RaineInvest AI" || OrderGetInteger(ORDER_MAGIC) == 410673)
+      if(OrderGetString(ORDER_COMMENT) == "RaineInvest AI" || OrderGetInteger(ORDER_MAGIC) == MAGIC_PAMM)
         {
          int size = ArraySize(activeTickets);
          ArrayResize(activeTickets, size+1);
@@ -85,7 +87,7 @@ void OnDeinit(const int reason)
    Print("RaineInvest VPS Bridge stopped.");
   }
 
-string TrackedSymbols[] = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "USDCAD", "USDCHF", "EURJPY", "GBPJPY", "XAUUSD", "XAGUSD", "BTCUSD", "ETHUSD", "UKOIL", "USOIL", "US30", "USTEC", "NAS100", "US500", "SPX500", "DE30", "GER30", "JP225"};
+string TrackedSymbols[] = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "USDCAD", "USDCHF", "EURJPY", "GBPJPY", "XAUUSD", "XAGUSD", "BTCUSD", "ETHUSD", "UKOIL", "USOIL", "US30", "USTEC", "NAS100", "US500", "SPX500", "DE30", "GER30", "JP225", "NVDA", "AAPL", "AMZN", "TSLA", "MSFT", "META", "GOOGL"};
 datetime lastBarTimes[];
 datetime lastHFTTime = 0;
 bool hftOpen = false;
@@ -152,13 +154,13 @@ void OnTick()
      }
    else if(hftOpen)
      {
-      // Trailing Stop Logic
+      // Trailing Stop Logic (HFT Native Only)
       if(!InpDemoMode)
         {
          for(int i=0; i<PositionsTotal(); i++)
            {
             ulong ticket = PositionGetTicket(i);
-            if(PositionGetString(POSITION_SYMBOL) == _Symbol && PositionGetInteger(POSITION_MAGIC) == 410673)
+            if(PositionGetString(POSITION_SYMBOL) == _Symbol && PositionGetInteger(POSITION_MAGIC) == MAGIC_HFT)
               {
                double posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
                double currentSl = PositionGetDouble(POSITION_SL);
@@ -194,11 +196,11 @@ void OnTick()
             Print("HFT DEMO: Closing position for micro-profit.");
          else
            {
-            // Fallback close all HFT trades on this symbol if time decays
+            // Fallback close only HFT Native trades on this symbol if time decays
             for(int i=PositionsTotal()-1; i>=0; i--)
               {
                ulong ticket = PositionGetTicket(i);
-               if(PositionGetString(POSITION_SYMBOL) == _Symbol && PositionGetInteger(POSITION_MAGIC) == 410673)
+               if(PositionGetString(POSITION_SYMBOL) == _Symbol && PositionGetInteger(POSITION_MAGIC) == MAGIC_HFT)
                  {
                   MqlTradeRequest request;
                   MqlTradeResult  result;
@@ -206,7 +208,7 @@ void OnTick()
                   ZeroMemory(result);
                   request.action = TRADE_ACTION_DEAL;
                   request.position = ticket;
-                  request.magic = 410673;
+                  request.magic = MAGIC_HFT;
                   request.symbol = _Symbol;
                   request.volume = PositionGetDouble(POSITION_VOLUME);
                   
@@ -356,7 +358,7 @@ void ModifyTrade(long ticket, double newSl, double newTp, double newEntryPrice =
          request.position = ticket;
          request.sl = normNewSl;
          request.tp = normNewTp;
-         request.magic = 410673;
+         request.magic = MAGIC_PAMM;
          
          if(OrderSend(request, result))
            {
@@ -394,7 +396,7 @@ void ModifyTrade(long ticket, double newSl, double newTp, double newEntryPrice =
          request.price = normNewPrice;
          request.sl = normNewSl;
          request.tp = normNewTp;
-         request.magic = 410673;
+         request.magic = MAGIC_PAMM;
          
          if(OrderSend(request, result))
            {
@@ -440,7 +442,7 @@ void CloseTrade(string id, long ticket)
       request.type = (ENUM_ORDER_TYPE)(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? ORDER_TYPE_SELL : ORDER_TYPE_BUY);
       request.price = SymbolInfoDouble(request.symbol, request.type == ORDER_TYPE_SELL ? SYMBOL_BID : SYMBOL_ASK);
       request.deviation = 50;
-      request.magic = 410673;
+      request.magic = MAGIC_PAMM;
       
       if(OrderSend(request, result))
         {
@@ -490,15 +492,32 @@ void CloseTrade(string id, long ticket)
   }
 
 //+------------------------------------------------------------------+
+//| Helper: Is Symbol Tradable for New Deals?                        |
+//+------------------------------------------------------------------+
+bool IsSymbolTradable(string sym)
+  {
+   if(!SymbolSelect(sym, true)) return false;
+   if(SymbolInfoDouble(sym, SYMBOL_BID) <= 0 && SymbolInfoDouble(sym, SYMBOL_ASK) <= 0) return false;
+   
+   long tradeMode = SymbolInfoInteger(sym, SYMBOL_TRADE_MODE);
+   // Must be Full trading (4) or at least Long/Short only (1/2). CloseOnly (3) or Disabled (0) is not tradable for new entries.
+   if(tradeMode == SYMBOL_TRADE_MODE_DISABLED || tradeMode == SYMBOL_TRADE_MODE_CLOSEONLY)
+     {
+      Print("Symbol ", sym, " is in Close-Only or Disabled mode (Mode:", tradeMode, "). Skipping candidate.");
+      return false;
+     }
+   return true;
+  }
+
+//+------------------------------------------------------------------+
 //| Resolve Broker Symbol Aliases (Exness / Standard MT5 Brokers)     |
 //+------------------------------------------------------------------+
 string ResolveBrokerSymbol(string sym)
   {
-   // 1. Direct check: Is symbol already selectable and active?
-   if(SymbolSelect(sym, true))
+   // 1. Direct check: Is symbol already selectable and fully tradable?
+   if(IsSymbolTradable(sym))
      {
-      if(SymbolInfoDouble(sym, SYMBOL_BID) > 0 || SymbolInfoInteger(sym, SYMBOL_DIGITS) > 0)
-         return sym;
+      return sym;
      }
      
    // 2. Candidate alias table
@@ -538,9 +557,14 @@ string ResolveBrokerSymbol(string sym)
       string c[] = {"USOIL", "USOILm", "USOIL_m", "WTI", "USOIL.pro"};
       ArrayCopy(candidates, c);
      }
+   else if(sym == "NVDA" || sym == "AAPL" || sym == "AMZN" || sym == "TSLA" || sym == "MSFT" || sym == "META" || sym == "GOOGL")
+     {
+      string c[] = {sym + "_m", sym + "m", sym + ".pro", sym, sym + ".c", sym + ".ecn"};
+      ArrayCopy(candidates, c);
+     }
    else
      {
-      string c[] = {sym, sym + "m", sym + "_m", sym + ".pro", sym + ".c"};
+      string c[] = {sym + "_m", sym + "m", sym + ".pro", sym, sym + ".c"};
       ArrayCopy(candidates, c);
      }
      
@@ -548,13 +572,10 @@ string ResolveBrokerSymbol(string sym)
      {
       string candidate = candidates[i];
       ResetLastError();
-      if(SymbolSelect(candidate, true))
+      if(IsSymbolTradable(candidate))
         {
-         if(SymbolInfoDouble(candidate, SYMBOL_ASK) > 0 || SymbolInfoInteger(candidate, SYMBOL_DIGITS) > 0)
-           {
-            Print("Resolved symbol alias: ", sym, " -> ", candidate);
-            return candidate;
-           }
+         Print("Resolved fully tradable symbol alias: ", sym, " -> ", candidate);
+         return candidate;
         }
      }
      
@@ -575,7 +596,10 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
    int symDigits = (int)SymbolInfoInteger(brokerSym, SYMBOL_DIGITS);
    double point = SymbolInfoDouble(brokerSym, SYMBOL_POINT);
    int stopsLevel = (int)SymbolInfoInteger(brokerSym, SYMBOL_TRADE_STOPS_LEVEL);
-   double minStopDist = (stopsLevel + 5) * point;
+   int freezeLevel = (int)SymbolInfoInteger(brokerSym, SYMBOL_TRADE_FREEZE_LEVEL);
+   int bufferPoints = MathMax(stopsLevel, freezeLevel) + 5;
+   if(bufferPoints < 10) bufferPoints = 10;
+   double minStopDist = bufferPoints * point;
    
    // Volume Normalization
    double minLot = SymbolInfoDouble(brokerSym, SYMBOL_VOLUME_MIN);
@@ -590,9 +614,17 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
    normVolume = NormalizeDouble(normVolume, 2);
    
    // Price & Stop Normalization
+   double tickSize = SymbolInfoDouble(brokerSym, SYMBOL_TRADE_TICK_SIZE);
    double normSl = (sl > 0) ? NormalizeDouble(sl, symDigits) : 0;
    double normTp = (tp > 0) ? NormalizeDouble(tp, symDigits) : 0;
    double normEntry = (entryPrice > 0) ? NormalizeDouble(entryPrice, symDigits) : 0;
+   
+   if(tickSize > 0)
+     {
+      if(normSl > 0) normSl = NormalizeDouble(MathRound(normSl / tickSize) * tickSize, symDigits);
+      if(normTp > 0) normTp = NormalizeDouble(MathRound(normTp / tickSize) * tickSize, symDigits);
+      if(normEntry > 0) normEntry = NormalizeDouble(MathRound(normEntry / tickSize) * tickSize, symDigits);
+     }
    
    double ask = SymbolInfoDouble(brokerSym, SYMBOL_ASK);
    double bid = SymbolInfoDouble(brokerSym, SYMBOL_BID);
@@ -604,8 +636,8 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
    
    request.symbol = brokerSym;
    request.volume = normVolume;
-   request.magic = 410673; // RaineInvest Magic
-   request.comment = "RaineInvest AI";
+   request.magic = (id == "HFT_NATIVE") ? MAGIC_HFT : MAGIC_PAMM;
+   request.comment = (id == "HFT_NATIVE") ? "RaineInvest HFT" : "RaineInvest AI";
    request.deviation = 30;
    
    // Adaptive Order Type & Price Routing (Prevents Error 10015 on slipped pending orders)
@@ -910,7 +942,7 @@ void PushMarketData()
   }
 
 //+------------------------------------------------------------------+
-//| Monitor Active Positions for Closures                            |
+//| Monitor Active Positions for Closures & Trigger Auto-Breakeven   |
 //+------------------------------------------------------------------+
 void MonitorPositions()
   {
@@ -926,6 +958,7 @@ void MonitorPositions()
             double profit = 0;
             double closePrice = 0;
             string reason = "VPS_CLOSED";
+            string closedSymbol = "";
             
             for(int d=0; d<deals; d++)
               {
@@ -934,6 +967,47 @@ void MonitorPositions()
                  {
                   profit += HistoryDealGetDouble(dealTicket, DEAL_PROFIT) + HistoryDealGetDouble(dealTicket, DEAL_SWAP) + HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
                   closePrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+                  closedSymbol = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
+                 }
+              }
+            
+            // --- LOCAL ZERO-LATENCY COMPANION BREAKEVEN LOCK ---
+            // When a trade closes with profit (TP1 / Quick Exit hit), immediately lock companion runner on the same symbol to Breakeven
+            if(profit > 0 && closedSymbol != "")
+              {
+               for(int p=0; p<PositionsTotal(); p++)
+                 {
+                  ulong compTicket = PositionGetTicket(p);
+                  if(PositionGetString(POSITION_SYMBOL) == closedSymbol && PositionGetInteger(POSITION_MAGIC) == MAGIC_PAMM && compTicket != (ulong)ticket)
+                    {
+                     double compOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+                     double compSl = PositionGetDouble(POSITION_SL);
+                     double compTp = PositionGetDouble(POSITION_TP);
+                     long compType = PositionGetInteger(POSITION_TYPE);
+                     double ask = SymbolInfoDouble(closedSymbol, SYMBOL_ASK);
+                     double bid = SymbolInfoDouble(closedSymbol, SYMBOL_BID);
+                     double spread = ask - bid;
+                     int symDigits = (int)SymbolInfoInteger(closedSymbol, SYMBOL_DIGITS);
+                     
+                     if(compType == POSITION_TYPE_BUY)
+                       {
+                        double targetBe = NormalizeDouble(compOpenPrice + (spread > 0 ? spread * 0.5 : 0), symDigits);
+                        if(compSl < targetBe || compSl == 0)
+                          {
+                           ModifyTrade(compTicket, targetBe, compTp);
+                           Print("[Auto-Breakeven] Quick Exit WON on ", closedSymbol, " (+", DoubleToString(profit, 2), "$). Companion Runner ", compTicket, " SL moved to Breakeven @ ", targetBe);
+                          }
+                       }
+                     else if(compType == POSITION_TYPE_SELL)
+                       {
+                        double targetBe = NormalizeDouble(compOpenPrice - (spread > 0 ? spread * 0.5 : 0), symDigits);
+                        if(compSl > targetBe || compSl == 0)
+                          {
+                           ModifyTrade(compTicket, targetBe, compTp);
+                           Print("[Auto-Breakeven] Quick Exit WON on ", closedSymbol, " (+", DoubleToString(profit, 2), "$). Companion Runner ", compTicket, " SL moved to Breakeven @ ", targetBe);
+                          }
+                       }
+                    }
                  }
               }
             
