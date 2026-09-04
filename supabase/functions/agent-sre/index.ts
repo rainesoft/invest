@@ -311,7 +311,7 @@ serve(async (req) => {
       }
     }
 
-    // 4F. Broker Execution Failures in Last Hour (MT5 Codes 10013, 10014, 10015, 10016, 10018, 10019)
+    // 4F. Broker Execution Failures in Last Hour (MT5 Codes 10013, 10014, 10015, 10016, 10018, 10019, 10044)
     const { data: recentFailedTrades } = await supabase
       .from("user_trades")
       .select("id, symbol, side, opportunity_id, error_message, created_at")
@@ -327,6 +327,7 @@ serve(async (req) => {
         if (errMsg.includes("10016")) return "Code:10016 (Invalid Stops / TP Direction Mismatch)";
         if (errMsg.includes("10018")) return "Code:10018 (Market Closed / Session Inactive)";
         if (errMsg.includes("10019")) return "Code:10019 (Insufficient Free Margin)";
+        if (errMsg.includes("10044")) return "Code:10044 (Close Only / Symbol Trading Restricted or Alias Suffix Required — verify account permissions or symbol suffix e.g. NVDA_m/NVDAm)";
         return errMsg;
       };
 
@@ -351,6 +352,7 @@ serve(async (req) => {
         if (errMsg.includes("10016")) return "Code:10016 (Invalid Stops / TP Direction Mismatch)";
         if (errMsg.includes("10018")) return "Code:10018 (Market Closed / Session Inactive)";
         if (errMsg.includes("10019")) return "Code:10019 (Insufficient Free Margin)";
+        if (errMsg.includes("10044")) return "Code:10044 (Close Only / Symbol Trading Restricted or Alias Suffix Required — verify account permissions or symbol suffix e.g. NVDA_m/NVDAm)";
         return errMsg;
       };
 
