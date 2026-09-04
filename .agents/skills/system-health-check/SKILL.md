@@ -28,7 +28,7 @@ Whenever the user requests a "system health check", you should:
    - Stale unfilled pending orders older than their 20-bar horizon (10h for 30m intraday, 20 days for 1D swing) are zero or garbage-collected to `status = 'CLOSED'` with parent opportunities marked `EXPIRED`.
    - Stop loss evaluations adhere to the Bar-Close Invalidation rule (governed on confirmed candle close, allowing intra-bar liquidity wicks to breathe unless the $2.0\times$ ATR catastrophic emergency stop is reached).
    - Database triggers (e.g. `allocate_virtual_pnl()`) are idempotent and skip duplicate reference codes without throwing `23505 duplicate key` errors.
-   - Broker execution errors in `user_trades` (MT5 error codes 10013 Invalid Request / Symbol Alias, 10014 Invalid Volume, 10015 Invalid Price, 10016 Invalid Stops / Multi-Leg TP Direction, 10018 Market Closed, 10019 Margin) are caught and parent opportunities updated to `REJECTED`, enforcing broker symbol alias resolution (`SPX500` -> `US500`, `NAS100` -> `USTEC`, `GER30` -> `DE30` per Section 3K).
+   - Broker execution errors in `user_trades` (MT5 error codes 10013 Invalid Request / Symbol Alias, 10014 Invalid Volume, 10015 Invalid Price, 10016 Invalid Stops / Multi-Leg TP Direction, 10018 Market Closed, 10019 Margin, 10044 Close Only) are caught and parent opportunities updated to `REJECTED`, enforcing broker symbol alias resolution (`SPX500` -> `US500`, `NAS100` -> `USTEC`, `GER30` -> `DE30`, US stocks -> `NVDA_m`/`NVDAm`/`NVDA.pro` per Section 3K & Section 3P) and validating `SYMBOL_TRADE_MODE_FULL`.
    - All TP targets (`tp1`, `tp2`, `tp3`) enforce the 3-Layer Direction Validation against entry prices across `agent-swing`, `agent-trade`, and `vps-poll`, verifying Target 2 satisfies $\ge 1:1.70$ R:R.
    - Runner legs enforce the Chandelier ATR dynamic trail ($2.0\times\text{ ATR}$) and stepped profit floors ($+0.75\text{R}$ at $+1.5\text{R}$, $+1.25\text{R}$ at $+2.0\text{R}$, $+2.0\text{R}$ at $+3.0\text{R}$) per Section 3M.
    - Edge Functions strictly employ `.maybeSingle()` and avoid `.single()` on user/trade/opportunity lookups to eliminate unhandled `PGRST116 (0 rows)` crashes across background crons (Section 3N).
@@ -36,11 +36,11 @@ Whenever the user requests a "system health check", you should:
    - `vps-callback` uses `.maybeSingle()` and returns HTTP 200 `OK` on unmapped/external callback tickets rather than throwing 500 errors (Section 3L).
    - Stale `ACTIVE` trade opportunities older than 24 hours without live `OPEN` positions are safely expired to `status = 'EXPIRED'` (complying with `trade_opportunities_status_check` constraint).
    - Completed trades (`WON`/`LOST`/`CLOSED`) have their parent `trade_opportunities` reconciled immediately (`WON` for positive net PnL, `LOST` for negative net PnL, `EXPIRED` for cancelled/missed entries) without lingering in `ACTIVE`.
-   - `vps-poll` receives fresh MT5 heartbeats (within 60s) dynamically queried across master accounts and streams live 30m candles (`market_data_pti`).
+   - `vps-poll` receives fresh MT5 heartbeats (within 60s) dynamically queried across master accounts, formats stock CFDs to 2 decimal places and `JP225` to 1 decimal place, and streams live 30m candles (`market_data_pti`).
    - Hourly autonomous SRE watchdog `agent-sre` executed via `agent-sre-poll` audits all 9 subsystem probes (including cron failures, HTTP errors via RPC, agent crashes & critical errors, pipeline self-healing, VPS heartbeats, market data freshness, treasury solvency, AI model timeout sweeps, and drawdown/circuit-breaker limits), auto-heals status desyncs, and records `SRE_HEARTBEAT`.
    - AI model evaluation timeouts (`API_TIMEOUT` in `audit_log`) are zero or transient, backed by exponential retry resiliency in `agent-day` and `agent-swing`.
    - Account drawdown limits (5% daily, 10% total max drawdown) are unbreached across all active user PAMM accounts.
-4. If anomalies or status desyncs are detected, apply the reconciliation SQL from Section 3G, Section 3H, and Section 3I of `docs/System Health Checklist.md` and report findings to the user.
+4. If anomalies or status desyncs are detected, apply the reconciliation SQL from Section 3G, Section 3H, Section 3I, and Section 3P of `docs/System Health Checklist.md` and report findings to the user.
 
 ## Resources
 - [Unified Health Audit SQL Script](../../../scripts/full_health_audit.sql)

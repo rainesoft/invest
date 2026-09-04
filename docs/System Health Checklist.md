@@ -1128,6 +1128,19 @@ In `/functions/v1/vps-callback`:
 
 ---
 
+## ⚠️ 3P. Broker Execution Diagnostic — Close-Only Restrictions (Code 10044) & Stock CFD Symbol Aliases
+
+> [!CAUTION]
+> **Incident (2026-09-04):** On US Equities (`NVDA`, `AAPL`, `AMZN`) triggered by `agent-swing-stocks-daily`, orders failed on MT5 with `TRADE_RETCODE_CLOSE_ONLY (Code: 10044)` because the raw ticker symbols (`NVDA`, `AAPL`, `AMZN`) on Exness Standard/Pro accounts were in close-only mode (`SYMBOL_TRADE_MODE_CLOSEONLY`), while the fully tradable instruments require account-specific suffix aliases (`NVDA_m`, `NVDAm`, `NVDA.pro`, `AAPL_m`). Additionally, price and stop formatting defaulted to 5 decimal places instead of 2 decimals for stocks, causing `TRADE_RETCODE_INVALID_STOPS (Code: 10016)`.
+
+### Standard Rule:
+1. **Tradable Mode Verification (`SYMBOL_TRADE_MODE_FULL`):** In `RaineInvestEA.mq5`, `ResolveBrokerSymbol()` and `IsSymbolTradable()` verify that `SymbolInfoInteger(sym, SYMBOL_TRADE_MODE)` is not `SYMBOL_TRADE_MODE_CLOSEONLY` (3) or `SYMBOL_TRADE_MODE_DISABLED` (0). If a symbol is close-only, the resolver automatically iterates candidate suffixes (`_m`, `m`, `.pro`, `.c`, `.ecn`) to find the fully tradable contract.
+2. **Stock CFD Precision (2 Decimals):** `vps-poll` formats US Equities (`NVDA`, `AAPL`, `AMZN`, `TSLA`, `MSFT`, `META`, `GOOGL`) to 2 decimal places, and `JP225` to 1 decimal place.
+3. **Execution Guard Minimum Distances:** In `agent-trade`, explicit `minDistances` ($1.50–$3.00) and `spreadBuffers` ($0.15–$0.35) are enforced on US Equities and `JP225` (150pt min distance, 15pt buffer) to prevent orders from being placed within broker freeze/spread levels.
+4. **`agent-sre` Automated Telemetry:** `agent-sre` Probe 4F explicitly recognizes `Code:10044`, auto-reconciles parent opportunities to `REJECTED`, and alerts administrators to verify broker symbol suffixes.
+
+---
+
 ## 4. External Integrations
 Verify that external data pipelines and notification systems are alive.
 
