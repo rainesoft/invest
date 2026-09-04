@@ -374,6 +374,26 @@ serve(async (req) => {
     const now = new Date();
     const results = [];
 
+    // 1c. Proactive Pre-News Volatility Lockout: Lock out upcoming high impact events in next 30 mins
+    for (const ev of events) {
+      if (ev.impact === "High" && ev.date) {
+        const evTime = new Date(ev.date).getTime();
+        const diffM = (evTime - now.getTime()) / 60000;
+        if (diffM > 0 && diffM <= 30) {
+          const scheduledStr = new Date(ev.date).toLocaleTimeString("en-US", { timeZone: "UTC", hour: "2-digit", minute: "2-digit" });
+          await supabase.from("market_context").insert({
+            symbol: "GLOBAL",
+            agent_persona: "MACRO_SCOUT",
+            timeframe: "M1",
+            macro_bias: "VOLATILITY_LOCKOUT",
+            narrative: `Pre-News Shield: ${ev.title} (${ev.country}) scheduled at ${scheduledStr} UTC`,
+            expires_at: new Date(evTime + 15 * 60 * 1000).toISOString(),
+            trace_id: traceId
+          });
+        }
+      }
+    }
+
     const speechEventsToScrape: string[] = [];
     // 2. Scan events
     for (const event of events) {
@@ -387,8 +407,8 @@ serve(async (req) => {
         }
       }
       
-      // Skip future events or events older than 15 mins for numeric rules
-      if (diffMinutes < 0 || diffMinutes > 15) continue;
+      // Skip future events or events older than 20 mins for numeric rules (aligned with 15m polling)
+      if (diffMinutes < 0 || diffMinutes > 20) continue;
       
       // Needs to have 'actual' published for numeric deviation rules
       if (!event.actual) continue;
