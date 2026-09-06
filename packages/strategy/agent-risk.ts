@@ -88,8 +88,10 @@ export async function validateGlobalSignal(
 
   const liveTradesForSymbol = openTrades ? openTrades.filter(t => t.symbol === symbol) : [];
   if (liveTradesForSymbol.length > 0) {
-    // Check if the trade is truly a filled active position
-    const hasFilledPosition = liveTradesForSymbol.some(t => t.open_price !== null && t.open_price !== undefined);
+    // Check if the trade is truly a filled active position (status OPEN with broker ticket, or valid open_price)
+    const hasFilledPosition = liveTradesForSymbol.some(
+      t => (t.status === "OPEN" && t.meta_api_order_id) || (t.open_price !== null && t.open_price !== undefined)
+    );
     
     // Check age of pending trades
     const now = Date.now();
@@ -107,6 +109,10 @@ export async function validateGlobalSignal(
       // Stale pending limit order (>2h unfilled). Auto-cancel/expire it and allow the new high-conviction signal!
       console.log(`[Risk Manager] Found stale unfilled pending order for ${symbol} (>2h old). Superseding with fresh signal.`);
       for (const staleTrade of liveTradesForSymbol) {
+        // Strict guard: Never auto-close an active broker position
+        if (staleTrade.status === "OPEN" && staleTrade.meta_api_order_id) {
+          continue;
+        }
         await supabase.from("user_trades").update({ 
           status: "CLOSED", 
           error_message: "Superseded by fresh AI signal" 

@@ -380,6 +380,25 @@ serve(async (req) => {
       }
     }
 
+    // 4G. Auto-Healing: Backfill Missing open_price on Live OPEN Positions
+    const { data: openTradesWithoutPrice } = await supabase
+      .from("user_trades")
+      .select("id, symbol, side, opportunity_id, meta_api_order_id, trade_opportunities(entry_plan_json)")
+      .eq("status", "OPEN")
+      .is("open_price", null)
+      .not("meta_api_order_id", "is", null);
+
+    if (openTradesWithoutPrice && openTradesWithoutPrice.length > 0) {
+      for (const op of openTradesWithoutPrice) {
+        const plannedPrice = (op as any).trade_opportunities?.entry_plan_json?.price ||
+                             (op as any).trade_opportunities?.entry_plan_json?.entry_price;
+        if (plannedPrice && Number(plannedPrice) > 0) {
+          await supabase.from("user_trades").update({ open_price: Number(plannedPrice) }).eq("id", op.id);
+          autoRemediations.push(`Backfilled missing open_price for active trade ${op.symbol} (${op.id}) to planned entry ${plannedPrice}`);
+        }
+      }
+    }
+
     // ─────────────────────────────────────────────────────────────
     // PROBE 5: MT5 VPS EA Heartbeat & Connectivity
     // ─────────────────────────────────────────────────────────────

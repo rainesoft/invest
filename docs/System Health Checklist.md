@@ -467,6 +467,21 @@ Tables in non-public schemas (`net`, `cron`, `vault`) cannot be queried directly
    ```
 2. When caught, inspect the associated edge function and ensure all internal catch blocks log `AGENT_CRASH` to `audit_log` with stack traces.
 
+## ⚠️ 1P. pg_cron Diagnostic — Weekend 24/7 Position Manager & Crypto Trailing Stop Health Check
+
+> [!CAUTION]
+> **Incident (2026-09-06):** Crypto markets (`BTCUSD`, `ETHUSD`) trade 24/7, but `position-manager-poll` was scheduled as `*/5 * * * 1-5` (Monday to Friday only). As a result, position management was completely dormant over the weekend while `agent-swing-crypto` continued executing trades. Stop losses were never adjusted when trades moved into profit.
+
+### Standard Rule:
+1. `position-manager-poll` must ALWAYS be scheduled to run 7 days a week: `*/5 * * * *`.
+2. `agent-news-poll` must ALWAYS be scheduled to run 7 days a week: `0 * * * *`.
+3. Verify cron schedules in `cron.job`:
+   ```sql
+   SELECT jobname, schedule, active
+   FROM cron.job
+   WHERE jobname IN ('position-manager-poll', 'agent-news-poll');
+   ```
+
 ---
 
 ## 2. Autonomous Agent Activity
@@ -1138,6 +1153,19 @@ In `/functions/v1/vps-callback`:
 2. **Stock CFD Precision (2 Decimals):** `vps-poll` formats US Equities (`NVDA`, `AAPL`, `AMZN`, `TSLA`, `MSFT`, `META`, `GOOGL`) to 2 decimal places, and `JP225` to 1 decimal place.
 3. **Execution Guard Minimum Distances:** In `agent-trade`, explicit `minDistances` ($1.50–$3.00) and `spreadBuffers` ($0.15–$0.35) are enforced on US Equities and `JP225` (150pt min distance, 15pt buffer) to prevent orders from being placed within broker freeze/spread levels.
 4. **`agent-sre` Automated Telemetry:** `agent-sre` Probe 4F explicitly recognizes `Code:10044`, auto-reconciles parent opportunities to `REJECTED`, and alerts administrators to verify broker symbol suffixes.
+
+---
+
+## ⚠️ 3Q. Trade Open Price Sync & MQL5 EA Callback Verification
+
+> [!CAUTION]
+> **Incident (2026-09-06):** When `RaineInvestEA.mq5` placed market and limit orders, the execution callback to `/functions/v1/vps-callback` omitted the `&price=` parameter, causing `user_trades.open_price` to remain `NULL`. `agent-risk.ts` assumed `open_price === null` indicated an unfilled pending order, prematurely cancelling live open positions after 2 hours with `error_message = 'Superseded by fresh AI signal'`. Additionally, `agent-trade`'s Position Manager attempted to update a non-existent `stop_loss` column on `user_trades`.
+
+### Standard Rule:
+1. **EA Callback Open Price:** `RaineInvestEA.mq5` must always pass `&price=` with the fill price (`result.price` or `request.price`) when notifying `/functions/v1/vps-callback`.
+2. **Live Trade Protection in Risk Engine:** `agent-risk.ts` must never supersede or cancel trades with `status = 'OPEN'` and a valid `meta_api_order_id`, even if `open_price` is initially delayed.
+3. **Database Schema Compliance:** Stop losses are strictly stored in `trade_opportunities.stop_plan_json`. Never attempt to update `stop_loss` directly on `user_trades`.
+4. **Crypto Asset Lot Caps:** `ETHUSD` must be explicitly capped in `agent-trade`'s `assetLotCaps` (`ETHUSD: 0.04`) to prevent margin exhaustion (`Code:10019`) on small-balance PAMM accounts.
 
 ---
 
