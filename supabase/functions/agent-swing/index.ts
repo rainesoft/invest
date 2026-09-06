@@ -945,7 +945,7 @@ serve(async (req) => {
         }
 
         // --- LAYER -1: MARKET HOURS CHECK ---
-        if (!isMarketOpen(symbol)) {
+        if (!isManual && !isMarketOpen(symbol)) {
           console.log(`[Market Hours] Skipping ${symbol} as market is currently closed.`);
           sendEvent({ type: 'progress', message: `[Market Hours] Skipping ${symbol}: Market Closed.` });
           rejections.push({ symbol, reason: "Market is currently closed", layer: "Market Hours" });
@@ -1182,6 +1182,26 @@ serve(async (req) => {
                if (peerNews) {
                  const peerSide = peerNews.macro_bias === "BULLISH" ? "LONG" : "SHORT";
                  macroContext += `\n\n[PRECIOUS METALS INTER-ASSET CORRELATION]\nA live Tier-1 macro catalyst has fired for benchmark ${correlatedPeer} (${peerSide}). Details: ${peerNews.narrative}. Due to 90% precious metals correlation, ${symbol} SHOULD CONSIDER aligning with this fundamental direction.`;
+                 sendEvent({ type: 'progress', message: `[${symbol}] Inherited macro sentiment (${peerSide}) from correlated peer ${correlatedPeer}.` });
+               }
+             } catch (e) {}
+          } else if (symbol === "UKOIL" || symbol === "USOIL") {
+             // Crude Oil / Energy Inter-Asset Correlation: UKOIL (Brent) inherits USOIL (WTI) macro sentiment (and vice versa)
+             const correlatedPeer = symbol === "UKOIL" ? "USOIL" : "UKOIL";
+             try {
+               const { data: peerNews } = await supabase
+                 .from("market_context")
+                 .select("macro_bias, narrative")
+                 .eq("symbol", correlatedPeer)
+                 .eq("agent_persona", "MACRO_SCOUT")
+                 .gt("expires_at", new Date().toISOString())
+                 .order("created_at", { ascending: false })
+                 .limit(1)
+                 .maybeSingle();
+
+               if (peerNews) {
+                 const peerSide = peerNews.macro_bias === "BULLISH" ? "LONG" : "SHORT";
+                 macroContext += `\n\n[CRUDE OIL ENERGY INTER-ASSET CORRELATION]\nA live Tier-1 macro catalyst has fired for benchmark ${correlatedPeer} (${peerSide}). Details: ${peerNews.narrative}. Due to >95% crude oil correlation (Brent/WTI), ${symbol} SHOULD CONSIDER aligning with this fundamental direction.`;
                  sendEvent({ type: 'progress', message: `[${symbol}] Inherited macro sentiment (${peerSide}) from correlated peer ${correlatedPeer}.` });
                }
              } catch (e) {}

@@ -332,6 +332,7 @@ serve(async (req) => {
       reqBody = await req.json();
     } catch (e) {}
   }
+  const isManual = (reqBody as any).is_manual === true || searchParams.get("is_manual") === "true";
   const timeframe = (reqBody as any).timeframe ?? searchParams.get("timeframe") ?? (isCron ? "30m" : "30m");
   const modelId = searchParams.get("model_id") ?? undefined;
   const modelVersion = searchParams.get("model_version") ?? undefined;
@@ -683,7 +684,7 @@ serve(async (req) => {
           const chunk = symbols.slice(i, i + chunkSize);
           await Promise.all(chunk.map(async (symbol: string) => {
           try {
-            if (isCron && !isMarketOpen(symbol)) {
+            if (!isManual && isCron && !isMarketOpen(symbol)) {
               console.log(`[Market Hours] Skipping ${symbol}: Market is closed.`);
               sendEvent({ type: 'progress', message: `[Market Hours] Skipping ${symbol}: Market is closed.` });
               return;
@@ -691,7 +692,7 @@ serve(async (req) => {
 
             // --- SESSION-AWARE LIQUIDITY GATE FOR EQUITY INDICES ---
             const equityIndices = ["US30", "NAS100", "SPX500", "GER30"];
-            if (isCron && equityIndices.includes(symbol)) {
+            if (!isManual && isCron && equityIndices.includes(symbol)) {
               const currentUtcHour = new Date().getUTCHours();
               // Indices experience low volume and spread widening during Asian session (22:00 to 06:00 UTC)
               if (currentUtcHour >= 22 || currentUtcHour < 6) {
@@ -886,6 +887,25 @@ serve(async (req) => {
                     sendEvent({ type: 'progress', message: `[${symbol}] Inherited macro sentiment (${peerSide}) from correlated peer ${correlatedPeer}.` });
                   }
                 } catch (e) {}
+              } else if (symbol === "UKOIL" || symbol === "USOIL") {
+                const correlatedPeer = symbol === "UKOIL" ? "USOIL" : "UKOIL";
+                try {
+                  const { data: peerNews } = await supabase
+                    .from("market_context")
+                    .select("macro_bias, narrative")
+                    .eq("symbol", correlatedPeer)
+                    .eq("agent_persona", "MACRO_SCOUT")
+                    .gt("expires_at", new Date().toISOString())
+                    .order("created_at", { ascending: false })
+                    .limit(1)
+                    .maybeSingle();
+
+                  if (peerNews) {
+                    const peerSide = peerNews.macro_bias === "BULLISH" ? "LONG" : "SHORT";
+                    fundamental_context += `\n\n[CRUDE OIL ENERGY INTER-ASSET CORRELATION]\nA live Tier-1 macro catalyst has fired for benchmark ${correlatedPeer} (${peerSide}). Details: ${peerNews.narrative}. Due to >95% crude oil correlation (Brent/WTI), ${symbol} SHOULD CONSIDER this fundamental macro direction.`;
+                    sendEvent({ type: 'progress', message: `[${symbol}] Inherited macro sentiment (${peerSide}) from correlated peer ${correlatedPeer}.` });
+                  }
+                } catch (e) {}
               }
             }
 
@@ -942,7 +962,7 @@ serve(async (req) => {
               .gte('created_at', new Date(Date.now() - candleDurationMs).toISOString())
               .limit(1);
 
-            if (recentIsolation && recentIsolation.length > 0) {
+            if (recentIsolation && recentIsolation.length > 0 && !isManual) {
               console.log(`[Pre-AI Guard] Cached skip for ${symbol}: Already isolated within this ${timeframe} candle.`);
               sendEvent({ type: 'progress', message: `[Pre-AI Guard] Cached skip for ${symbol}: Isolated this candle.` });
               rejections.push({ symbol, reason: 'Cached isolation skip (already checked this candle)', layer: 'Pre-AI Guard' });
@@ -966,7 +986,7 @@ serve(async (req) => {
             }
 
             sendEvent({ type: 'progress', message: `[Pre-AI Guard] Validating global signal constraints for ${symbol}...` });
-            const riskValidation = await validateGlobalSignal(supabase, symbol, snapshot);
+            const riskValidation = await validateGlobalSignal(supabase, symbol, snapshot, isManual);
             if (!riskValidation.valid) {
               console.log(`[Pre-AI Guard] REJECTED ${symbol}: ${riskValidation.reason}`);
               sendEvent({ type: 'progress', message: `[Pre-AI Guard] Skipped ${symbol}: Exposure constraints violated.` });
