@@ -684,7 +684,7 @@ serve(async (req) => {
           const chunk = symbols.slice(i, i + chunkSize);
           await Promise.all(chunk.map(async (symbol: string) => {
           try {
-            if (!isManual && isCron && !isMarketOpen(symbol)) {
+            if (!isManual && !isMarketOpen(symbol)) {
               console.log(`[Market Hours] Skipping ${symbol}: Market is closed.`);
               sendEvent({ type: 'progress', message: `[Market Hours] Skipping ${symbol}: Market is closed.` });
               return;
@@ -692,7 +692,7 @@ serve(async (req) => {
 
             // --- SESSION-AWARE LIQUIDITY GATE FOR EQUITY INDICES ---
             const equityIndices = ["US30", "NAS100", "SPX500", "GER30"];
-            if (!isManual && isCron && equityIndices.includes(symbol)) {
+            if (!isManual && equityIndices.includes(symbol)) {
               const currentUtcHour = new Date().getUTCHours();
               // Indices experience low volume and spread widening during Asian session (22:00 to 06:00 UTC)
               if (currentUtcHour >= 22 || currentUtcHour < 6) {
