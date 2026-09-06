@@ -4,12 +4,14 @@ import { createClient } from "npm:@supabase/supabase-js@2.108.2";
 /**
  * ╔══════════════════════════════════════════════════════════════════════════╗
  * ║           MACRO SCOUT — Event-Driven News Trader                         ║
- * ║  Scheduled via pg_cron.                                                ║
+ * ║  Scheduled via pg_cron (Hourly: 0 * * * *).                              ║
  * ╚══════════════════════════════════════════════════════════════════════════╝
  *
- * Polls the free Forex Factory JSON feed for high-impact economic events.
- * Uses hardcoded numeric execution logic (Actual vs Forecast) to eliminate 
- * LLM latency and execute trades within milliseconds of data dropping.
+ * Polls Forex Factory JSON for high-impact macroeconomic events.
+ * Operates across a dual-horizon framework on an hourly cadence:
+ *  - Forward-Looking (T + 90m): Pre-news volatility lockouts & speech previews
+ *  - Retrospective (T - 75m): Numeric deviation trade triggers (MACRO_RULES)
+ * Ingests targeted macro, rates, commodity, and crypto sentiment via Tavily.
  */
 
 const SUPABASE_URL             = Deno.env.get("SUPABASE_URL") ?? "";
@@ -374,12 +376,14 @@ serve(async (req) => {
     const now = new Date();
     const results = [];
 
-    // 1c. Proactive Pre-News Volatility Lockout: Lock out upcoming high impact events in next 30 mins
+    // 1c. Forward-Looking Horizon (T + 90m): Pre-News Volatility Shield
+    // Proactively scan for high-impact events scheduled in the next 90 minutes.
     for (const ev of events) {
       if (ev.impact === "High" && ev.date) {
         const evTime = new Date(ev.date).getTime();
         const diffM = (evTime - now.getTime()) / 60000;
-        if (diffM > 0 && diffM <= 30) {
+        // If event is scheduled within the next 90 mins, inject pre-news lockout
+        if (diffM > 0 && diffM <= 90) {
           const scheduledStr = new Date(ev.date).toLocaleTimeString("en-US", { timeZone: "UTC", hour: "2-digit", minute: "2-digit" });
           await supabase.from("market_context").insert({
             symbol: "GLOBAL",
@@ -395,20 +399,28 @@ serve(async (req) => {
     }
 
     const speechEventsToScrape: string[] = [];
-    // 2. Scan events
+    const recentReleasesToScrape: string[] = [];
+
+    // 2. Scan events: Dual Horizon (Retrospective T - 75m & Forward T + 90m)
     for (const event of events) {
       const eventTime = new Date(event.date);
       const diffMinutes = (now.getTime() - eventTime.getTime()) / 60000;
 
-      // Central Bank Speech Tracker: If a high-impact speech fired within the last 90 mins or is scheduled within 30 mins
+      // Central Bank Speech Tracker: Fired in the last 90 mins (retrospective) or scheduled in next 90 mins (forward preview)
       if (event.impact === "High" && (/Speaks/i.test(event.title) || /Speech/i.test(event.title) || /Testimony/i.test(event.title) || /Press Conference/i.test(event.title))) {
-        if (diffMinutes >= -30 && diffMinutes <= 90) {
+        if (diffMinutes >= -90 && diffMinutes <= 90) {
           speechEventsToScrape.push(`${event.country} ${event.title}`);
         }
       }
+
+      // Track recent high impact releases from the last 75 minutes for breaking commentary
+      if (event.impact === "High" && diffMinutes >= 0 && diffMinutes <= 75 && event.actual) {
+        recentReleasesToScrape.push(`${event.country} ${event.title}`);
+      }
       
-      // Skip future events or events older than 20 mins for numeric rules (aligned with 15m polling)
-      if (diffMinutes < 0 || diffMinutes > 20) continue;
+      // Retrospective Numeric Rule Evaluation (captures events from the last 75 minutes)
+      // Handles :00, :15, :30 (e.g. 8:30 AM US NFP/CPI), and :45 releases cleanly
+      if (diffMinutes < 0 || diffMinutes > 75) continue;
       
       // Needs to have 'actual' published for numeric deviation rules
       if (!event.actual) continue;
@@ -526,25 +538,30 @@ serve(async (req) => {
       try {
         let headlinesToProcess: string[] = [];
 
-        // 1. Proactive Tavily Macro, Central Bank & Commodity Queries
+        // 1. Proactive & Retrospective Tavily Macro, Central Bank & Commodity Queries
         if (TAVILY_API_KEY) {
+          // 4 Focused Base Queries covering Macro Policy, Yields/Gold, Energy/Geopolitics, and Crypto
           const tavilyQueries = [
-            "Federal Reserve Fed Chair speakers comments inflation interest rates USD breaking",
-            "Gold XAUUSD price reaction Treasury yields US dollar breaking",
-            "BOJ Bank of Japan interest rate policy yen JPY intervention breaking",
-            "ECB European Central Bank interest rate monetary policy EUR breaking",
-            "Crude oil Brent WTI OPEC geopolitical supply disruption breaking",
-            "BTCUSD crypto breaking news market sentiment"
+            "Federal Reserve Powell ECB Lagarde BOJ Ueda interest rate decision policy statement speech breaking",
+            "Gold XAUUSD US 10-year Treasury yields Dollar Index DXY inflation CPI NFP reaction outlook breaking",
+            "Crude oil Brent WTI OPEC output geopolitical conflict Red Sea Middle East supply disruption breaking",
+            "Bitcoin BTC Ethereum crypto institutional ETF inflows regulation SEC breaking"
+          ];
+
+          // Dynamic targeted queries: Speech preview/reaction (capped at 2) + Recent release reaction (capped at 1)
+          const dynamicQueries: string[] = [
+            ...speechEventsToScrape.slice(0, 2).map(s => `${s} speech statement remarks market reaction key quotes live breaking`),
+            ...recentReleasesToScrape.slice(0, 1).map(r => `${r} actual release vs forecast market reaction breaking analysis`)
           ];
 
           const allTavilyQueries = [
             ...tavilyQueries,
-            ...speechEventsToScrape.map(s => `${s} statements remarks key quotes market reaction live breaking`)
+            ...dynamicQueries
           ];
 
           for (const query of allTavilyQueries) {
             try {
-              console.log(`[Macro Scout] [Trace: ${traceId}] Proactively querying Tavily: "${query}"...`);
+              console.log(`[Macro Scout] [Trace: ${traceId}] Querying Tavily: "${query}"...`);
               const tavilyRes = await fetch("https://api.tavily.com/search", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
