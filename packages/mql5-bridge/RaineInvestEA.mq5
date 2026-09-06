@@ -770,11 +770,26 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
      {
       statusStr = "OPEN";
       ticketStr = IntegerToString(result.order);
-      Print("Trade successfully executed. Ticket: ", result.order, " Action: ", request.action, " Type: ", request.type);
+      double fillPrice = (result.price > 0) ? result.price : request.price;
+      string priceStr = DoubleToString(fillPrice, symDigits);
+      Print("Trade successfully executed. Ticket: ", result.order, " Price: ", priceStr, " Action: ", request.action, " Type: ", request.type);
       
       int size = ArraySize(activeTickets);
       ArrayResize(activeTickets, size+1);
       activeTickets[size] = result.order;
+      
+      StringReplace(errorStr, " ", "%20");
+      string cbUrl = InpSupabaseURL + "/functions/v1/vps-callback?trade_id=" + id + "&status=" + statusStr + "&ticket=" + ticketStr + "&price=" + priceStr + "&error=" + errorStr;
+      
+      char post[], resData[];
+      string req_headers = "x-vps-secret: " + InpVPSSecret + "\r\n";
+      string res_headers;
+      int res = WebRequest("GET", cbUrl, req_headers, 3000, post, resData, res_headers);
+      if(res != 200)
+        {
+         Print("Failed to send callback. HTTP: ", res);
+        }
+      return;
      }
    else
      {
@@ -786,7 +801,7 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
    // URL Encode Error String safely
    StringReplace(errorStr, " ", "%20");
    
-   // Send callback
+   // Send failure callback
    string cbUrl = InpSupabaseURL + "/functions/v1/vps-callback?trade_id=" + id + "&status=" + statusStr + "&ticket=" + ticketStr + "&error=" + errorStr;
    
    char post[], resData[];

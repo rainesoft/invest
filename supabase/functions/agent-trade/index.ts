@@ -1257,7 +1257,7 @@ for (const [orderId, trade] of orderMap) {
              const maxTtlHours = (tf === "1d" || tf === "4h" || opp?.source === "agent-swing") ? 12 : 3;
 
              const tradeAgeHours = trade.created_at ? (Date.now() - new Date(trade.created_at).getTime()) / (1000 * 60 * 60) : 0;
-             if (trade.open_price === null && tradeAgeHours >= maxTtlHours) {
+             if (trade.open_price === null && trade.status !== "OPEN" && tradeAgeHours >= maxTtlHours) {
                console.log(`[Position Manager] Garbage Collection: Stale unfilled trade ${trade.id} (${trade.symbol}, ${tradeAgeHours.toFixed(1)}h old, open_price=null). Marking CLOSED.`);
                await supabase.from("user_trades").update({ status: "CLOSED", error_message: `Order cancelled (Stale unfilled pending order > ${maxTtlHours}h)` }).eq("id", trade.id);
                if (trade.opportunity_id) {
@@ -1270,12 +1270,18 @@ for (const [orderId, trade] of orderMap) {
                  // For VPS EXCLUSION, we bypass MetaAPI polling as the VPS EA locally manages position existence.
                  // We mock the position object with live PTI data so that AI invalidation and trailing stop math can execute.
                  const snap = ptiMap.get(trade.symbol);
+                 const currentPrice = snap?.c || (trade.trade_opportunities?.entry_plan_json?.price || 0);
+                 const entryPrice = trade.open_price || trade.trade_opportunities?.entry_plan_json?.price || currentPrice;
+                 const isLong = trade.side === "LONG" || trade.side === "BUY";
+                 const syntheticProfit = isLong ? (currentPrice - entryPrice) : (entryPrice - currentPrice);
+
                  position = { 
-                    unrealizedProfit: 0, 
-                    profit: 0, 
-                    currentPrice: snap?.c || (trade.trade_opportunities?.entry_plan_json?.price || 0),
-                    stopLoss: trade.stop_loss || (trade.trade_opportunities?.stop_plan_json?.stop || trade.trade_opportunities?.stop_plan_json?.initial || 0),
-                    volume: 0.01 
+                    unrealizedProfit: syntheticProfit, 
+                    profit: syntheticProfit, 
+                    currentPrice,
+                    stopLoss: trade.trade_opportunities?.stop_plan_json?.stop || trade.trade_opportunities?.stop_plan_json?.initial || 0,
+                    takeProfit: trade.trade_opportunities?.take_profit_json?.tp || 0,
+                    volume: trade.volume || 0.01 
                  };
              } else {
                  const posRes = await fetch(
@@ -1522,10 +1528,13 @@ for (const [orderId, trade] of orderMap) {
              if (profit > 0 && entryPrice) {
                  // Profitable: Move SL to Breakeven
                  console.log(`[Position Manager] DE-LEVERAGING: Moving SL to Breakeven for ${orderId}`);
+                 const currentTp = position.takeProfit || opp.take_profit_json?.tp;
+                 const modifyPayload: any = { actionType: "POSITION_MODIFY", positionId: orderId, stopLoss: entryPrice };
+                 if (currentTp) modifyPayload.takeProfit = currentTp;
                  await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
                      method: "POST",
                      headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
-                     body: JSON.stringify({ actionType: "POSITION_MODIFY", positionId: orderId, stopLoss: entryPrice })
+                     body: JSON.stringify(modifyPayload)
                  });
              } else if (currentVol > 0.01) {
                  // Losing: Partial Close by 50%
@@ -1545,7 +1554,20 @@ for (const [orderId, trade] of orderMap) {
           if (isEodScalp && opp.timeframe === "30m") {
               console.log(`[Position Manager] EOD LIQUIDATION: Closing Scalp ${orderId} for ${trade.symbol} at ${nyHour}:00 NY Time.`);
              try {
-                if (isVpsAlive) {
+                const profit = Number(position.profit) || 0;
+                const currentVol = Number(position.volume) || 0.01;
+                const entryPrice = opp.entry_plan_json?.price || opp.entry_plan_json?.entry_price;
+                if (profit > 0 && entryPrice) {
+                    console.log(`[Position Manager] DE-LEVERAGING: Moving SL to Breakeven for ${orderId}`);
+                    const currentTp = position.takeProfit || opp.take_profit_json?.tp;
+                    const modifyPayload: any = { actionType: "POSITION_MODIFY", positionId: orderId, stopLoss: entryPrice };
+                    if (currentTp) modifyPayload.takeProfit = currentTp;
+                    await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                        method: "POST",
+                        headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                        body: JSON.stringify(modifyPayload)
+                    });
+                } else if (isVpsAlive) {
                    await supabase.from("user_trades").update({ status: "VPS_CLOSE", error_message: "EOD Liquidation (4 PM NY Time)" }).eq("meta_api_order_id", orderId);
                 } else {
                    await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
@@ -1693,7 +1715,6 @@ for (const [orderId, trade] of orderMap) {
                    const modRes = await supabase.from("trade_opportunities").update({ stop_plan_json: updatedJson }).eq("id", opp.id);
                    
                    if (!modRes.error) {
-                     await supabase.from("user_trades").update({ stop_loss: newSl }).eq("meta_api_order_id", orderId);
                      moves.push({ symbol: trade.symbol, action: actionName + " (VPS)", from: currentSl, to: newSl });
                    } else {
                      errors.push(`${trade.symbol} ${orderId}: modify failed (DB Error)`);
@@ -1701,17 +1722,20 @@ for (const [orderId, trade] of orderMap) {
                 }
             } else {
                 // --- METAAPI FAILOVER ---
+                const currentTp = position.takeProfit || originalTp;
+                const modifyPayload: any = { actionType: "POSITION_MODIFY", positionId: orderId, stopLoss: newSl };
+                if (currentTp) modifyPayload.takeProfit = currentTp;
+
                 const modRes = await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
                    method: "POST",
                    headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
-                   body: JSON.stringify({ actionType: "POSITION_MODIFY", positionId: orderId, stopLoss: newSl })
+                   body: JSON.stringify(modifyPayload)
                 });
                 if (modRes.ok) {
                     const { data: currentOpp } = await supabase.from("trade_opportunities").select("stop_plan_json").eq("id", opp.id).single();
                     if (currentOpp) {
                        const updatedJson = { ...currentOpp.stop_plan_json, stop: newSl };
                        await supabase.from("trade_opportunities").update({ stop_plan_json: updatedJson }).eq("id", opp.id);
-                       await supabase.from("user_trades").update({ stop_loss: newSl }).eq("meta_api_order_id", orderId);
                     }
                     moves.push({ symbol: trade.symbol, action: actionName + " (MetaAPI Failover)", from: currentSl, to: newSl });
                 } else {
@@ -2323,6 +2347,7 @@ for (const [orderId, trade] of orderMap) {
           SPX500: 0.05,
           GER30: 0.05,
           BTCUSD: 0.02,
+          ETHUSD: 0.04,
           EURUSD: 0.20,
           GBPUSD: 0.20,
           USDJPY: 0.20,
