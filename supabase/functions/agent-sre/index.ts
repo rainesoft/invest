@@ -399,6 +399,37 @@ serve(async (req) => {
       }
     }
 
+    // 4H. Auto-Healing: Desynced Trade Opportunity Status (Prematurely EXPIRED/REJECTED with live OPEN trades)
+    const { data: liveOpenTrades } = await supabase
+      .from("user_trades")
+      .select("id, opportunity_id, symbol, status")
+      .in("status", ["OPEN", "PENDING", "VPS_PENDING", "VPS_PROCESSING"])
+      .not("opportunity_id", "is", null);
+
+    if (liveOpenTrades && liveOpenTrades.length > 0) {
+      const oppIdsWithLiveTrades = Array.from(new Set(liveOpenTrades.map((t: any) => t.opportunity_id).filter(Boolean)));
+      if (oppIdsWithLiveTrades.length > 0) {
+        const { data: desyncedOpps } = await supabase
+          .from("trade_opportunities")
+          .select("id, symbol, status")
+          .in("id", oppIdsWithLiveTrades)
+          .in("status", ["EXPIRED", "REJECTED", "CLOSED", "CANCELLED"]);
+
+        if (desyncedOpps && desyncedOpps.length > 0) {
+          for (const dOpp of desyncedOpps) {
+            await supabase
+              .from("trade_opportunities")
+              .update({
+                status: "ACTIVE",
+                closed_at: null,
+              })
+              .eq("id", dOpp.id);
+            autoRemediations.push(`Reconciled desynced opportunity ${dOpp.symbol} (${dOpp.id}) from ${dOpp.status} to ACTIVE (found live open trades in user_trades)`);
+          }
+        }
+      }
+    }
+
     // ─────────────────────────────────────────────────────────────
     // PROBE 5: MT5 VPS EA Heartbeat & Connectivity
     // ─────────────────────────────────────────────────────────────
