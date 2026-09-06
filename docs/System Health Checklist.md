@@ -484,6 +484,18 @@ Tables in non-public schemas (`net`, `cron`, `vault`) cannot be queried directly
 
 ---
 
+## ⚠️ 1Q. Pre-Flight Market Hours Execution Guard (Preventing Broker Error 10018 on Webhook Handoffs)
+
+> [!CAUTION]
+> **Incident (2026-09-06):** On Sunday morning (09:07–09:09 UTC), breaking geopolitical news on crude oil triggered `agent-news` -> `agent-day` -> `agent-trade` via webhook handoff. Because `agent-day` only checked `!isMarketOpen(symbol)` when `isCron` was true, and `agent-trade` lacked an `isMarketOpen` pre-flight check, `UKOIL` orders were submitted to the MT5 EA while oil markets were closed, failing with MT5 broker error `Code:10018 (Market Closed)`.
+
+### Standard Rule:
+1. **Universal Market Open Filter:** In all signal generation engines (`agent-day`, `agent-swing`), market hours must be checked unconditionally for all automated pipelines: `if (!isManual && !isMarketOpen(symbol)) return;`.
+2. **PAMM Execution Desk Pre-Flight Guard:** `agent-trade` must enforce `if (!isMarketOpen(signal.symbol))` before placing orders into `user_trades`. If the broker market is closed, immediately reject the signal with `Rejected by Execution Desk: Market is closed for <symbol>` to prevent broker rejection noise.
+3. **Crypto Exemption:** `BTCUSD` and `ETHUSD` trade 24/7 (`isCrypto(symbol) === true`) and are exempt from market hour closures.
+
+---
+
 ## 2. Autonomous Agent Activity
 Verify that the AI agents are actively evaluating the market and producing expected heartbeat logs.
 
@@ -1166,6 +1178,28 @@ In `/functions/v1/vps-callback`:
 2. **Live Trade Protection in Risk Engine:** `agent-risk.ts` must never supersede or cancel trades with `status = 'OPEN'` and a valid `meta_api_order_id`, even if `open_price` is initially delayed.
 3. **Database Schema Compliance:** Stop losses are strictly stored in `trade_opportunities.stop_plan_json`. Never attempt to update `stop_loss` directly on `user_trades`.
 4. **Crypto Asset Lot Caps:** `ETHUSD` must be explicitly capped in `agent-trade`'s `assetLotCaps` (`ETHUSD: 0.04`) to prevent margin exhaustion (`Code:10019`) on small-balance PAMM accounts.
+
+---
+
+## ⚠️ 3R. Desynced Trade Opportunity Status Auto-Healing (EXPIRED/REJECTED with Live OPEN Trades)
+
+> [!CAUTION]
+> **Incident (2026-09-06):** Opportunity `73f85455-3651-4b66-be67-5bd62b7ed085` (`ETHUSD` Long) was prematurely marked `EXPIRED` by `resolve-outcomes` after 20 bars, even though 2 live MT5 broker trades (SWING and RUNNER legs) were actively `OPEN` on Exness MT5 Master. Because the parent opportunity was marked `EXPIRED`, the trade was desynced from active tracking.
+
+### Standard Rule:
+1. **Simulation Guard in resolve-outcomes:** `resolve-outcomes` must always check `user_trades` for active `OPEN`, `PENDING`, or `VPS_PENDING` positions before evaluating simulated 20-bar horizon expiration. If live trades exist, simulated expiration is skipped.
+2. **Autonomous SRE Probe 4H Healing:** Hourly watchdog `agent-sre` automatically scans for any opportunity in status `EXPIRED`, `REJECTED`, or `CLOSED` that has live `OPEN` positions in `user_trades`, immediately auto-healing the parent status back to `ACTIVE` with `closed_at = NULL`.
+3. **Database Reconciliation Query:**
+   ```sql
+   UPDATE trade_opportunities t
+   SET status = 'ACTIVE', closed_at = NULL
+   WHERE t.status IN ('EXPIRED', 'REJECTED', 'CLOSED', 'CANCELLED')
+     AND EXISTS (
+       SELECT 1 FROM user_trades u
+       WHERE u.opportunity_id = t.id
+         AND u.status IN ('OPEN', 'PENDING', 'VPS_PENDING', 'VPS_PROCESSING')
+     );
+   ```
 
 ---
 
