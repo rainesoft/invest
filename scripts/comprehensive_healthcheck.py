@@ -207,6 +207,23 @@ if stale_unfilled:
 else:
     print("  Zero stale unfilled pending orders found.")
 
+# 8c. Desynced Opportunities with Live Open Trades
+print("\n--- 8c. DESYNCED OPPORTUNITIES WITH LIVE OPEN TRADES ---")
+open_trades = query_table("user_trades", "status=in.(OPEN,PENDING,VPS_PENDING,VPS_PROCESSING)&select=id,symbol,opportunity_id,status")
+if open_trades:
+    opp_ids = list({t.get('opportunity_id') for t in open_trades if t.get('opportunity_id')})
+    if opp_ids:
+        opps = query_table("trade_opportunities", f"id=in.({','.join(opp_ids)})&status=in.(EXPIRED,REJECTED,CLOSED,CANCELLED)&select=id,symbol,status")
+        if opps:
+            for d_opp in opps:
+                print(f"  ⚠️ DESYNCED OPPORTUNITY: {d_opp.get('id')} | {d_opp.get('symbol')} | Status: {d_opp.get('status')} but has live open trades in user_trades!")
+        else:
+            print("  Zero desynced opportunities found. All live open trades have ACTIVE parent opportunities. Clean!")
+    else:
+        print("  Zero desynced opportunities found.")
+else:
+    print("  No open trades found.")
+
 # 9. VPS Heartbeat Diagnostics
 print("\n--- 9. VPS HEARTBEAT & RISK SETTINGS ---")
 risk_settings = query_table("user_risk_settings", "")
