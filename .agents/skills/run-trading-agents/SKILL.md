@@ -35,6 +35,7 @@ The trading framework operates as a coordinated Hive Mind:
    - Algorithmically identifies classical geometric patterns (Triangles, Wedges, Double Tops/Bottoms, Head & Shoulders).
    - Incorporates **S/R Flip Confluence (+10 bonus)** and passes the S-Tier Structural Guard when S/R Flip is confirmed.
    - Consumes pending news sentiment from `agent-news` (injecting a **+20 confidence boost** when technicals align, or a **-30 penalty** when technicals contradict macro).
+   - Inherits **Inter-Asset Energy News Correlation** (`UKOIL` $\leftrightarrow$ `USOIL` Brent/WTI $>95\%$ correlation) and **Precious Metals Correlation** (`XAGUSD` $\leftrightarrow$ `XAUUSD`).
    - Checks Weekly/Daily Fib confluence (**+5 confidence bonus**).
    - Applies ICT/SMC institutional footprints (Order Blocks, FVGs, Liquidity Sweeps).
    - Enforces the **20-Bar Daily Horizon (20 trading days = 480 hours)**.
@@ -65,7 +66,7 @@ node scripts/call_agents.mjs
 ### 3.2 Targeted Symbol Execution (with Automatic Alias Mapping)
 Runs `agent-news`, `agent-day`, and `agent-swing` specifically for target symbol(s). Common aliases like `UKOI` $\to$ `UKOIL`, `GOLD` $\to$ `XAUUSD`, `SILVER` $\to$ `XAGUSD`, `BTC` $\to$ `BTCUSD` are automatically resolved:
 ```bash
-node scripts/call_agents.mjs --symbol XAUUSD,XAGUSD,BTCUSD,UKOIL --timeframe 1D --hours 24
+node scripts/call_agents.mjs --symbol XAUUSD,XAGUSD,BTCUSD,UKOIL --timeframe 1D --hours 24 --is_manual
 ```
 
 ### 3.3 Deep Diagnostic Audit
@@ -78,10 +79,11 @@ node scripts/deep_agent_audit.mjs
 
 ## 4. Market Hours & Rollover Behavior
 
-- **Forex / Metals / Indices Rollover Gap (22:00 – 23:00 UTC)**:
-  - Financial markets experience daily broker settlement rollover between 22:00 and 23:00 UTC.
-  - `packages/core/market.ts` flags non-crypto assets as closed during this window to protect execution from extreme spread widening.
-  - To inspect or backtest signals during rollover, pass `--symbol <SYM>` or `{ "is_manual": true }` to evaluate structural levels.
+- **Forex / Metals / Commodities Rollover & Weekend Gates**:
+  - Financial markets experience daily broker settlement rollover between 22:00 and 23:00 UTC, and weekend closure from Friday 22:00 UTC to Sunday 22:00 UTC.
+  - `packages/core/market.ts` flags non-crypto assets as closed during these windows to protect execution from extreme spread widening.
+  - **Manual Structural Analysis Override**: When inspecting or backtesting setups on demand (including weekends), pass `--manual` / `--is_manual` or `{ "is_manual": true }` in the request body. Both `agent-day` and `agent-swing` will bypass the market closed filter to evaluate structural Fibonacci and chartist levels.
+  - **Data Cache Depth Protection**: `fetchPaperBars` enforces a minimum 50-bar depth requirement on database caches (`market_data_pti` and resampled candles). If cached data has $< 50$ bars, it automatically falls back to MetaAPI to ensure full 100+ bar lookbacks for accurate Fibonacci swing calculations.
 
 ---
 
@@ -133,6 +135,7 @@ SELECT
     stop_plan_json->>'stop' AS stop_loss, 
     take_profit_json->>'tp1' AS tp1,
     take_profit_json->>'tp2' AS tp2,
+    take_profit_json->>'tp3' AS tp3,
     take_profit_json->>'tp' AS primary_tp, 
     ai_summary, 
     ai_risks, 
@@ -147,18 +150,22 @@ ORDER BY confidence DESC;
 ## 8. How to Optimize the Agents for S-Tier Signal Generation
 
 1. **Leverage News-Technical Confluence (`agent-news` -> `agent-swing`)**:
-   - When high-impact catalysts fire in `agent-news`, ensure the news sentiment is written to `market_context` or `system_settings`.
-   - `agent-swing` detects this pending sentiment and applies an immediate **+20 confidence boost**, elevating 75-80 confidence setups into the 95+ S-Tier bracket.
+   - When high-impact catalysts fire in `agent-news` (e.g. Geopolitical Middle East escalations, OPEC+ supply cuts, `$3.8B Bitcoin ETF inflows`, Fed dovish/hawkish shifts), ensure the news sentiment is written to `market_context` with `confidence >= 85`.
+   - `agent-swing` and `agent-day` detect this pending sentiment (or correlated peer context like `USOIL` $\leftrightarrow$ `UKOIL`, `XAUUSD` $\leftrightarrow$ `XAGUSD`) and apply an immediate **+20 confidence boost**, elevating 75-84 confidence technical setups into the 95-100 S-Tier bracket.
 
 2. **S/R Flip & Golden Pocket Alignment**:
-   - Confluence between a prior Resistance turned Support zone (S/R flip), RSI Oversold divergence, and the 50.0% / 61.8% Fibonacci zone delivers optimal institutional S-Tier setups.
+   - Confluence between a prior Resistance turned Support zone (S/R flip), RSI Oversold/Bullish divergence, and the 50.0% / 61.8% Fibonacci zone delivers optimal institutional S-Tier setups.
    - For overextended markets, use the **Adaptive Pullback Limit Solver** to ensure entry prices guarantee $\ge 1:1.75$ R:R to Target 2.
 
 3. **Multi-Timeframe Weekly/Daily Fibonacci Convergence**:
-   - Assets where the Daily Fib overlaps the Weekly Fib within 0.3% receive an automatic **+5 confidence boost**. Scanning broad cross-pairs (e.g. `USDJPY`, `XAUUSD`, `UKOIL`, `EURJPY`, `GBPJPY`, `AUDUSD`) increases the frequency of institutional confluence.
+   - Assets where the Daily Fib overlaps the Weekly Fib within 0.3% receive an automatic **+5 confidence boost**. Scanning broad cross-pairs (`UKOIL`, `BTCUSD`, `USDJPY`, `XAUUSD`, `EURJPY`, `GBPJPY`, `AUDUSD`) maximizes institutional confluence frequency.
 
-4. **ATR-Calibrated Breathing Room for Metals & Volatile Assets**:
-   - For Gold (`XAUUSD`) and Crude Oil (`USOIL`/`UKOIL`), ensure stop losses are placed with at least a $1.0\times\text{ATR}$ to $1.25\times\text{ATR}$ buffer below the structural pivot to prevent premature wick stop-outs before impulsive expansion towards Target 2 / Target 3.
+4. **Crypto-Specific Weekend & ETF Flow Directives**:
+   - During weekend trading (Saturday/Sunday), crypto volume is naturally 40-60% lower than weekday FX/TradFi benchmarks. The agents apply dynamic volatility scaling rather than rejecting setups due to low volume or low ADX.
+   - Institutional ETF accumulation establishes a structural valuation floor, prioritizing pullback limit orders at Order Blocks/FVGs.
+
+5. **ATR-Calibrated Breathing Room for Metals & Commodities**:
+   - For Crude Oil (`UKOIL`/`USOIL`), Gold (`XAUUSD`), and Crypto (`BTCUSD`), ensure stop losses are placed with at least a $1.0\times\text{ATR}$ to $1.25\times\text{ATR}$ buffer below the structural pivot to prevent premature wick stop-outs before impulsive expansion towards Target 2 / Target 3.
 
 ---
 
@@ -167,9 +174,21 @@ ORDER BY confidence DESC;
 When an asset fails to achieve S-Tier confidence (e.g. confidence < 75 due to mid-range chop or overhead resistance), apply the following institutional recovery protocols:
 
 1. **Adaptive Limit Pullback Anchoring (Discount Entry)**:
-   - Instead of rejecting mid-range chop, anchor a Limit Order at the nearest structural support / 61.8% Golden Pocket Fib. This compresses stop-loss distance and expands R:R to $> 1:3.0$, elevating the setup into S-Tier.
+   - Instead of rejecting mid-range chop, anchor a Limit Order at the nearest structural support / 61.8% Golden Pocket Fib or LTF Fair Value Gap (FVG). This compresses stop-loss distance and expands R:R to $> 1:3.0$, elevating the setup into S-Tier.
 2. **Breakout Buy Stop Anchor (Momentum Expansion)**:
    - Place a Buy Stop 0.25x ATR above the contested resistance ceiling with volume surge verification to capture impulsive expansion towards Target 2 / Target 3.
 3. **Calculating Institutional Trade Profitability ($EV$)**:
-   - Calculate Expected Value: $EV = (P_{\text{win}} \times \text{TP2 Reward}) - (P_{\text{loss}} \times \text{Risk Distance})$.
-   - Compare gross pip/point yields and R:R ratios across the portfolio to prioritize capital allocation to highest-EV setups (e.g. `UKOIL` R:R 1:1.99 to 1:4.41, `XAUUSD` R:R 1:3.19, and `BTCUSD` R:R 1:3.04).
+   - Calculate Expected Value: 
+     $$EV = (P_{\text{win}} \times \text{TP2/TP3 Reward USD}) - (P_{\text{loss}} \times \text{Risk USD})$$
+   - **UKOIL Contract Mathematics (0.01 lot = 10 barrels = $10.00 / $1.00 move)**:
+     * Point Value = $\$10.00\text{ per } \$1.00\text{ move}$.
+     * Example Buy Limit @ $\$93.96$, SL @ $\$89.37$ (Risk Distance = $\$4.60 \implies \$46.00\text{ risk}$), TP2 @ $\$102.01$ (Reward Distance = $\$8.05 \implies \$80.50\text{ reward}$), TP3 @ $\$112.34$ (Reward Distance = $\$18.38 \implies \$183.80\text{ reward}$).
+     * At $75\%$ Win Probability (S-Tier standard):
+       $$EV_{\text{TP2}} = (0.75 \times \$80.50) - (0.25 \times \$46.00) = \$60.38 - \$11.50 = +\$48.88\text{ per trade}$$
+       $$EV_{\text{TP3}} = (0.75 \times \$183.80) - (0.25 \times \$46.00) = \$137.85 - \$11.50 = +\$126.35\text{ per trade}$$
+   - **BTCUSD Contract Mathematics (0.01 lot = 0.01 BTC = $0.01 / $1.00 move)**:
+     * Point Value = $\$0.01\text{ per } \$1.00\text{ move}$.
+     * Example Buy Limit @ $\$78,636.23$, SL @ $\$73,750.03$ (Risk Distance = $\$4,886.20 \implies \$48.86\text{ risk}$), TP2 @ $\$90,244.59$ (Reward Distance = $\$11,608.36 \implies \$116.08\text{ reward}$), R:R = $1:2.38$.
+     * At $65\%$ Win Probability: $EV = (0.65 \times \$116.08) - (0.35 \times \$48.86) = \$75.45 - \$17.10 = +\$58.35\text{ per trade}$.
+   - Prioritize capital allocation to setups with $EV > 1.0R$ and asymmetric upside multipliers.
+
