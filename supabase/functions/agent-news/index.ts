@@ -631,7 +631,10 @@ CRITICAL RULES:
 - If news indicates Dovish Fed commentary, cooling inflation, rate cut acceleration, or USD weakness: Map symbol to "XAUUSD" with BULLISH sentiment (Gold rises on rate cuts) or "USDJPY" with BEARISH sentiment (USD falls vs JPY) with Confidence >= 85.
 - If news indicates BOJ rate hike or JPY intervention/strength, map symbol to "EURJPY" or "USDJPY" with BEARISH sentiment.
 - If news indicates ECB rate cuts or Euro weakness, map symbol to "EURUSD" or "EURJPY" with BEARISH sentiment.
-- If news indicates Middle East / geopolitical escalation or crude oil supply disruption, map symbol to "UKOIL" or "USOIL" with BULLISH sentiment.
+- If news indicates Middle East / geopolitical escalation, Red Sea tanker disruption, or crude oil supply disruption / OPEC+ output cuts, map symbol to "UKOIL" or "USOIL" with BULLISH sentiment with Confidence >= 85.
+- If news indicates crude oil demand weakness, OPEC+ quota increases / supply glut, or Middle East peace / ceasefire deals reducing risk premiums, map symbol to "UKOIL" or "USOIL" with BEARISH sentiment with Confidence >= 85.
+- If news indicates surging crypto/Bitcoin ETF inflows, crypto regulatory approval, institutional Bitcoin treasury adoption, or halving supply dynamics: Map symbol to "BTCUSD" with BULLISH sentiment with Confidence >= 85.
+- If news indicates crypto exchange regulatory bans, major crypto exchange insolvency/hack, or heavy Bitcoin ETF outflows: Map symbol to "BTCUSD" with BEARISH sentiment with Confidence >= 85.
 - If the news is ambiguous, a rumor, or confidence is below 85, set requires_verification to true.
 - If the headline is a generic homepage index title (e.g. "Bitcoin News Today", "Latest Updates", "Live News"), you MUST set sentiment to NEUTRAL, confidence to 0, and symbol to NONE. Only process specific, actionable macroeconomic catalysts.
 Headline: "${title}"`;
@@ -695,6 +698,9 @@ Format: {
 CRITICAL RULES:
 - If news indicates Hawkish Fed commentary, sticky inflation, higher yields, or USD strength: Map symbol to "XAUUSD" with BEARISH sentiment (Gold falls) or "USDJPY" with BULLISH sentiment (USD rises).
 - If news indicates Dovish Fed commentary, cooling inflation, or USD weakness: Map symbol to "XAUUSD" with BULLISH sentiment (Gold rises) or "USDJPY" with BEARISH sentiment (USD falls).
+- If news indicates Middle East / geopolitical escalation or crude oil supply disruption / OPEC+ output cuts, map symbol to "UKOIL" or "USOIL" with BULLISH sentiment with Confidence >= 85.
+- If news indicates crude oil demand weakness or OPEC+ supply glut, map symbol to "UKOIL" or "USOIL" with BEARISH sentiment with Confidence >= 85.
+- If news indicates surging crypto/Bitcoin ETF inflows, crypto regulatory approval, or institutional Bitcoin adoption: Map symbol to "BTCUSD" with BULLISH sentiment with Confidence >= 85.
 - If the headline and context refer to a generic homepage index without a specific underlying catalyst, set sentiment to NEUTRAL, confidence to 0, and symbol to NONE.`;
 
                const verifyRes = await fetch("https://api.openai.com/v1/chat/completions", {
