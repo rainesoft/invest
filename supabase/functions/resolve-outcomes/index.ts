@@ -55,6 +55,19 @@ serve(async (req) => {
     const stopLoss = stop_plan_json.stop;
     const takeProfit = take_profit_json.tp;
 
+    // Check if this opportunity has live open trades on the broker
+    const { data: openLegs } = await supabase
+      .from("user_trades")
+      .select("id, status")
+      .eq("opportunity_id", signal.id)
+      .in("status", ["OPEN", "PENDING", "VPS_PENDING", "VPS_PROCESSING"]);
+
+    if (openLegs && openLegs.length > 0) {
+      // Live broker trade is actively managed by MT5 VPS EA / Position Manager.
+      // Do not simulate or prematurely expire active broker positions.
+      continue;
+    }
+
     // Fetch subsequent candles for this symbol from market_data_pti
     const { data: candles } = await supabase
       .from("market_data_pti")
