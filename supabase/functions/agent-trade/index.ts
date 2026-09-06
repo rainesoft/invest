@@ -2088,6 +2088,19 @@ for (const [orderId, trade] of orderMap) {
     let pmReason = "Standard Allocation";
 
     if (!isManual) {
+      // --- MARKET HOURS PRE-FLIGHT CHECK ---
+      if (!isMarketOpen(signal.symbol)) {
+        const rejectReason = `Rejected by Execution Desk: Market is closed for ${signal.symbol}.`;
+        await supabase.from("trade_opportunities").update({ 
+          status: "REJECTED", 
+          ai_summary: (signal.ai_summary || "") + "\n\n[Execution Desk] " + rejectReason, 
+          ai_risks: rejectReason,
+          closed_at: new Date().toISOString()
+        }).eq("id", signal.id);
+        console.log(`[Execution Desk] Rejected ${signal.symbol}: Market is closed.`);
+        return new Response(JSON.stringify({ success: true, message: `Rejected: Market closed for ${signal.symbol}` }), { status: 200 });
+      }
+
       // Query recent signals for this symbol in the last 4 hours (tight confluence window)
       const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
       const { data: recentSignals } = await supabase
