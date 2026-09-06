@@ -404,13 +404,13 @@ export async function fetchPaperBars(
           }
         }
 
-        if (now - latestTs < maxAgeMs) {
+        if (now - latestTs < maxAgeMs && cachedBars.length >= Math.min(limit, 50)) {
           // Reverse because we want oldest first for the indicator logic
           return cachedBars.reverse().map((b: any) => ({
             t: b.ts, o: Number(b.o), h: Number(b.h), l: Number(b.l), c: Number(b.c), v: Number(b.v)
           }));
         } else {
-          console.log(`[Cache Stale] ${symbol} ${timeframe} data is ${Math.round((now - latestTs) / 3600000)}h old. Falling back to MetaApi.`);
+          console.log(`[Cache Stale or Insufficient] ${symbol} ${timeframe} data has ${cachedBars.length} bars (${Math.round((now - latestTs) / 3600000)}h old). Falling back to MetaApi.`);
         }
       }
 
@@ -436,8 +436,10 @@ export async function fetchPaperBars(
             const isCrypto = symbol.includes("BTC") || symbol.includes("ETH") || symbol.includes("XRP") || symbol.includes("SOL") || symbol.includes("ADA");
             if (!isCrypto) maxAgeMs = 48 * 60 * 60 * 1000;
           }
-          if (now - latestTs < maxAgeMs || resampled.length >= 10) {
+          if ((now - latestTs < maxAgeMs || isWeekend) && resampled.length >= Math.min(limit, 50)) {
             return resampled.slice(-limit);
+          } else {
+            console.log(`[Resampled Bars Insufficient] ${symbol} ${timeframe} resampled only ${resampled.length} bars (needed ${Math.min(limit, 50)}+). Falling back to MetaApi.`);
           }
         }
       }
