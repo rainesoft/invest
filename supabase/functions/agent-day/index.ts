@@ -951,7 +951,7 @@ serve(async (req) => {
               if (ctxRows && ctxRows.length > 0) {
                 agent_context = ctxRows;
                 console.log(`[Market Context] Loaded ${ctxRows.length} agent context entries for ${symbol}`);
-                sendEvent({ type: 'progress', message: `[Market Context] Swing Trader Fib levels loaded for ${symbol}: ${ctxRows.map(c => c.agent_persona + ' → ' + c.macro_bias).join(', ')}` });
+                sendEvent({ type: 'progress', message: `[Market Context] Swing Trader Fib levels loaded for ${symbol}: ${ctxRows.map((c: any) => c.agent_persona + ' → ' + c.macro_bias).join(', ')}` });
               }
             } catch (ctxErr: any) {
               console.warn(`[Market Context] Failed to load agent context for ${symbol}: ${ctxErr.message}`);
@@ -1057,7 +1057,7 @@ serve(async (req) => {
 
             let historicalMemory = "";
             if (pastTrades && pastTrades.length > 0) {
-              historicalMemory = pastTrades.map((t, i) => {
+              historicalMemory = pastTrades.map((t: any, i: number) => {
                 let text = `Past Decision ${i+1} (${t.side} -> ${t.status}, ${t.r_multiple !== null ? t.r_multiple + 'R' : 'N/A'}): "${t.ai_summary || 'No rationale logged'}"`;
                 if (t.status === 'REJECTED' && t.ai_risks && t.ai_risks.includes('Invalidated')) {
                   text += `\n   -> [CRITICAL] REASON FOR INVALIDATION: "${t.ai_risks}" - You must learn from this and avoid similar structural setups.`;
@@ -1547,7 +1547,7 @@ serve(async (req) => {
               tp2,
               dbSide as "LONG" | "SHORT",
               1.70,
-              snapshot.atr_14,
+              snapshot.atr_14 || undefined,
               isHighMomentum
             );
 

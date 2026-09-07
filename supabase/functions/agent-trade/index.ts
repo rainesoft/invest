@@ -2186,6 +2186,9 @@ for (const [orderId, trade] of orderMap) {
     }
 
     // --- ADAPTIVE LIMIT ORDER INVERSION GUARD (Preventing Code:10016 / Code:10044) ---
+    const recentBars = await fetchRecentBars(supabase, signal.symbol, 1);
+    const currentPrice = recentBars.length > 0 ? recentBars[recentBars.length - 1].c : (defaultEntryPrice || 0);
+
     let actionType = "ORDER_TYPE_BUY";
     const aiOrderType = (signal.entry_plan_json?.order_type || "Market").toUpperCase();
     if (aiOrderType.includes("BUY LIMIT")) {

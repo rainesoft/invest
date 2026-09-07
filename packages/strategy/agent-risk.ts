@@ -114,16 +114,16 @@ export async function validateGlobalSignal(
     return { valid: false, reason: "Risk Check Failed: Could not query open trades" };
   }
 
-  const liveTradesForSymbol = openTrades ? openTrades.filter(t => t.symbol === symbol) : [];
+  const liveTradesForSymbol = openTrades ? openTrades.filter((t: any) => t.symbol === symbol) : [];
   if (liveTradesForSymbol.length > 0) {
     // Check if the trade is truly a filled active position (status OPEN with broker ticket, or valid open_price)
     const hasFilledPosition = liveTradesForSymbol.some(
-      t => (t.status === "OPEN" && t.meta_api_order_id) || (t.open_price !== null && t.open_price !== undefined)
+      (t: any) => (t.status === "OPEN" && t.meta_api_order_id) || (t.open_price !== null && t.open_price !== undefined)
     );
     
     // Check age of pending trades
     const now = Date.now();
-    const hasFreshPendingOrder = liveTradesForSymbol.some(t => {
+    const hasFreshPendingOrder = liveTradesForSymbol.some((t: any) => {
       const createdAt = t.created_at ? new Date(t.created_at).getTime() : 0;
       const ageHours = (now - createdAt) / (1000 * 60 * 60);
       return ageHours < 2; // Under 2 hours is considered active pending
@@ -176,7 +176,7 @@ export async function validateGlobalSignal(
 
   // Guardrail: Asset Isolation (Don't spam multiple signals for the same asset)
   if (activeSignals) {
-    const activeForSymbol = activeSignals.filter(t => t.symbol === symbol);
+    const activeForSymbol = activeSignals.filter((t: any) => t.symbol === symbol);
     if (activeForSymbol.length > 0) {
       if (activeForSymbol.length >= 2) {
         return { valid: false, reason: `REJECTED: Maximum pyramiding capacity reached (2 trades active for ${symbol}).` };
@@ -455,7 +455,7 @@ export async function validateUserExposure(
 
   let currentHeat = 0;
   if (userTrades) {
-    currentHeat = userTrades.reduce((sum, trade) => sum + Number(trade.risk_amount || 0), 0);
+    currentHeat = userTrades.reduce((sum: number, trade: any) => sum + Number(trade.risk_amount || 0), 0);
   }
 
   const maxHeatPct = Math.min(Number(settings.max_portfolio_heat_pct) || 0.08, 0.08); // 8% hard ceiling

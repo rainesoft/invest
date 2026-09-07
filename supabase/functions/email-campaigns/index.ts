@@ -140,7 +140,7 @@ serve(async (req) => {
           .maybeSingle();
 
         for (const sub of day3Users) {
-          const { data: userResp } = await supabase.auth.admin.getUserById(sub.user_id);
+          const { data: userResp } = await (supabase.auth as any).admin.getUserById(sub.user_id);
           const email = userResp?.user?.email;
           if (!email) continue;
 
@@ -181,7 +181,7 @@ serve(async (req) => {
 
       if (day7Users && day7Users.length > 0) {
         for (const sub of day7Users) {
-          const { data: userResp } = await supabase.auth.admin.getUserById(sub.user_id);
+          const { data: userResp } = await (supabase.auth as any).admin.getUserById(sub.user_id);
           const email = userResp?.user?.email;
           if (!email) continue;
 

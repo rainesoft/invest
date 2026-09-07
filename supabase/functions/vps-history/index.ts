@@ -102,10 +102,10 @@ serve(async (req) => {
         .eq("opportunity_id", trade.opportunity_id);
 
       if (siblingTrades && siblingTrades.length > 0) {
-        const hasActiveLegs = siblingTrades.some(st => ["OPEN", "PENDING", "VPS_PENDING", "VPS_PROCESSING"].includes(st.status));
+        const hasActiveLegs = siblingTrades.some((st: any) => ["OPEN", "PENDING", "VPS_PENDING", "VPS_PROCESSING"].includes(st.status));
         if (!hasActiveLegs) {
-          const totalNetProfit = siblingTrades.reduce((acc, st) => acc + (Number(st.profit_usd) || 0), 0);
-          const totalRisk = siblingTrades.reduce((acc, st) => acc + (Number(st.risk_amount) || 0), 0);
+          const totalNetProfit = siblingTrades.reduce((acc: number, st: any) => acc + (Number(st.profit_usd) || 0), 0);
+          const totalRisk = siblingTrades.reduce((acc: number, st: any) => acc + (Number(st.risk_amount) || 0), 0);
           const oppOutcome = totalNetProfit > 0 ? "WON" : (totalNetProfit < 0 ? "LOST" : "EXPIRED");
           const rMultiple = totalRisk > 0 ? Number((totalNetProfit / totalRisk).toFixed(2)) : (totalNetProfit > 0 ? 1.0 : -1.0);
 

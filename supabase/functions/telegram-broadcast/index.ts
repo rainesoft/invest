@@ -466,17 +466,19 @@ ${headerTitle} \\| ${sideEmoji} *${side} ${symbol}* ${flagEmoji} \\(${tier}\\)
             console.error(`[Telegram Broadcast] Error dispatching to ${subscribedUsers[idx]?.chatId}:`, r.reason);
           }
         });
-        await supabase.from("audit_log").insert({
-          actor_type: "SYSTEM",
-          action: "TELEGRAM_BROADCAST_FAILURE",
-          payload_json: {
-            symbol: record.symbol,
-            opportunity_id: record.id,
-            failures,
-            successes,
-            errors: results.filter(r => r.status === "rejected").map((r: any) => String(r.reason?.message || r.reason))
-          }
-        }).catch(() => {});
+        try {
+          await supabase.from("audit_log").insert({
+            actor_type: "SYSTEM",
+            action: "TELEGRAM_BROADCAST_FAILURE",
+            payload_json: {
+              symbol: record.symbol,
+              opportunity_id: record.id,
+              failures,
+              successes,
+              errors: results.filter(r => r.status === "rejected").map((r: any) => String(r.reason?.message || r.reason))
+            }
+          });
+        } catch (_) { /* non-blocking */ }
       }
       console.log(`Broadcast complete. Success: ${successes}, Failures: ${failures}`);
 
@@ -551,8 +553,8 @@ _${reason}_
 
     return new Response("Unhandled payload", { status: 200 });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error("Webhook processing error:", error);
-    return new Response(`Error: ${error.message}`, { status: 500 });
+    return new Response(`Error: ${error?.message || String(error)}`, { status: 500 });
   }
 });

@@ -776,7 +776,7 @@ serve(async (req) => {
           .eq("status", "APPROVED");
 
         if (activeSignals && activeSignals.length > 0) {
-          await Promise.all(activeSignals.map(async (signal) => {
+          await Promise.all(activeSignals.map(async (signal: any) => {
             try {
               // 1. Math Validation (20-Period Daily Horizon TTL: 20 Trading Days = 480 Hours)
               const hoursElapsed = (Date.now() - new Date(signal.created_at).getTime()) / (1000 * 60 * 60);
@@ -1235,7 +1235,7 @@ serve(async (req) => {
 
           let historicalMemory = "";
           if (pastTrades && pastTrades.length > 0) {
-            historicalMemory = pastTrades.map((t, i) => {
+            historicalMemory = pastTrades.map((t: any, i: number) => {
               return `Swing Decision ${i + 1} (${t.side} on ${t.timeframe} → ${t.status}, ${t.r_multiple !== null ? t.r_multiple + "R" : "N/A"}): "${t.ai_summary || "No rationale"}"`;
             }).join("\n");
           }
@@ -1255,7 +1255,7 @@ serve(async (req) => {
               .limit(5);
 
             if (recentIntraday && recentIntraday.length > 0) {
-              recentIntradayRejections = recentIntraday.filter(r => r.status === "REJECTED");
+              recentIntradayRejections = recentIntraday.filter((r: any) => r.status === "REJECTED");
             }
           } catch (intraErr: any) {
             console.warn(`[${symbol}] [Trace: ${traceId}] Failed to check intraday confluence: ${intraErr.message}`);
@@ -1324,7 +1324,8 @@ serve(async (req) => {
                if (!rawEntry) rawEntry = snapshot.current_price;
                if (!rawSL) rawSL = evaluation.recommended_direction === "LONG" ? (snapshot.safe_long_stop_loss || null) : (snapshot.safe_short_stop_loss || null);
                
-               const shadowSide: "LONG" | "SHORT" = (evaluation.recommended_direction === "LONG" || evaluation.recommended_direction === "BUY" || evaluation.recommended_direction === "BULLISH") ? "LONG" : "SHORT";
+               const recDirRaw = String(evaluation.recommended_direction || "").toUpperCase();
+               const shadowSide: "LONG" | "SHORT" = (recDirRaw.includes("LONG") || recDirRaw.includes("BUY") || recDirRaw.includes("BULLISH")) ? "LONG" : "SHORT";
                const { error: shadowErr } = await supabase.from("shadow_ledger").insert({
                   symbol: symbol as string,
                   timeframe: timeframe.toLowerCase(),
@@ -1483,7 +1484,7 @@ serve(async (req) => {
           }
 
           if (evaluation.recommended_direction === "REQUIRE_LTF_DRILLDOWN") {
-            const drilldownDirection: "LONG" | "SHORT" = (snapshot.trend_alignment?.startsWith("BULLISH") || snapshot.htf_trend === "BULLISH" || fib?.trend === "BULLISH") ? "LONG" : "SHORT";
+            const drilldownDirection: "LONG" | "SHORT" = (snapshot.trend_alignment?.startsWith("BULLISH") || snapshot.htf_trend === "BULLISH") ? "LONG" : "SHORT";
             const msg = `[REQUIRE_LTF_DRILLDOWN] Macro trend is ${drilldownDirection} but daily chart lacks precision R:R entry. Queued to Sniper watchlist for LTF drilldown.`;
             console.log(`[Swing AI] [Trace: ${traceId}] ${symbol as string}: ${msg}`);
             sendEvent({ type: "progress", message: `[${symbol as string}] ${msg}` });
@@ -1529,7 +1530,8 @@ serve(async (req) => {
           }
 
           // === DYNAMIC SMC / LTF PRECISION ENTRY & STOP LOSS ANCHORING ===
-          const dbSide: "LONG" | "SHORT" = (evaluation.recommended_direction === "LONG" || evaluation.recommended_direction === "BUY" || evaluation.recommended_direction === "BULLISH") ? "LONG" : "SHORT";
+          const recDirEval = String(evaluation.recommended_direction || "").toUpperCase();
+          const dbSide: "LONG" | "SHORT" = (recDirEval.includes("LONG") || recDirEval.includes("BUY") || recDirEval.includes("BULLISH")) ? "LONG" : "SHORT";
           const isLong = dbSide === "LONG";
 
           // === CENTRAL BANK INTERVENTION & SOVEREIGN YIELD VETO ===
@@ -1597,7 +1599,7 @@ serve(async (req) => {
               .eq("symbol", symbol as string)
               .eq("agent_persona", "SWING_TRADER")
               .gt("expires_at", new Date().toISOString())
-              .then(({ error }) => {
+              .then(({ error }: { error: any }) => {
                 if (error) console.warn(`[Market Context] [Trace: ${traceId}] Backfill failed for ${symbol as string}: ${error.message}`);
                 else console.log(`[Market Context] [Trace: ${traceId}] Daily macro prime backfilled for ${symbol as string}: ${aiSl} (${evaluation.recommended_direction}, Conf: ${evaluation.confidence_score}%)`);
               });
@@ -1827,7 +1829,7 @@ serve(async (req) => {
             tp2 || Number((entry + (isLong ? swingRisk * 2.0 : -swingRisk * 2.0)).toFixed(5)),
             isLong ? "LONG" : "SHORT",
             1.70,
-            snapshot.atr_14,
+            snapshot.atr_14 || undefined,
             isHighMomentum
           );
 

@@ -96,7 +96,7 @@ serve(async (req) => {
     // ─────────────────────────────────────────────────────────────
     // 2. Compute Core Financial & Performance Metrics
     // ─────────────────────────────────────────────────────────────
-    const resolvedOpps = opportunities?.filter((o) => ["WON", "LOST"].includes(o.status)) || [];
+    const resolvedOpps = opportunities?.filter((o: any) => ["WON", "LOST"].includes(o.status)) || [];
     const totalResolvedOpps = resolvedOpps.length;
     let wonOpps = 0;
     let netR = 0;
@@ -117,7 +117,7 @@ serve(async (req) => {
     let totalLosses = 0;
     let totalPnL = 0;
 
-    const completedTrades = closedTrades?.filter((t) => t.profit_usd !== null) || [];
+    const completedTrades = closedTrades?.filter((t: any) => t.profit_usd !== null) || [];
     for (const trade of completedTrades) {
       if (!stats[trade.symbol]) stats[trade.symbol] = { wins: 0, losses: 0, total_pnl: 0, count: 0 };
       const pnl = Number(trade.profit_usd) || 0;
@@ -257,7 +257,7 @@ serve(async (req) => {
         const llmPayload = {
           summary: summaryPayload,
           shadow_ledger_stats: shadowStats,
-          sample_opportunities: opportunities?.slice(0, 30).map((o) => ({
+          sample_opportunities: opportunities?.slice(0, 30).map((o: any) => ({
             symbol: o.symbol,
             side: o.side,
             status: o.status,

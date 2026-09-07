@@ -122,7 +122,7 @@ serve(async (req) => {
     } else if (status === "FAILED" && tradeData?.opportunity_id) {
       // Check if ALL sibling trades for this opportunity failed
       const { data: siblings } = await supabase.from("user_trades").select("status").eq("opportunity_id", tradeData.opportunity_id);
-      const hasWorkingTrades = siblings?.some(s => ["OPEN", "VPS_PENDING", "VPS_PROCESSING", "PENDING"].includes(s.status));
+      const hasWorkingTrades = siblings?.some((s: any) => ["OPEN", "VPS_PENDING", "VPS_PROCESSING", "PENDING"].includes(s.status));
       if (!hasWorkingTrades) {
         const { data: oppData } = await supabase
           .from("trade_opportunities")
