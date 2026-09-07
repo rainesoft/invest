@@ -529,9 +529,69 @@ serve(async (req) => {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // PROBE 8: AI Evaluation Model Timeouts / API Errors
+    // PROBE 8: AI Evaluation Model Quota & Credit Balance Probe
     // ─────────────────────────────────────────────────────────────
     let apiTimeoutCount = 0;
+    let isOpenAiExhausted = false;
+    let openAiErrorMessage = "";
+
+    // 8A. Proactive Live OpenAI Balance & Quota Ping
+    const openaiKey = Deno.env.get("OPENAI_API_KEY");
+    if (openaiKey) {
+      try {
+        const probeRes = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${openaiKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: "ping" }],
+            max_tokens: 1
+          })
+        });
+
+        if (probeRes.status === 429) {
+          const errJson = await probeRes.json().catch(() => ({}));
+          const errCode = errJson?.error?.code;
+          const errMsg = errJson?.error?.message || "Rate limit or quota exceeded";
+          if (
+            errCode === "credit_balance_exhausted" ||
+            errCode === "insufficient_quota" ||
+            errMsg.includes("credits remaining") ||
+            errMsg.includes("billing")
+          ) {
+            isOpenAiExhausted = true;
+            openAiErrorMessage = errMsg;
+          }
+        }
+      } catch (probeErr: any) {
+        console.warn("[Agent SRE] OpenAI probe ping error:", probeErr.message);
+      }
+    }
+
+    // 8B. Retrospective Quota Exhaustion Audit Log Check
+    const { data: quotaLogs } = await supabase
+      .from("audit_log")
+      .select("id, payload_json, created_at")
+      .or("action.eq.AI_QUOTA_EXHAUSTED,action.eq.OPENAI_QUOTA_EXHAUSTED")
+      .gte("created_at", oneHourAgoIso)
+      .limit(5);
+
+    if (isOpenAiExhausted || (quotaLogs && quotaLogs.length > 0)) {
+      const displayMsg = openAiErrorMessage || quotaLogs?.[0]?.payload_json?.message || "You have no credits remaining.";
+      issues.push(
+        `🚨 <b>CRITICAL: OpenAI Credit Balance Exhausted:</b> Your OpenAI API account has run out of credits (<code>credit_balance_exhausted</code>). Automated AI trading agents (agent-news, agent-day, agent-swing) cannot originate signals until topped up.\n👉 <b>Action:</b> <a href="https://platform.openai.com/settings/organization/billing">Add Credits on OpenAI Billing Dashboard</a>\n<i>Details:</i> <code>${displayMsg.slice(0, 180)}</code>`
+      );
+
+      await insertAudit(supabase, {
+        action: "OPENAI_QUOTA_EXHAUSTED",
+        payload_json: { error: "credit_balance_exhausted", message: displayMsg }
+      });
+    }
+
+    // 8C. Model Timeouts
     const { data: apiTimeouts, error: timeoutErr } = await supabase
       .from("audit_log")
       .select("id, payload_json, created_at")
