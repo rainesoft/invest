@@ -285,12 +285,13 @@ Format in clear, institutional Markdown without wrapping the entire output in co
               Authorization: `Bearer ${OPENAI_API_KEY}`,
             },
             body: JSON.stringify({
-              model: "gpt-4o",
+              model: "gpt-4o-mini",
               messages: [
                 { role: "system", content: systemPrompt },
                 { role: "user", content: `Weekly Performance Data:\n${JSON.stringify(llmPayload, null, 2)}` },
               ],
               temperature: 0.3,
+              max_tokens: 800,
             }),
           });
 
