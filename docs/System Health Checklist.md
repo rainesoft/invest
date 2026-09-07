@@ -507,6 +507,29 @@ Tables in non-public schemas (`net`, `cron`, `vault`) cannot be queried directly
 
 ---
 
+## ⚠️ 1R. Adaptive Limit Inversion Guard & Live Market Price Resolution (ReferenceError: currentPrice is not defined)
+
+> [!CAUTION]
+> **Incident (2026-09-07):** `agent-trade` crashed with `HTTP 500: Error: currentPrice is not defined` when processing limit order webhooks from `on_signal_execute`. The Adaptive Limit Order Inversion Guard evaluated `currentPrice > 0` and `defaultEntryPrice >= currentPrice` to auto-convert crossed limit orders to market orders, but `currentPrice` had not been fetched or defined in the `executeSignal` scope.
+
+### Diagnostic Protocol & Standard Rule:
+1. **Log & Response Body Inspection:** Query `net._http_response` for unhandled ReferenceErrors or 500 status codes:
+   ```sql
+   SELECT id, status_code, content, created
+   FROM net._http_response
+   WHERE status_code >= 500 OR content ILIKE '%ReferenceError%' OR content ILIKE '%currentPrice%'
+   ORDER BY created DESC
+   LIMIT 10;
+   ```
+2. **Live Market Price Fetching Standard:** When executing execution-desk guards (such as the Limit Inversion Guard or Spread Bounds Guard) inside `agent-trade`, always fetch the latest market bar from `market_data_pti`:
+   ```typescript
+   const recentBars = await fetchRecentBars(supabase, signal.symbol, 1);
+   const currentPrice = recentBars.length > 0 ? recentBars[recentBars.length - 1].c : (defaultEntryPrice || 0);
+   ```
+3. **Full Deno Typecheck Enforcement:** Ensure all Edge Functions strictly pass `deno check --import-map=supabase/functions/import_map.json <file>` prior to deployment to catch undeclared variables and type mismatches.
+
+---
+
 ## 2. Autonomous Agent Activity
 Verify that the AI agents are actively evaluating the market and producing expected heartbeat logs.
 
