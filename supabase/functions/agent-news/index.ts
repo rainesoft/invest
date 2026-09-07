@@ -665,12 +665,28 @@ Headline: "${title}"`;
             body: JSON.stringify({
               model: "gpt-4o-mini",
               messages: [{ role: "user", content: prompt }],
-              temperature: 0.0
+              temperature: 0.0,
+              max_tokens: 150
             })
           });
 
           const aiData = await aiRes.json();
           debugInfo.ai_errors = debugInfo.ai_errors || [];
+          if (aiData.error) {
+            console.error(`[Macro Scout] [Trace: ${traceId}] OpenAI API Error:`, aiData.error);
+            const errStr = JSON.stringify(aiData.error);
+            if (errStr.includes("credit_balance_exhausted") || errStr.includes("insufficient_quota")) {
+              await supabase.from("audit_log").insert({
+                actor_type: "SYSTEM",
+                action: "AI_QUOTA_EXHAUSTED",
+                entity_type: "macro_scout",
+                payload_json: { error: aiData.error.message || errStr, headline: title },
+                created_at: new Date().toISOString()
+              });
+            }
+            debugInfo.ai_errors.push(aiData);
+            continue;
+          }
           if (!aiData.choices || !aiData.choices[0]) {
              console.error(`[Macro Scout] [Trace: ${traceId}] Invalid OpenAI response:`, aiData);
              debugInfo.ai_errors.push(aiData);
@@ -729,7 +745,8 @@ CRITICAL RULES:
                   body: JSON.stringify({
                     model: "gpt-4o-mini",
                     messages: [{ role: "user", content: verifyPrompt }],
-                    temperature: 0.0
+                    temperature: 0.0,
+                    max_tokens: 150
                   })
                });
                const verifyData = await verifyRes.json();
