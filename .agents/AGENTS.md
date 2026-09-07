@@ -42,6 +42,14 @@ you must enforce internal authentication inside the function code (such as
 verifying Webhook Secrets or manually parsing user JWTs) to prevent spoofed
 payloads.
 
+## CRITICAL SECURITY RULE: Local Workstation Telegram API Ban
+
+**STRICT ENFORCEMENT:** You are STRICTLY FORBIDDEN from executing any script, command, or process on the local machine/workstation that communicates directly with the Telegram API (`api.telegram.org` or any Telegram bot/webhook endpoints).
+
+1. **Zero Local Outbound Telegram Calls**: Never run or generate local scripts (Node.js, Python, Deno, cURL, Bash, etc.) on the developer workstation that make HTTP requests to `api.telegram.org` or use `TELEGRAM_BOT_TOKEN` for live API dispatch.
+2. **Cloud/Edge Isolation Only**: Telegram broadcast and notification functionality belongs exclusively in remote/cloud execution environments (e.g., deployed Supabase Edge Functions, cloud webhooks, or VPS).
+3. **Local Testing & Diagnostic Mocking**: When writing or running local test scripts, diagnostic tools, or scratch files (in `temp/`, `scripts/`, or `<appDataDir>/brain/.../scratch/`), you MUST mock, stub, or completely bypass any Telegram dispatch step (e.g., console log only, or set mock responses).
+
 ### Rule: Git Workflow Protocol
 
 - **Branching**: NEVER push directly to the `main` or `master` branch. Always
