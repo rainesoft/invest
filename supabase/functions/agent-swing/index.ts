@@ -376,7 +376,7 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
   console.log(`[Responses API] Submitting ${symbol} analysis...`);
   
   const body = {
-    model: "gpt-4o",
+    model: "gpt-4o-mini",
     input: userContent,
     tools: [
       {
@@ -430,7 +430,7 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
     ],
     tool_choice: "required",
     parallel_tool_calls: false,
-    max_output_tokens: 1500
+    max_output_tokens: 600
   };
 
   let responseData: any = null;
@@ -1131,11 +1131,38 @@ serve(async (req) => {
             sendEvent({ type: 'progress', message: `[HTF Fib Alignment] Daily ${fibAlignment.dailyLevel?.toFixed(2)} ≈ Weekly ${fibAlignment.weeklyLevel?.toFixed(2)} (${((fibAlignment.overlapPct ?? 0) * 100).toFixed(3)}% overlap) → +5 confidence queued` });
           }
 
-          // === MACRO CONTEXT & SENTIMENT SCORING ===
+          // === MACRO CONTEXT & SENTIMENT SCORING (WITH CACHING) ===
           const headlines = await fetchRealtimeNews(symbol).catch(() => []);
           
           let sentimentScore = 0;
-          if (headlines && headlines.length > 0) {
+          let sentimentFromCache = false;
+
+          // Check if Macro Scout recently scored this symbol in market_context (within 2 hours)
+          try {
+            const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+            const { data: cachedNews } = await supabase
+              .from("market_context")
+              .select("macro_bias, narrative, created_at")
+              .eq("symbol", symbol)
+              .eq("agent_persona", "MACRO_SCOUT")
+              .gte("created_at", twoHoursAgo)
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (cachedNews && cachedNews.macro_bias) {
+              sentimentScore = cachedNews.macro_bias === "BULLISH" ? 8 : (cachedNews.macro_bias === "BEARISH" ? -8 : 0);
+              sentimentFromCache = true;
+              if (sentimentScore >= 7) snapshot.momentum_spike = "BULLISH";
+              else if (sentimentScore <= -7) snapshot.momentum_spike = "BEARISH";
+              console.log(`[Sentiment Cache] Reused Macro Scout sentiment for ${symbol}: ${cachedNews.macro_bias} (${sentimentScore}/10)`);
+              sendEvent({ type: "progress", message: `[Sentiment Cache] ${symbol}: ${cachedNews.macro_bias} (${sentimentScore}/10) from Macro Scout` });
+            }
+          } catch (cErr: any) {
+            console.warn(`[Sentiment Cache] Check failed for ${symbol}: ${cErr.message}`);
+          }
+
+          if (!sentimentFromCache && headlines && headlines.length > 0) {
             try {
               const openaiKey = Deno.env.get("OPENAI_API_KEY");
               const azureKey = Deno.env.get("AZURE_OPENAI_API_KEY");
@@ -1159,7 +1186,8 @@ serve(async (req) => {
                   { role: "system", content: "You are a quantitative news analyst. Score the following headlines for the given financial asset strictly from -10 (extremely bearish) to +10 (extremely bullish). Output ONLY the integer score." },
                   { role: "user", content: `Asset: ${symbol}\nHeadlines:\n${headlines.join('\n')}` }
                 ],
-                temperature: 0
+                temperature: 0,
+                max_tokens: 10
               });
 
               const parsedScore = parseInt(sentimentResponse.choices[0].message?.content?.trim() || "0", 10);
@@ -1307,6 +1335,45 @@ serve(async (req) => {
             console.warn(`[Market Context] [Trace: ${traceId}] Unexpected error for ${symbol}: ${ctxWriteErr.message}`);
           }
 
+          // === ZERO-TOKEN DETERMINISTIC CANDIDATE PRE-FILTER ===
+          // For swing setups on Daily/4H: If price is lost in mid-air (> 2.5% from nearest Fib),
+          // with no liquidity sweep, no chart pattern, no divergence, no S/R flip, and no strong macro catalyst,
+          // discard deterministically to eliminate 0-value LLM calls.
+          if (!isManual) {
+            const nearestFibDistPct = (nearestFibs && nearestFibs.length > 0 && currentPrice > 0)
+              ? (nearestFibs[0].distance / currentPrice) * 100
+              : 999;
+            
+            const hasFibProximity = nearestFibDistPct <= 2.5;
+            const hasLiquiditySweep = Boolean(snapshot.liquidity_sweep_bullish || snapshot.liquidity_sweep_bearish);
+            const hasCandlestick = Boolean(snapshot.candlestick_pattern && snapshot.candlestick_pattern !== "NONE");
+            const hasChartPattern = Boolean(snapshot.chart_pattern || snapshot.trend_channel);
+            const hasDivergence = Boolean(
+              (snapshot.rsi_divergence && snapshot.rsi_divergence !== "NONE") ||
+              (snapshot.macd_divergence && snapshot.macd_divergence !== "NONE")
+            );
+            const hasSRFlip = Boolean(snapshot.sr_flip && (snapshot.sr_flip as any).holding_confirmed);
+            const hasUnfilledGap = snapshot.has_unfilled_gap === true;
+            const hasHTFAlignment = (snapshot as any).htf_fib_alignment === true;
+            const hasStrongMacro = Math.abs(sentimentScore) >= 6 || Boolean(pendingNewsSide);
+
+            const hasConfluenceTrigger = hasFibProximity || hasLiquiditySweep || hasCandlestick || hasChartPattern || hasDivergence || hasSRFlip || hasUnfilledGap || hasHTFAlignment || hasStrongMacro;
+
+            if (!hasConfluenceTrigger) {
+              const discardReason = `Zero-Token Pre-Filter: Mid-range price (${nearestFibDistPct.toFixed(2)}% from nearest Fib level) with no liquidity sweep, pattern, or macro catalyst. LLM skipped.`;
+              console.log(`[Deterministic Filter] Discarding ${symbol}: ${discardReason}`);
+              sendEvent({ type: 'progress', message: `[Deterministic Filter] ${symbol}: No swing confluence triggers (Fib dist ${nearestFibDistPct.toFixed(2)}%). Skipped LLM evaluation.` });
+              await insertAuditLog(supabase, {
+                actor_type: "SYSTEM",
+                action: "REJECTED_BY_DETERMINISTIC_FILTER",
+                entity_type: "research",
+                payload_json: { symbol, reason: discardReason },
+              });
+              rejections.push({ symbol: symbol as string, reason: discardReason, layer: "Deterministic Filter" });
+              return;
+            }
+          }
+
           // === AI EVALUATION ===
           sendEvent({ type: "progress", message: `[${symbol}] Submitting to Swing AI for Fibonacci analysis...` });
 
@@ -1341,6 +1408,13 @@ serve(async (req) => {
             }
           } catch (err: any) {
             console.error(`[AI Error] [Trace: ${traceId}] ${symbol as string}: ${err.message}`);
+            const isQuotaError = err.message?.includes("no credits remaining") || err.message?.includes("credit_balance_exhausted") || err.message?.includes("insufficient_quota");
+            await insertAuditLog(supabase, {
+              actor_type: "SYSTEM",
+              action: isQuotaError ? "AI_QUOTA_EXHAUSTED" : "API_TIMEOUT",
+              entity_type: "research",
+              payload_json: { symbol: symbol as string, reason: isQuotaError ? "OpenAI credit balance exhausted" : "AI evaluation failed", error: err.message },
+            });
             rejections.push({ symbol: symbol as string, reason: `AI evaluation failed: ${err.message}`, layer: "AI" });
             sendEvent({ type: "progress", message: `[${symbol as string}] AI evaluation failed: ${err.message}` });
             return;
