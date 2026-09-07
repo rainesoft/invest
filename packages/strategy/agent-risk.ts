@@ -76,6 +76,34 @@ export async function validateGlobalSignal(
     return { valid: false, reason: "Risk Check Failed: Could not query active signals" };
   }
 
+  // --- VELOCITY / FLASH-FILL LOCKOUT GUARD ---
+  const { data: velocityLockout } = await supabase
+    .from("market_context")
+    .select("id, expires_at")
+    .in("symbol", [symbol, "GLOBAL"])
+    .eq("macro_bias", "VELOCITY_LOCKOUT")
+    .gt("expires_at", new Date().toISOString())
+    .limit(1);
+
+  if (velocityLockout && velocityLockout.length > 0) {
+    return {
+      valid: false,
+      reason: `REJECTED: Active VELOCITY_LOCKOUT circuit breaker engaged until ${velocityLockout[0].expires_at}. Rapid execution cascade detected.`
+    };
+  }
+
+  // --- CONCURRENT PENDING ORDER CAP GUARD (Max 3 resting setups) ---
+  const pendingCapCheck = await validateConcurrentPendingCap(supabase, 3);
+  if (!pendingCapCheck.valid) {
+    return pendingCapCheck;
+  }
+
+  // --- AGGREGATE COMMITTED PORTFOLIO HEAT GUARD (Max 8% total open+pending risk) ---
+  const aggregateHeatCheck = await validateAggregateCommittedHeat(supabase, 0, 0.08);
+  if (!aggregateHeatCheck.valid) {
+    return aggregateHeatCheck;
+  }
+
   // --- GUARD: Check for OPEN & PENDING trades in user_trades ---
   const { data: openTrades, error: openTradesError } = await supabase
     .from("user_trades")
@@ -319,17 +347,96 @@ export function validateOrderFlowBreakout(
   return { valid: true };
 }
 
+// Validates that the total number of concurrent resting pending orders does not exceed max limit
+export async function validateConcurrentPendingCap(
+  supabase: SupabaseClient,
+  maxPending: number = 3
+): Promise<RiskValidationResult> {
+  // Check pending opportunities in trade_opportunities
+  const { data: pendingOpps, error: oppError } = await supabase
+    .from("trade_opportunities")
+    .select("id")
+    .in("status", ["APPROVED", "QUEUED"])
+    .eq("is_archived", false);
+
+  if (oppError) {
+    return { valid: false, reason: "Risk Check Failed: Could not query pending opportunities count" };
+  }
+
+  const oppCount = pendingOpps?.length || 0;
+
+  // If there are already >= maxPending resting pending opportunities, cap new order placement
+  if (oppCount >= maxPending) {
+    return {
+      valid: false,
+      reason: `REJECTED: Concurrent pending order limit reached (${oppCount} active/queued setups waiting, max allowed: ${maxPending}). Protects against simultaneous execution cascades.`
+    };
+  }
+
+  return { valid: true };
+}
+
+// Validates that the aggregate committed risk (all active positions + resting pending orders) does not exceed the fund budget
+export async function validateAggregateCommittedHeat(
+  supabase: SupabaseClient,
+  newRiskAmount: number = 0,
+  maxGlobalHeatPct: number = 0.08
+): Promise<RiskValidationResult> {
+  // Fetch master account settings
+  const { data: masterSettings, error: settingsError } = await supabase
+    .from("user_risk_settings")
+    .select("portfolio_capital, max_portfolio_heat_pct")
+    .eq("is_master_account", true)
+    .maybeSingle();
+
+  if (settingsError || !masterSettings) {
+    return { valid: true };
+  }
+
+  const capital = Number(masterSettings.portfolio_capital) || 10000;
+  const heatPct = Number(masterSettings.max_portfolio_heat_pct) || maxGlobalHeatPct;
+  const maxAllowedHeatUsd = capital * Math.min(heatPct, maxGlobalHeatPct);
+
+  // Query all active and pending user trades
+  const { data: activeTrades, error: tradesError } = await supabase
+    .from("user_trades")
+    .select("risk_amount, status")
+    .in("status", ["OPEN", "PENDING", "VPS_PENDING", "VPS_PROCESSING"]);
+
+  if (tradesError) {
+    return { valid: false, reason: "Risk Check Failed: Could not query active trades for aggregate heat" };
+  }
+
+  let totalCommittedRisk = 0;
+  if (activeTrades) {
+    for (const t of activeTrades) {
+      totalCommittedRisk += Number(t.risk_amount) || 0;
+    }
+  }
+
+  const projectedHeat = totalCommittedRisk + newRiskAmount;
+  if (projectedHeat > maxAllowedHeatUsd) {
+    return {
+      valid: false,
+      reason: `REJECTED: Aggregate Committed Portfolio Heat Cap breached. Current committed risk is $${totalCommittedRisk.toFixed(2)} (${((totalCommittedRisk / capital) * 100).toFixed(1)}%). Adding $${newRiskAmount.toFixed(2)} would exceed max heat budget of $${maxAllowedHeatUsd.toFixed(2)} (${(heatPct * 100).toFixed(1)}%).`
+    };
+  }
+
+  return { valid: true };
+}
+
 // Validates if a specific user can take a new trade based on their personal heat cap
 export async function validateUserExposure(
   supabase: SupabaseClient,
   userId: string,
   newRiskAmount: number
 ): Promise<RiskValidationResult> {
-  // Fetch user's active trades to calculate current heat
+  // Fetch user's active and pending trades to calculate current heat
   const { data: userTrades, error: tradesError } = await supabase
     .from("user_trades")
-    .select("risk_amount")
-    .in("status", ["OPEN", "PENDING"]);
+    .select("risk_amount, status")
+    .eq("user_id", userId)
+    .in("status", ["OPEN", "PENDING", "VPS_PENDING", "VPS_PROCESSING"]);
 
   if (tradesError) {
     return { valid: false, reason: "Failed to query user trades" };
@@ -348,13 +455,17 @@ export async function validateUserExposure(
 
   let currentHeat = 0;
   if (userTrades) {
-    currentHeat = userTrades.reduce((sum, trade) => sum + Number(trade.risk_amount), 0);
+    currentHeat = userTrades.reduce((sum, trade) => sum + Number(trade.risk_amount || 0), 0);
   }
 
-  const maxHeat = Number(settings.portfolio_capital) * Number(settings.max_portfolio_heat_pct);
+  const maxHeatPct = Math.min(Number(settings.max_portfolio_heat_pct) || 0.08, 0.08); // 8% hard ceiling
+  const maxHeat = Number(settings.portfolio_capital) * maxHeatPct;
 
   if ((currentHeat + newRiskAmount) > maxHeat) {
-    return { valid: false, reason: `REJECTED: Portfolio Heat limit (${Number(settings.max_portfolio_heat_pct) * 100}%) exceeded.` };
+    return { 
+      valid: false, 
+      reason: `REJECTED: User Portfolio Heat limit (${(maxHeatPct * 100).toFixed(1)}%) exceeded. Current: $${currentHeat.toFixed(2)}, Proposed: $${(currentHeat + newRiskAmount).toFixed(2)}, Max: $${maxHeat.toFixed(2)}` 
+    };
   }
 
   return { valid: true };
