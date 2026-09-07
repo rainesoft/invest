@@ -111,7 +111,8 @@ async function evaluateOpportunity(symbol: string, snapshot: LogicContext & { ag
   console.log(`[Responses API] Submitting ${symbol} analysis...`);
   
   const body = {
-    model: "gpt-4o",
+    model: "gpt-4o-mini",
+    max_output_tokens: 600,
     input: `Evaluate the raw market data for ${symbol} on the ${timeframe} timeframe at current price ${snapshot.current_price} and autonomously originate the highest probability trade setup, if any. Return the required execution profile using the provided tools.
     
 CRITICAL RULES:
@@ -1095,6 +1096,47 @@ serve(async (req) => {
               }
             }
 
+            // === ZERO-TOKEN DETERMINISTIC CANDIDATE PRE-FILTER ===
+            // Filter out flat/dead chop markets before invoking the LLM to eliminate token waste.
+            if (!isManual) {
+              const hasTrend = snapshot.trend_alignment && (snapshot.trend_alignment.startsWith("BULLISH") || snapshot.trend_alignment.startsWith("BEARISH"));
+              const hasPattern = snapshot.candlestick_pattern && snapshot.candlestick_pattern !== "NONE";
+              const hasDivergence = (snapshot.rsi_divergence && snapshot.rsi_divergence !== "NONE") || (snapshot.macd_divergence && snapshot.macd_divergence !== "NONE");
+              const hasSRFlip = snapshot.sr_flip && (snapshot.sr_flip as any).type !== "NONE" && (snapshot.sr_flip as any).holding_confirmed;
+              const hasAsianSweep = snapshot.asian_sweep && snapshot.asian_sweep !== "NONE";
+              const hasUnfilledGap = snapshot.has_unfilled_gap === true;
+              const hasSMCZone = Boolean(snapshot.bullish_fvg_50pct || snapshot.bearish_fvg_50pct || snapshot.bullish_ob_50pct || snapshot.bearish_ob_50pct);
+              const hasMacroNews = Boolean(snapshot.fundamental_context || (snapshot.agent_context && snapshot.agent_context.length > 0));
+              const hasVolumeSurge = Boolean(snapshot.volume_surge || (snapshot.volume_ratio && snapshot.volume_ratio >= 1.3));
+
+              // Check proximity to key pivot/profile levels (within 0.75%)
+              const p = snapshot.current_price;
+              const isNearPivots = Boolean(
+                (snapshot.htf_pivot && Math.abs(p - snapshot.htf_pivot) / p <= 0.0075) ||
+                (snapshot.pivot_s1 && Math.abs(p - snapshot.pivot_s1) / p <= 0.0075) ||
+                (snapshot.pivot_r1 && Math.abs(p - snapshot.pivot_r1) / p <= 0.0075) ||
+                (snapshot.vah_price && Math.abs(p - snapshot.vah_price) / p <= 0.0075) ||
+                (snapshot.val_price && Math.abs(p - snapshot.val_price) / p <= 0.0075) ||
+                (snapshot.poc_price && Math.abs(p - snapshot.poc_price) / p <= 0.0075)
+              );
+
+              const hasConfluenceTrigger = hasTrend || hasPattern || hasDivergence || hasSRFlip || hasAsianSweep || hasUnfilledGap || hasSMCZone || hasMacroNews || hasVolumeSurge || isNearPivots;
+
+              if (!hasConfluenceTrigger && (snapshot.adx_14 == null || snapshot.adx_14 < 18) && (snapshot.volume_regime === "ANEMIC" || (snapshot.volume_ratio != null && snapshot.volume_ratio < 0.6))) {
+                const rejectReason = `Zero-Token Pre-Filter: Market in dead consolidation (ADX ${snapshot.adx_14?.toFixed(1) ?? 'N/A'} < 18, anemic volume, no SMC/Fib/S-R/divergence confluence). LLM skipped.`;
+                console.log(`[Deterministic Filter] Discarding ${symbol}: ${rejectReason}`);
+                sendEvent({ type: 'progress', message: `[Deterministic Filter] ${symbol}: Flat market (ADX < 18, no setup confluence). Skipped LLM evaluation.` });
+                await insertAuditLog(supabase, {
+                  actor_type: "SYSTEM",
+                  action: "REJECTED_BY_DETERMINISTIC_FILTER",
+                  entity_type: "research",
+                  payload_json: { symbol, reason: rejectReason },
+                });
+                rejections.push({ symbol, reason: rejectReason, layer: "Deterministic Filter" });
+                return;
+              }
+            }
+
             // LAYER B: Cognitive Guard (Senior Risk Officer)
 
             let evaluation;
@@ -1130,11 +1172,12 @@ serve(async (req) => {
             } catch (err: any) {
               console.error(`[Layer B Error] AI evaluation failed for ${symbol}: ${err.message}`);
               sendEvent({ type: 'progress', message: `[Layer B: AI Risk Officer] Evaluation failed: ${err.message}` });
+              const isQuotaError = err.message?.includes("no credits remaining") || err.message?.includes("credit_balance_exhausted") || err.message?.includes("insufficient_quota");
               await insertAuditLog(supabase, {
                 actor_type: "SYSTEM",
-                action: "API_TIMEOUT",
+                action: isQuotaError ? "AI_QUOTA_EXHAUSTED" : "API_TIMEOUT",
                 entity_type: "research",
-                payload_json: { symbol, reason: "OpenAI evaluation failed or timed out", error: err.message },
+                payload_json: { symbol, reason: isQuotaError ? "OpenAI credit balance exhausted" : "OpenAI evaluation failed or timed out", error: err.message },
               });
               rejections.push({
                 symbol,
