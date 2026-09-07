@@ -316,14 +316,17 @@ void ProcessTrades(string data)
       if (action == "EXECUTE") 
            {
             ExecuteTrade(id, symbol, side, volume, sl, tp, entryPrice, orderType);
+            Sleep(250); // Staggered Queue Execution to serialize broker order processing
            }
          else if (action == "MODIFY" && ticket > 0)
            {
             ModifyTrade(ticket, sl, tp, entryPrice);
+            Sleep(100);
            }
          else if (action == "CLOSE" && ticket > 0)
            {
             CloseTrade(id, ticket);
+            Sleep(100);
            }
         }
      }
@@ -625,20 +628,73 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
       if(normTp > 0) normTp = NormalizeDouble(MathRound(normTp / tickSize) * tickSize, symDigits);
       if(normEntry > 0) normEntry = NormalizeDouble(MathRound(normEntry / tickSize) * tickSize, symDigits);
      }
-   
-   double ask = SymbolInfoDouble(brokerSym, SYMBOL_ASK);
-   double bid = SymbolInfoDouble(brokerSym, SYMBOL_BID);
-   
-   MqlTradeRequest request;
-   MqlTradeResult  result;
-   ZeroMemory(request);
-   ZeroMemory(result);
-   
-   request.symbol = brokerSym;
-   request.volume = normVolume;
-   request.magic = (id == "HFT_NATIVE") ? MAGIC_HFT : MAGIC_PAMM;
-   request.comment = (id == "HFT_NATIVE") ? "RaineInvest HFT" : "RaineInvest AI";
-   request.deviation = 30;
+      double ask = SymbolInfoDouble(brokerSym, SYMBOL_ASK);
+    double bid = SymbolInfoDouble(brokerSym, SYMBOL_BID);
+    
+    // --- PILLAR 3: DYNAMIC SPREAD & LIQUIDITY GATE ---
+    double liveSpreadPoints = (ask > 0 && bid > 0 && point > 0) ? (ask - bid) / point : 0;
+    double maxAllowedSpread = 35.0; // Default Forex 35 pts
+    if(StringFind(brokerSym, "XAU") >= 0 || StringFind(brokerSym, "XAG") >= 0) maxAllowedSpread = 45.0;
+    else if(StringFind(brokerSym, "30") >= 0 || StringFind(brokerSym, "100") >= 0 || StringFind(brokerSym, "500") >= 0 || StringFind(brokerSym, "40") >= 0 || StringFind(brokerSym, "225") >= 0) maxAllowedSpread = 150.0;
+    else if(StringFind(brokerSym, "BTC") >= 0 || StringFind(brokerSym, "ETH") >= 0) maxAllowedSpread = 200.0;
+    else if(StringFind(brokerSym, "OIL") >= 0) maxAllowedSpread = 60.0;
+
+    if(liveSpreadPoints > maxAllowedSpread && liveSpreadPoints > 0)
+      {
+       Print("Execution Blocked: Live spread for ", brokerSym, " is too wide (", DoubleToString(liveSpreadPoints, 1), " pts > ", DoubleToString(maxAllowedSpread, 1), " max). Aborting to protect R:R.");
+       string errReason = "SPREAD_TOO_WIDE:" + DoubleToString(liveSpreadPoints, 1);
+       StringReplace(errReason, " ", "%20");
+       string cbUrl = InpSupabaseURL + "/functions/v1/vps-callback?trade_id=" + id + "&status=FAILED&ticket=0&error=" + errReason;
+       char post[], resData[];
+       string req_headers = "x-vps-secret: " + InpVPSSecret + "\r\n";
+       string res_headers;
+       WebRequest("GET", cbUrl, req_headers, 3000, post, resData, res_headers);
+       return;
+      }
+
+    // --- PILLAR 4: PRE-FLIGHT MARGIN LEVEL (>=300%) & FREE MARGIN GATE ---
+    double marginLevel = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
+    double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+
+    if(marginLevel > 0 && marginLevel < 300.0)
+      {
+       Print("Execution Blocked: Account Margin Level is below 300% (Current: ", DoubleToString(marginLevel, 1), "%). Aborting to prevent broker margin call.");
+       string errReason = "MARGIN_LEVEL_BELOW_300";
+       string cbUrl = InpSupabaseURL + "/functions/v1/vps-callback?trade_id=" + id + "&status=FAILED&ticket=0&error=" + errReason;
+       char post[], resData[];
+       string req_headers = "x-vps-secret: " + InpVPSSecret + "\r\n";
+       string res_headers;
+       WebRequest("GET", cbUrl, req_headers, 3000, post, resData, res_headers);
+       return;
+      }
+
+    ENUM_ORDER_TYPE orderCalcType = (side == "LONG" || side == "BUY") ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+    double requiredMargin = 0;
+    if(OrderCalcMargin(orderCalcType, brokerSym, normVolume, (orderCalcType == ORDER_TYPE_BUY ? ask : bid), requiredMargin))
+      {
+       if(freeMargin > 0 && requiredMargin > freeMargin * 0.50)
+         {
+          Print("Execution Blocked: Required margin ($", DoubleToString(requiredMargin, 2), ") exceeds 50% of free margin ($", DoubleToString(freeMargin, 2), "). Aborting.");
+          string errReason = "INSUFFICIENT_FREE_MARGIN_BUFFER";
+          string cbUrl = InpSupabaseURL + "/functions/v1/vps-callback?trade_id=" + id + "&status=FAILED&ticket=0&error=" + errReason;
+          char post[], resData[];
+          string req_headers = "x-vps-secret: " + InpVPSSecret + "\r\n";
+          string res_headers;
+          WebRequest("GET", cbUrl, req_headers, 3000, post, resData, res_headers);
+          return;
+         }
+      }
+    
+    MqlTradeRequest request;
+    MqlTradeResult  result;
+    ZeroMemory(request);
+    ZeroMemory(result);
+    
+    request.symbol = brokerSym;
+    request.volume = normVolume;
+    request.magic = (id == "HFT_NATIVE") ? MAGIC_HFT : MAGIC_PAMM;
+    request.comment = (id == "HFT_NATIVE") ? "RaineInvest HFT" : "RaineInvest AI";
+    request.deviation = 30;
    
    // Adaptive Order Type & Price Routing (Prevents Error 10015 on slipped pending orders)
    if(orderTypeStr == "BUY MARKET")
