@@ -487,11 +487,22 @@ Tables in non-public schemas (`net`, `cron`, `vault`) cannot be queried directly
 ## ⚠️ 1Q. Pre-Flight Market Hours Execution Guard (Preventing Broker Error 10018 on Webhook Handoffs)
 
 > [!CAUTION]
-> **Incident (2026-09-06):** On Sunday morning (09:07–09:09 UTC), breaking geopolitical news on crude oil triggered `agent-news` -> `agent-day` -> `agent-trade` via webhook handoff. Because `agent-day` only checked `!isMarketOpen(symbol)` when `isCron` was true, and `agent-trade` lacked an `isMarketOpen` pre-flight check, `UKOIL` orders were submitted to the MT5 EA while oil markets were closed, failing with MT5 broker error `Code:10018 (Market Closed)`.
+> **Incident (2026-09-04 & 2026-09-06):** 
+> 1. On Friday 2026-09-04 at 21:00 and 21:45 UTC, `NAS100` and `USDJPY` orders were submitted to MT5 and failed with `Code:10018 (Market Closed)` because legacy logic checked `hour >= 22` instead of the actual broker closure time of **Friday 21:00 UTC**.
+> 2. On Sunday morning 2026-09-06 (09:07–09:09 UTC), breaking geopolitical news on crude oil triggered `agent-day` -> `agent-trade` via manual/webhook handoff. Because manual flags bypassed market checks, `UKOIL` orders were submitted while oil markets were closed, failing with MT5 error `Code:10018 (Market Closed)`.
 
-### Standard Rule:
-1. **Universal Market Open Filter:** In all signal generation engines (`agent-day`, `agent-swing`), market hours must be checked unconditionally for all automated pipelines: `if (!isManual && !isMarketOpen(symbol)) return;`.
-2. **PAMM Execution Desk Pre-Flight Guard:** `agent-trade` must enforce `if (!isMarketOpen(signal.symbol))` before placing orders into `user_trades`. If the broker market is closed, immediately reject the signal with `Rejected by Execution Desk: Market is closed for <symbol>` to prevent broker rejection noise.
+### Asset-Class Trading Hours Standard Reference:
+| Asset Class | Symbols | Open (UTC) | Close (UTC) | Daily Rollover Break |
+|---|---|---|---|---|
+| **Crypto** | `BTCUSD`, `ETHUSD` | Sunday 00:00 (24/7/365) | Saturday 24:00 (24/7/365) | None |
+| **Forex** | `EURUSD`, `GBPUSD`, `USDJPY`, etc. | Sunday 22:05 | **Friday 21:00** | 21:55 – 22:05 UTC |
+| **Commodities** | `XAUUSD`, `XAGUSD`, `UKOIL`, `USOIL` | **Sunday 23:00** | **Friday 21:00** | 21:00 – 22:15 UTC |
+| **Equity Indices** | `US30`, `NAS100`, `SPX500`, `GER30`, `JP225` | Monday 06:00 | **Friday 21:00** | 21:15 – 22:15 UTC |
+| **US Equities** | `AAPL`, `MSFT`, `NVDA`, `AMZN`, `TSLA`, `META`, `GOOGL` | **Mon-Fri 13:35** | **Mon-Fri 19:55** | Closed outside session |
+
+### Standard Rules:
+1. **Universal Market Open Filter:** In all signal generation engines (`agent-day`, `agent-swing`), market hours must be checked unconditionally: `if (!isManual && !isMarketOpen(symbol)) return;`.
+2. **PAMM Execution Desk Pre-Flight Guard:** `agent-trade` must universally enforce `if (!isMarketOpen(signal.symbol))` before placing orders into `user_trades`. If the broker market is closed, immediately reject the signal with `Rejected by Execution Desk: Market is closed for <symbol>` to prevent broker rejection noise.
 3. **Crypto Exemption:** `BTCUSD` and `ETHUSD` trade 24/7 (`isCrypto(symbol) === true`) and are exempt from market hour closures.
 
 ---
@@ -680,6 +691,30 @@ In `supabase/functions/agent-trade/index.ts` and `packages/strategy/agent-risk.t
    - `NAS100` / `US30` / `SPX500` / `GER30`: `1` (index point)
    - `JP225`: `1` (index point in JPY, requiring division by `USDJPY` price ~145.0 to yield USD risk)
 2. Always sanity-check calculated lot risk: `lotRiskUsd` for 0.01 lot on any standard index or commodity setup should not exceed ~$15–$50 on normal ATR parameters.
+
+---
+
+## ⚠️ 2N. Active Position Exposure & Stacking Concurrency Guard (Preventing Code:10019 Margin Exhaustion)
+
+> [!CAUTION]
+> **Incident (2026-09-06):** `agent-swing-crypto` runs on a 3-hour cron. Over 18 hours, it successively generated 4 consecutive pairs of `ETHUSD` LONG swing setups without verifying whether prior trades were still open. The accumulated exposure exceeded 0.48 lots, draining account free margin and causing the broker to reject subsequent legs with `Code:10019 (Insufficient Free Margin)`.
+
+### Standard Rule:
+1. **Pre-Evaluation Concurrency Guard:** Both `agent-swing` (Layer -0.5) and `agent-day` must query `user_trades` before performing AI evaluations:
+   ```typescript
+   const { data: activeTrades } = await supabase
+     .from("user_trades")
+     .select("id, status, trade_type")
+     .eq("symbol", symbol)
+     .in("status", ["OPEN", "PENDING", "VPS_PENDING", "VPS_PROCESSING"]);
+
+   if (activeTrades && activeTrades.length > 0 && !isManual) {
+     console.log(`[Exposure Guard] Skipping ${symbol}: Active position already open (${activeTrades.length} legs).`);
+     return;
+   }
+   ```
+2. **Execution Desk Duplicate Veto:** `agent-trade` enforces an identical guard at the routing layer: if an active trade for another opportunity already exists on the same symbol, the trade is rejected with `Rejected by Execution Desk: Active position already exists for <symbol>. Preventing duplicate margin exposure.`
+3. **Autonomous SRE Audit:** `agent-sre` Probe 4I audits symbol stacking hourly and alerts if more than 2 distinct opportunities are active on the same symbol.
 
 ---
 
@@ -1200,6 +1235,25 @@ In `/functions/v1/vps-callback`:
          AND u.status IN ('OPEN', 'PENDING', 'VPS_PENDING', 'VPS_PROCESSING')
      );
    ```
+
+---
+
+## ⚠️ 3S. Adaptive Limit Order Inversion Conversion & Multi-Leg TP/SL Direction Validation (Error 10016 Prevention)
+
+> [!CAUTION]
+> **Incident (2026-09-04):** On US Equities open (13:30 UTC), limit orders for `AMZN`, `AAPL`, and `NVDA` failed on MT5 with `Code:10016 (Invalid Stops / Price)` because the suggested `BUY LIMIT` price was equal to or higher than the current market ask price. MT5 forbids limit orders that cross current price.
+
+### Standard Rule:
+1. **Adaptive Limit Inversion Solver:** In `agent-trade/index.ts` and `vps-poll/index.ts`:
+   - If `order_type === "BUY LIMIT"` and `entry_price >= current_market_ask`, auto-convert order type to `ORDER_TYPE_BUY` (`BUY MARKET`).
+   - If `order_type === "SELL LIMIT"` and `entry_price <= current_market_bid`, auto-convert order type to `ORDER_TYPE_SELL` (`SELL MARKET`).
+2. **Unconditional Take Profit & Stop Loss Direction Validation:**
+   - For `LONG` positions: `TP > entryPrice` and `SL < entryPrice` must strictly hold.
+   - For `SHORT` positions: `TP < entryPrice` and `SL > entryPrice` must strictly hold.
+   - In `vps-poll/index.ts`, if TP or SL direction is violated or equals entry price, automatically clamp:
+     `safeTp = Number((safeEntry + (effRisk * 1.75)).toFixed(decimals))` (LONG)
+     `safeTp = Number((safeEntry - (effRisk * 1.75)).toFixed(decimals))` (SHORT)
+3. **US Equities Open Buffer:** US Equities signals are restricted to 13:35 UTC – 19:55 UTC to avoid opening crossed auction volatility.
 
 ---
 

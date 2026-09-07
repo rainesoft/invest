@@ -240,3 +240,61 @@ In a scenario where **all currently open live trades simultaneously hit their fu
 3. **Quarantine & Recovery**:
    - All stopped-out assets enter a **4-hour cooldown quarantine** in `agent-risk.ts`.
    - GPT-4o post-mortems are generated for every failure, analyzing candle structure and market condition to calibrate subsequent algorithmic entries.
+
+---
+
+## 10. Simultaneous Pending Trade Execution Risk Mitigation (5-Pillar Framework)
+
+To completely eliminate the risk of margin wipeouts, dollar heat spikes, flash liquidity voids, and broker context lockups during high-volatility events, RaineInvest enforces a **5-Pillar Simultaneous Execution Defense System**:
+
+```mermaid
+graph TD
+    A[Signal / Pending Setup Generated] --> B{Pillar 1: Max 3 Pending & Committed Heat <= 8%}
+    B -->|Passed| C{Pillar 2: Velocity Breaker <2 Fills / 60s}
+    B -->|Cap Breached| R1[Reject Signal / Queue]
+    
+    C -->|Normal Velocity| D[vps-poll Dispatch to MT5 EA]
+    C -->|>= 2 Fills in 60s| R2[Trip 15m VELOCITY_LOCKOUT + Telegram Alert]
+    
+    D --> E{Pillar 3: Live Spread Threshold Gate}
+    E -->|Spread Normal| F{Pillar 4: Margin Level >= 300% & Free Margin Gate}
+    E -->|Spread Blown Out| R3[Abort OrderSend + Callback SPREAD_TOO_WIDE]
+    
+    F -->|Margin Healthy| G[Pillar 5: Staggered Queue Execution +250ms]
+    F -->|Margin < 300%| R4[Reject MARGIN_LEVEL_BELOW_300]
+    
+    G --> H[MT5 Broker Order Execution]
+    H --> I[vps-callback Updates Execution Velocity Tracker]
+```
+
+### 10.1 Pillar 1: Aggregate Committed Portfolio Heat Cap & Max 3 Pending Ceiling
+* **Resting Order Concurrency Limit (`validateConcurrentPendingCap`)**: Caps the total number of simultaneous resting pending setups across the entire platform at **3 orders max**. Rejects new setups if 3 are already pending fill.
+* **Aggregate Committed Heat Budget (`validateAggregateCommittedHeat`)**:
+  $$\text{Committed Risk} = \sum_{\text{status} \in \{\text{OPEN, PENDING, VPS\_PENDING, VPS\_PROCESSING}\}} \text{risk\_amount}$$
+  Enforces that $(\text{Committed Risk} + \text{Proposed Risk}) \le \text{Portfolio Capital} \times \text{max\_portfolio\_heat\_pct}$ (**8.0% max heat ceiling**).
+
+### 10.2 Pillar 2: Execution Velocity & Flash-Fill Circuit Breaker
+* **Sliding Fill Window Tracker (`execution_velocity_tracker`)**: `vps-callback` maintains a 60-second sliding execution window.
+* **15-Minute `VELOCITY_LOCKOUT`**: If $\ge 2$ trades transition to `OPEN` within 60 seconds, the system immediately trips a 15-minute global lockout in `market_context` and sends a high-priority alert to Telegram.
+* All downstream pending order execution routines (`executePendingOrders`) and signal ingestion desks automatically pause while the lockout is active.
+
+### 10.3 Pillar 3: Real-Time Dynamic Spread & Liquidity Gate in EA
+* In `RaineInvestEA.mq5`, before executing `OrderSend()`, the EA calculates live spread in points:
+  $$\text{Live Spread} = \frac{\text{Ask} - \text{Bid}}{\text{Point}}$$
+* Compares against asset-specific thresholds:
+  - **Forex Majors/Minors:** Max 35 points.
+  - **Precious Metals (`XAUUSD`, `XAGUSD`):** Max 45 points.
+  - **Energy (`UKOIL`, `USOIL`):** Max 60 points.
+  - **Equity Indices (`US30`, `NAS100`, `SPX500`, `GER30`, `JP225`):** Max 150 points.
+  - **Crypto / Equities (`BTCUSD`, `ETHUSD`, Tech Stocks):** Max 200 points.
+* If spread is blown out during news spikes or rollover liquidity gaps, the order is aborted with `SPREAD_TOO_WIDE` to protect entry R:R.
+
+### 10.4 Pillar 4: Pre-Flight Margin Level ($\ge 300\%$) & Free Margin Protection
+* In `RaineInvestEA.mq5`, before submitting any order to the broker:
+  - Verifies `AccountInfoDouble(ACCOUNT_MARGIN_LEVEL) >= 300.0%`.
+  - Checks candidate required margin via `OrderCalcMargin()` to ensure required margin $\le 50\%$ of `ACCOUNT_MARGIN_FREE`.
+  - Rejects over-leveraged trades cleanly with `MARGIN_LEVEL_BELOW_300` / `INSUFFICIENT_FREE_MARGIN_BUFFER` callbacks before broker stop-outs can occur.
+
+### 10.5 Pillar 5: Order Queue Serialization & Staggered Dispatch
+* In `RaineInvestEA.mq5` (`ProcessTrades`), inserts a `Sleep(250)` delay between consecutive `ExecuteTrade()` calls and `Sleep(100)` between modifications/closes.
+* Serializes broker execution to prevent MT5 Error 10018 (`TRADE_RETCODE_BUSY`) and ensures orderly transaction attribution on the Supabase ledger.

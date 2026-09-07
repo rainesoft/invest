@@ -258,6 +258,22 @@ SELECT jsonb_pretty(jsonb_build_object(
     ) sub
   ),
 
+  'symbol_exposure_stacking', (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'symbol', sub.symbol,
+      'open_legs', sub.leg_count,
+      'total_volume', sub.total_volume,
+      'distinct_opportunities', sub.distinct_opps
+    )), '[]'::jsonb)
+    FROM (
+      SELECT symbol, count(*) as leg_count, SUM(volume) as total_volume, count(DISTINCT opportunity_id) as distinct_opps
+      FROM user_trades
+      WHERE status IN ('OPEN', 'PENDING', 'VPS_PENDING', 'VPS_PROCESSING')
+      GROUP BY symbol
+      ORDER BY total_volume DESC
+    ) sub
+  ),
+
   'global_settings', (
     SELECT COALESCE(jsonb_object_agg(key, value), '{}'::jsonb)
     FROM system_settings

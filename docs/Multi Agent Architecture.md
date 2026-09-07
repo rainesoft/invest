@@ -115,6 +115,7 @@ Every analysis populates `market_context` with both the **Preferred Scenario** a
   - **Bar-Close Pivot Invalidation:** Closes positions when confirmed bar closes beyond the structural pivot.
   - **20-Bar Horizon TTL Invalidation:** Automatically cancels unfilled limit orders and tightens stagnant positions to Breakeven after 20 bars.
   - **Broker Retry Worker & Weekend Defense:** Manages exponential backoff retries and liquidates high-risk intraday exposure before Friday close.
+  - **Simultaneous Execution & Flash-Fill Defense:** Enforces max 3 concurrent resting pending setups, 8% aggregate committed heat budget, sliding 60s fill velocity circuit breaker (`VELOCITY_LOCKOUT`), MT5 dynamic spread filtering, pre-flight margin level gates ($\ge 300\%$), and 250ms staggered queue execution.
 
 ### 5. `agent-treasury` (Treasury Desk & Solvency Engine)
 *The Fund Comptroller.*
