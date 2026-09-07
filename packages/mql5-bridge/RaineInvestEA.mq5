@@ -634,7 +634,7 @@ void ExecuteTrade(string id, string symbol, string side, double volume, double s
     // --- PILLAR 3: DYNAMIC SPREAD & LIQUIDITY GATE ---
     double liveSpreadPoints = (ask > 0 && bid > 0 && point > 0) ? (ask - bid) / point : 0;
     double maxAllowedSpread = 35.0; // Default Forex 35 pts
-    if(StringFind(brokerSym, "XAU") >= 0 || StringFind(brokerSym, "XAG") >= 0) maxAllowedSpread = 45.0;
+    if(StringFind(brokerSym, "XAU") >= 0 || StringFind(brokerSym, "XAG") >= 0) maxAllowedSpread = 120.0;
     else if(StringFind(brokerSym, "30") >= 0 || StringFind(brokerSym, "100") >= 0 || StringFind(brokerSym, "500") >= 0 || StringFind(brokerSym, "40") >= 0 || StringFind(brokerSym, "225") >= 0) maxAllowedSpread = 150.0;
     else if(StringFind(brokerSym, "BTC") >= 0 || StringFind(brokerSym, "ETH") >= 0) maxAllowedSpread = 200.0;
     else if(StringFind(brokerSym, "OIL") >= 0) maxAllowedSpread = 60.0;
