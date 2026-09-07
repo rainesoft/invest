@@ -52,7 +52,7 @@ serve(async (req) => {
     if (status === "OPEN" && tradeData?.opportunity_id) {
       const { data: oppData } = await supabase
         .from("trade_opportunities")
-        .select("ai_summary")
+        .select("ai_summary, symbol")
         .eq("id", tradeData.opportunity_id)
         .maybeSingle();
       const existingSummary = oppData?.ai_summary || "";
@@ -61,6 +61,64 @@ serve(async (req) => {
         status: "ACTIVE",
         ai_summary: `${existingSummary}\n\n[VPS Engine] Trade executed successfully. Ticket: ${ticket}`
       }).eq("id", tradeData.opportunity_id);
+
+      // --- FLASH-FILL & EXECUTION VELOCITY CIRCUIT BREAKER ---
+      try {
+        const now = Date.now();
+        const { data: trackerRow } = await supabase
+          .from("system_settings")
+          .select("value")
+          .eq("key", "execution_velocity_tracker")
+          .maybeSingle();
+
+        const rawTimestamps: number[] = Array.isArray(trackerRow?.value) ? trackerRow.value : [];
+        const recentTimestamps = rawTimestamps.filter(ts => (now - ts) <= 60000); // 60-second window
+        recentTimestamps.push(now);
+
+        await supabase.from("system_settings").upsert({
+          key: "execution_velocity_tracker",
+          value: recentTimestamps,
+          updated_at: new Date().toISOString()
+        }, { onConflict: "key" });
+
+        // If 2 or more fills occur within 60s, trip the VELOCITY_LOCKOUT circuit breaker
+        if (recentTimestamps.length >= 2) {
+          const expiresAt = new Date(now + 15 * 60 * 1000).toISOString();
+          console.warn(`🚨 [Flash-Fill Breaker] ${recentTimestamps.length} trades executed in <60s! Tripping VELOCITY_LOCKOUT until ${expiresAt}.`);
+
+          await supabase.from("market_context").insert({
+            symbol: "GLOBAL",
+            macro_bias: "VELOCITY_LOCKOUT",
+            expires_at: expiresAt,
+            confidence_score: 100,
+            ai_narrative: `[Flash-Fill Circuit Breaker] ${recentTimestamps.length} trades filled in <60s. Halting pending execution for 15 minutes to protect against simultaneous execution shocks.`,
+            dominant_driver: "EXECUTION_VELOCITY_CIRCUIT_BREAKER"
+          });
+
+          // Dispatch Telegram Alert
+          const tgToken = Deno.env.get("TELEGRAM_BOT_TOKEN");
+          const tgChat = Deno.env.get("TELEGRAM_CHAT_ID");
+          if (tgToken && tgChat) {
+            const alertText = [
+              `🚨 <b>FLASH-FILL CIRCUIT BREAKER ENGAGED</b>`,
+              `━━━━━━━━━━━━━━━━━━━━━`,
+              `⚡ <b>Velocity:</b> ${recentTimestamps.length} trades filled in &lt; 60 seconds`,
+              `🔒 <b>Status:</b> 15-minute <code>VELOCITY_LOCKOUT</code> active across all assets`,
+              `⏳ <b>Expires:</b> ${new Date(now + 15 * 60 * 1000).toLocaleTimeString("en-US", { timeZone: "UTC" })} UTC`,
+              ``,
+              `<i>Resting pending executions paused to protect capital against simultaneous market spikes.</i>`
+            ].join("\n");
+
+            fetch(`https://api.telegram.org/bot${tgToken}/sendMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ chat_id: tgChat, text: alertText, parse_mode: "HTML" })
+            }).catch(err => console.error("[VPS Callback] Telegram dispatch error:", err));
+          }
+        }
+      } catch (velErr: any) {
+        console.error("[VPS Callback] Velocity tracker error:", velErr.message);
+      }
     } else if (status === "FAILED" && tradeData?.opportunity_id) {
       // Check if ALL sibling trades for this opportunity failed
       const { data: siblings } = await supabase.from("user_trades").select("status").eq("opportunity_id", tradeData.opportunity_id);

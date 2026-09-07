@@ -952,6 +952,22 @@ serve(async (req) => {
           return;
         }
 
+        // --- LAYER -0.5: ACTIVE POSITION EXPOSURE & STACKING GUARD (Preventing Code:10019 Margin Exhaustion) ---
+        if (!isManual) {
+          const { data: activeTrades } = await supabase
+            .from("user_trades")
+            .select("id, status, trade_type")
+            .eq("symbol", symbol)
+            .in("status", ["OPEN", "PENDING", "VPS_PENDING", "VPS_PROCESSING"]);
+
+          if (activeTrades && activeTrades.length > 0) {
+            console.log(`[Exposure Guard] Skipping ${symbol}: Active position already open (${activeTrades.length} legs).`);
+            sendEvent({ type: 'progress', message: `[Exposure Guard] Skipping ${symbol}: Active position already open.` });
+            rejections.push({ symbol, reason: `Active position already open (${activeTrades.length} legs)`, layer: "Exposure Guard" });
+            return;
+          }
+        }
+
         // --- LAYER 0: MACRO BLACKOUT WINDOW ---
         if (["XAUUSD", "XAGUSD", "BTCUSD", "UKOIL"].includes(symbol) && allEvents) {
           const nowMs = Date.now();

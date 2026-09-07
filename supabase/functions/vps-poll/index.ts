@@ -110,13 +110,27 @@ serve(async (req) => {
         }
       }
 
-      // Validate SL direction only for fresh pending orders (allow trailing/profit SL for OPEN trades)
-      if (trade.status === "VPS_PENDING" && safeEntry > 0 && safeSl > 0) {
+      // Validate SL and TP direction strictly (Error 10016 Prevention)
+      if (safeEntry > 0) {
         const isLong = trade.side === "LONG" || trade.side === "BUY";
-        if (isLong && safeSl >= safeEntry) {
-          safeSl = Number((safeEntry - (riskDistance > 0 ? riskDistance : 0.001)).toFixed(decimals));
-        } else if (!isLong && safeSl <= safeEntry) {
-          safeSl = Number((safeEntry + (riskDistance > 0 ? riskDistance : 0.001)).toFixed(decimals));
+        const effRisk = riskDistance > 0 ? riskDistance : (safeEntry * 0.005);
+
+        // Validate SL direction for fresh pending orders (allow trailing/profit SL for OPEN trades)
+        if (trade.status === "VPS_PENDING" && safeSl > 0) {
+          if (isLong && safeSl >= safeEntry) {
+            safeSl = Number((safeEntry - effRisk).toFixed(decimals));
+          } else if (!isLong && safeSl <= safeEntry) {
+            safeSl = Number((safeEntry + effRisk).toFixed(decimals));
+          }
+        }
+
+        // Validate TP direction unconditionally
+        if (safeTp > 0) {
+          if (isLong && safeTp <= safeEntry) {
+            safeTp = Number((safeEntry + (effRisk * 1.75)).toFixed(decimals));
+          } else if (!isLong && safeTp >= safeEntry) {
+            safeTp = Number((safeEntry - (effRisk * 1.75)).toFixed(decimals));
+          }
         }
       }
 

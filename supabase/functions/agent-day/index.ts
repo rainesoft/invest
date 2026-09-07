@@ -690,6 +690,21 @@ serve(async (req) => {
               return;
             }
 
+            // --- ACTIVE POSITION EXPOSURE & STACKING GUARD (Preventing Code:10019 Margin Exhaustion) ---
+            if (!isManual) {
+              const { data: activeTrades } = await supabase
+                .from("user_trades")
+                .select("id, status, trade_type")
+                .eq("symbol", symbol)
+                .in("status", ["OPEN", "PENDING", "VPS_PENDING", "VPS_PROCESSING"]);
+
+              if (activeTrades && activeTrades.length > 0) {
+                console.log(`[Exposure Guard] Skipping ${symbol}: Active position already open (${activeTrades.length} legs).`);
+                sendEvent({ type: 'progress', message: `[Exposure Guard] Skipping ${symbol}: Active position already open.` });
+                return;
+              }
+            }
+
             // --- SESSION-AWARE LIQUIDITY GATE FOR EQUITY INDICES ---
             const equityIndices = ["US30", "NAS100", "SPX500", "GER30"];
             if (!isManual && equityIndices.includes(symbol)) {

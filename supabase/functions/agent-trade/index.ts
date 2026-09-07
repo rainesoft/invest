@@ -84,13 +84,68 @@ function isCrypto(symbol: string): boolean {
   return cryptoBases.some(c => upper.startsWith(c)) || upper.endsWith("USDT");
 }
 
+function isUsEquity(symbol: string): boolean {
+  if (!symbol) return false;
+  const upper = symbol.toUpperCase();
+  const equities = ["AAPL", "MSFT", "NVDA", "AMZN", "TSLA", "META", "GOOGL", "GOOG", "NFLX", "AMD"];
+  return equities.includes(upper);
+}
+
+function isCommodity(symbol: string): boolean {
+  if (!symbol) return false;
+  const upper = symbol.toUpperCase();
+  return ["XAUUSD", "XAGUSD", "UKOIL", "USOIL"].includes(upper);
+}
+
+function isIndex(symbol: string): boolean {
+  if (!symbol) return false;
+  const upper = symbol.toUpperCase();
+  return ["US30", "NAS100", "USTEC", "SPX500", "US500", "GER30", "GER40", "DE30", "JP225"].includes(upper);
+}
+
 function isMarketOpen(symbol: string): boolean {
-  if (isCrypto(symbol)) return true;
+  if (!symbol) return false;
+  const upper = symbol.toUpperCase();
+
+  // 1. Crypto is 24/7/365
+  if (isCrypto(upper)) return true;
+
   const now = new Date();
   const day = now.getUTCDay();
   const hour = now.getUTCHours();
-  if ((day === 5 && hour >= 22) || (day === 6) || (day === 0 && hour < 22)) return false;
-  if (hour === 22) return false;
+  const minute = now.getUTCMinutes();
+  const totalMinutes = hour * 60 + minute;
+
+  // 2. Saturday is completely closed
+  if (day === 6) return false;
+
+  // 3. US Equities (Monday - Friday 13:35 UTC to 19:55 UTC)
+  if (isUsEquity(upper)) {
+    if (day === 0 || day === 6) return false;
+    return totalMinutes >= 815 && totalMinutes <= 1195;
+  }
+
+  // 4. Commodities (XAUUSD, XAGUSD, UKOIL, USOIL)
+  if (isCommodity(upper)) {
+    if (day === 5 && totalMinutes >= 1260) return false; // Closes Friday 21:00 UTC
+    if (day === 0 && totalMinutes < 1380) return false;  // Opens Sunday 23:00 UTC
+    if (day >= 1 && day <= 4 && totalMinutes >= 1260 && totalMinutes < 1335) return false; // Daily rollover
+    return true;
+  }
+
+  // 5. Equity Indices
+  if (isIndex(upper)) {
+    if (day === 5 && totalMinutes >= 1260) return false; // Closes Friday 21:00 UTC
+    if (day === 0 && totalMinutes < 1380) return false;  // Closed until Sunday 23:00 UTC
+    if (day >= 1 && day <= 4 && totalMinutes >= 1275 && totalMinutes < 1335) return false; // Daily rollover
+    return true;
+  }
+
+  // 6. Forex (Standard 24/5)
+  if (day === 5 && totalMinutes >= 1260) return false; // Closes Friday 21:00 UTC
+  if (day === 0 && totalMinutes < 1325) return false;  // Opens Sunday 22:05 UTC
+  if (day >= 1 && day <= 4 && totalMinutes >= 1315 && totalMinutes < 1325) return false; // Daily rollover
+
   return true;
 }
 
@@ -410,17 +465,17 @@ async function executePendingOrders(supabase: any) {
   let executedCount = 0;
 
   for (const symbol in groupedBySymbol) {
-    // Guard: Volatility Lockout (Pre/Post-News Protection)
+    // Guard: Volatility & Velocity Lockout (Pre/Post-News Protection & Flash-Fill Breaker)
     const { data: lockout } = await supabase
       .from("market_context")
-      .select("id")
+      .select("id, macro_bias, expires_at")
       .in("symbol", [symbol, "GLOBAL"])
-      .eq("macro_bias", "VOLATILITY_LOCKOUT")
+      .in("macro_bias", ["VOLATILITY_LOCKOUT", "VELOCITY_LOCKOUT"])
       .gt("expires_at", new Date().toISOString())
       .limit(1);
 
     if (lockout && lockout.length > 0) {
-      console.log(`[Agent Trade] Skipping pending order execution for ${symbol} due to active VOLATILITY_LOCKOUT.`);
+      console.log(`[Agent Trade] Skipping pending order execution for ${symbol} due to active ${lockout[0].macro_bias} (expires ${lockout[0].expires_at}).`);
       continue;
     }
 
@@ -2072,14 +2127,90 @@ for (const [orderId, trade] of orderMap) {
       }
     }
 
+    // --- MARKET HOURS PRE-FLIGHT CHECK (Universal Broker Guard) ---
+    if (!isMarketOpen(signal.symbol)) {
+      const rejectReason = `Rejected by Execution Desk: Market is closed for ${signal.symbol}.`;
+      await supabase.from("trade_opportunities").update({ 
+        status: "REJECTED", 
+        ai_summary: (signal.ai_summary || "") + "\n\n[Execution Desk] " + rejectReason, 
+        ai_risks: rejectReason,
+        closed_at: new Date().toISOString()
+      }).eq("id", signal.id);
+      console.log(`[Execution Desk] Rejected ${signal.symbol}: Market is closed.`);
+      return new Response(JSON.stringify({ success: true, message: `Rejected: Market closed for ${signal.symbol}` }), { status: 200 });
+    }
+
+    // --- SYMBOL EXPOSURE & CONCURRENCY GUARD (Preventing Code:10019 Margin Exhaustion) ---
+    if (!isManual) {
+      const { data: existingActiveTrades } = await supabase
+        .from("user_trades")
+        .select("id, opportunity_id, status")
+        .eq("symbol", signal.symbol)
+        .in("status", ["OPEN", "PENDING", "VPS_PENDING", "VPS_PROCESSING"]);
+
+      if (existingActiveTrades && existingActiveTrades.length > 0) {
+        const distinctOpp = existingActiveTrades.some((t: any) => t.opportunity_id !== signal.id);
+        if (distinctOpp) {
+          const rejectReason = `Rejected by Execution Desk: Active position already exists for ${signal.symbol} (${existingActiveTrades.length} open legs). Preventing duplicate margin exposure.`;
+          await supabase.from("trade_opportunities").update({ 
+            status: "REJECTED", 
+            ai_summary: (signal.ai_summary || "") + "\n\n[Execution Desk] " + rejectReason, 
+            ai_risks: rejectReason,
+            closed_at: new Date().toISOString()
+          }).eq("id", signal.id);
+          console.log(`[Execution Desk] ${rejectReason}`);
+          return new Response(JSON.stringify({ success: true, message: rejectReason }), { status: 200 });
+        }
+      }
+    }
+
+    // --- VELOCITY / FLASH-FILL LOCKOUT GUARD ---
+    const { data: velocityLockout } = await supabase
+      .from("market_context")
+      .select("id, expires_at")
+      .in("symbol", [signal.symbol, "GLOBAL"])
+      .eq("macro_bias", "VELOCITY_LOCKOUT")
+      .gt("expires_at", new Date().toISOString())
+      .limit(1);
+
+    if (velocityLockout && velocityLockout.length > 0) {
+      const rejectReason = `Rejected by Execution Desk: Active VELOCITY_LOCKOUT circuit breaker engaged until ${velocityLockout[0].expires_at}. Rapid execution cascade detected.`;
+      await supabase.from("trade_opportunities").update({
+        status: "REJECTED",
+        ai_summary: (signal.ai_summary || "") + "\n\n[Execution Desk] " + rejectReason,
+        ai_risks: rejectReason,
+        closed_at: new Date().toISOString(),
+      }).eq("id", signal.id);
+      console.log(`[Execution Desk] ${rejectReason}`);
+      return new Response(JSON.stringify({ success: true, message: rejectReason }), { status: 200 });
+    }
+
+    // --- ADAPTIVE LIMIT ORDER INVERSION GUARD (Preventing Code:10016 / Code:10044) ---
     let actionType = "ORDER_TYPE_BUY";
     const aiOrderType = (signal.entry_plan_json?.order_type || "Market").toUpperCase();
-    if (aiOrderType.includes("BUY LIMIT")) actionType = "ORDER_TYPE_BUY_LIMIT";
-    else if (aiOrderType.includes("SELL LIMIT")) actionType = "ORDER_TYPE_SELL_LIMIT";
-    else if (aiOrderType.includes("BUY STOP")) actionType = "ORDER_TYPE_BUY_STOP";
-    else if (aiOrderType.includes("SELL STOP")) actionType = "ORDER_TYPE_SELL_STOP";
-    else if (signal.side === "LONG") actionType = "ORDER_TYPE_BUY";
-    else actionType = "ORDER_TYPE_SELL";
+    if (aiOrderType.includes("BUY LIMIT")) {
+      if (currentPrice > 0 && defaultEntryPrice && defaultEntryPrice >= currentPrice) {
+        console.warn(`[Limit Inversion Guard] BUY LIMIT entry price (${defaultEntryPrice}) >= market price (${currentPrice}). Auto-converting to BUY MARKET.`);
+        actionType = "ORDER_TYPE_BUY";
+      } else {
+        actionType = "ORDER_TYPE_BUY_LIMIT";
+      }
+    } else if (aiOrderType.includes("SELL LIMIT")) {
+      if (currentPrice > 0 && defaultEntryPrice && defaultEntryPrice <= currentPrice) {
+        console.warn(`[Limit Inversion Guard] SELL LIMIT entry price (${defaultEntryPrice}) <= market price (${currentPrice}). Auto-converting to SELL MARKET.`);
+        actionType = "ORDER_TYPE_SELL";
+      } else {
+        actionType = "ORDER_TYPE_SELL_LIMIT";
+      }
+    } else if (aiOrderType.includes("BUY STOP")) {
+      actionType = "ORDER_TYPE_BUY_STOP";
+    } else if (aiOrderType.includes("SELL STOP")) {
+      actionType = "ORDER_TYPE_SELL_STOP";
+    } else if (signal.side === "LONG") {
+      actionType = "ORDER_TYPE_BUY";
+    } else {
+      actionType = "ORDER_TYPE_SELL";
+    }
 
     const isMarketOrder = actionType === "ORDER_TYPE_BUY" || actionType === "ORDER_TYPE_SELL";
 
@@ -2088,19 +2219,6 @@ for (const [orderId, trade] of orderMap) {
     let pmReason = "Standard Allocation";
 
     if (!isManual) {
-      // --- MARKET HOURS PRE-FLIGHT CHECK ---
-      if (!isMarketOpen(signal.symbol)) {
-        const rejectReason = `Rejected by Execution Desk: Market is closed for ${signal.symbol}.`;
-        await supabase.from("trade_opportunities").update({ 
-          status: "REJECTED", 
-          ai_summary: (signal.ai_summary || "") + "\n\n[Execution Desk] " + rejectReason, 
-          ai_risks: rejectReason,
-          closed_at: new Date().toISOString()
-        }).eq("id", signal.id);
-        console.log(`[Execution Desk] Rejected ${signal.symbol}: Market is closed.`);
-        return new Response(JSON.stringify({ success: true, message: `Rejected: Market closed for ${signal.symbol}` }), { status: 200 });
-      }
-
       // Query recent signals for this symbol in the last 4 hours (tight confluence window)
       const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
       const { data: recentSignals } = await supabase

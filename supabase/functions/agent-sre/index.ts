@@ -430,6 +430,30 @@ serve(async (req) => {
       }
     }
 
+    // 4I. Concurrent Symbol Stacking & Margin Exposure Audit
+    const { data: openTradesBySymbol } = await supabase
+      .from("user_trades")
+      .select("symbol, volume, status, opportunity_id")
+      .in("status", ["OPEN", "PENDING", "VPS_PENDING", "VPS_PROCESSING"]);
+
+    if (openTradesBySymbol && openTradesBySymbol.length > 0) {
+      const symCounts: Record<string, { count: number; totalVol: number; opps: Set<string> }> = {};
+      for (const t of openTradesBySymbol) {
+        if (!symCounts[t.symbol]) {
+          symCounts[t.symbol] = { count: 0, totalVol: 0, opps: new Set() };
+        }
+        symCounts[t.symbol].count++;
+        symCounts[t.symbol].totalVol += Number(t.volume || 0);
+        if (t.opportunity_id) symCounts[t.symbol].opps.add(t.opportunity_id);
+      }
+
+      for (const [sym, data] of Object.entries(symCounts)) {
+        if (data.opps.size > 2) {
+          issues.push(`⚠️ <b>High Symbol Exposure Stacking:</b> ${sym} has ${data.opps.size} distinct active opportunities (${data.count} legs, total ${data.totalVol.toFixed(2)} lots).`);
+        }
+      }
+    }
+
     // ─────────────────────────────────────────────────────────────
     // PROBE 5: MT5 VPS EA Heartbeat & Connectivity
     // ─────────────────────────────────────────────────────────────
