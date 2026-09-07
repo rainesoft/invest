@@ -186,7 +186,8 @@ Provide a concise, 1-2 sentence post-mortem explanation. Do not use markdown.`;
           body: JSON.stringify({
             model: "gpt-4o-mini",
             messages: [{ role: "user", content: prompt }],
-            temperature: 0.2
+            temperature: 0.2,
+            max_tokens: 120
           })
         });
 
