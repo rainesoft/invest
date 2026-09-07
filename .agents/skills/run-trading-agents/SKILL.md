@@ -186,9 +186,21 @@ When an asset fails to achieve S-Tier confidence (e.g. confidence < 75 due to mi
      * At $75\%$ Win Probability (S-Tier standard):
        $$EV_{\text{TP2}} = (0.75 \times \$80.50) - (0.25 \times \$46.00) = \$60.38 - \$11.50 = +\$48.88\text{ per trade}$$
        $$EV_{\text{TP3}} = (0.75 \times \$183.80) - (0.25 \times \$46.00) = \$137.85 - \$11.50 = +\$126.35\text{ per trade}$$
-   - **BTCUSD Contract Mathematics (0.01 lot = 0.01 BTC = $0.01 / $1.00 move)**:
-     * Point Value = $\$0.01\text{ per } \$1.00\text{ move}$.
-     * Example Buy Limit @ $\$78,636.23$, SL @ $\$73,750.03$ (Risk Distance = $\$4,886.20 \implies \$48.86\text{ risk}$), TP2 @ $\$90,244.59$ (Reward Distance = $\$11,608.36 \implies \$116.08\text{ reward}$), R:R = $1:2.38$.
-     * At $65\%$ Win Probability: $EV = (0.65 \times \$116.08) - (0.35 \times \$48.86) = \$75.45 - \$17.10 = +\$58.35\text{ per trade}$.
-   - Prioritize capital allocation to setups with $EV > 1.0R$ and asymmetric upside multipliers.
+    - **XAUUSD Contract Mathematics (0.01 lot = 1 oz = $1.00 / $1.00 move)**:
+      * Point Value = $\$1.00\text{ per } \$1.00\text{ move}$.
+      * Example S-Tier Buy Limit @ $\$4,425.00$, SL @ $\$4,384.00$ (Risk Distance = $\$41.00 \implies \$41.00\text{ risk}$), TP1 @ $\$4,546.87$ (Reward Distance = $\$121.87$), TP2 @ $\$4,728.30$ (Reward Distance = $\$303.30 \implies \$303.30\text{ reward}$), TP3 @ $\$4,900.00$ (Reward Distance = $\$475.00 \implies \$475.00\text{ reward}$), R:R = $1:7.40\text{ to }1:8.28$.
+      * At $75\%$ Win Probability (S-Tier Fib floor + macro alignment):
+        $$EV_{\text{TP2}} = (0.75 \times \$303.30) - (0.25 \times \$41.00) = \$227.48 - \$10.25 = +\$217.23\text{ per trade}$$
+        $$EV_{\text{TP3}} = (0.75 \times \$475.00) - (0.25 \times \$41.00) = \$356.25 - \$10.25 = +\$346.00\text{ per trade}$$
+    - Prioritize capital allocation to setups with $EV > 1.0R$ and asymmetric upside multipliers.
 
+---
+
+## 10. Operational Best Practices & Pipeline Optimization
+
+1. **Edge Function Batching (150s Timeout Guard)**:
+   - Always run `agent-day` and `agent-swing` in chunked symbol batches (e.g. 5-8 symbols per HTTP POST) when querying the full 24-asset roster to prevent exceeding the Supabase Edge Function 150-second execution limit.
+2. **Multi-Provider LLM Resilience**:
+   - Ensure the LLM gateway supports seamless fallback across OpenAI, Azure OpenAI, Anthropic, or DeepSeek so automated agent runs are immune to single-provider 429 quota exhaustion.
+3. **Session Filter Overrides for Manual Audits**:
+   - Pass `--is_manual` or `{ "is_manual": true }` to evaluate structural Fibonacci, chartist patterns, and S/R flips during Asian session or weekend rollover without being blocked by execution session filters.
