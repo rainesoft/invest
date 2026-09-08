@@ -1883,15 +1883,20 @@ export function calculateInstitutionalTradingCentralLevels(
       : Number((pivotSl - requiredRiskDist).toFixed(5));
 
     const offsetFromCurrent = Math.abs(currentPrice - calculatedLimit);
-    const maxOffset = (atr && atr > 0) ? (isHighMomentum ? atr * 0.10 : atr * 0.25) : currentPrice * 0.002;
+    // In high-momentum expansion regimes (ADX >= 25, volume surge), deep pullback limit orders result in missed fills.
+    // Tighten the permissible entry offset (0.04x ATR) to ensure aggressive fill urgency while preserving R:R.
+    const maxOffset = (atr && atr > 0)
+      ? (isHighMomentum ? atr * 0.04 : atr * 0.25)
+      : (isHighMomentum ? currentPrice * 0.0005 : currentPrice * 0.002);
 
     // Adaptive Momentum & Fill Optimization:
     // If the calculated pullback limit is too distant (> maxOffset), do NOT pull entry unreachable distances away.
     // Instead, clamp entry tight to market price (<= maxOffset) and adaptively expand TP2 to satisfy >= 1.75 R:R!
     if (offsetFromCurrent > maxOffset || isHighMomentum) {
+      const actualOffset = isHighMomentum ? Math.min(offsetFromCurrent, maxOffset) : maxOffset;
       suggestedEntry = isLong
-        ? Number((currentPrice - maxOffset).toFixed(5))
-        : Number((currentPrice + maxOffset).toFixed(5));
+        ? Number((currentPrice - actualOffset).toFixed(5))
+        : Number((currentPrice + actualOffset).toFixed(5));
 
       const effectiveRisk = Math.abs(suggestedEntry - pivotSl);
       const targetReward = effectiveRisk * (minRr + 0.05);
@@ -1900,9 +1905,10 @@ export function calculateInstitutionalTradingCentralLevels(
         ? Number((suggestedEntry + targetReward).toFixed(5))
         : Number((suggestedEntry - targetReward).toFixed(5));
 
+      const tp1Ratio = isHighMomentum ? 0.60 : 0.50;
       finalTp1 = isLong
-        ? Number((suggestedEntry + (targetReward * 0.5)).toFixed(5))
-        : Number((suggestedEntry - (targetReward * 0.5)).toFixed(5));
+        ? Number((suggestedEntry + (targetReward * tp1Ratio)).toFixed(5))
+        : Number((suggestedEntry - (targetReward * tp1Ratio)).toFixed(5));
 
       orderType = isLong ? "BUY LIMIT" : "SELL LIMIT";
     } else {
