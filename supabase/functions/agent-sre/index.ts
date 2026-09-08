@@ -318,21 +318,27 @@ serve(async (req) => {
       .eq("status", "FAILED")
       .gte("created_at", oneHourAgoIso);
 
-    if (recentFailedTrades && recentFailedTrades.length > 0) {
-      const getErrorDescription = (errMsg: string | null) => {
-        if (!errMsg) return "Unknown broker error";
-        if (errMsg.includes("10013")) return "Code:10013 (Invalid Request / Unmapped Symbol Alias — verify broker symbol e.g. SPX500->US500, NAS100->USTEC)";
-        if (errMsg.includes("10014")) return "Code:10014 (Invalid Volume / Lot Step)";
-        if (errMsg.includes("10015")) return "Code:10015 (Invalid Price / Slipped Breakout Entry)";
-        if (errMsg.includes("10016")) return "Code:10016 (Invalid Stops / TP Direction Mismatch)";
-        if (errMsg.includes("10018")) return "Code:10018 (Market Closed / Session Inactive)";
-        if (errMsg.includes("10019")) return "Code:10019 (Insufficient Free Margin)";
-        if (errMsg.includes("10044")) return "Code:10044 (Close Only / Symbol Trading Restricted or Alias Suffix Required — verify account permissions or symbol suffix e.g. NVDA_m/NVDAm)";
-        return errMsg;
-      };
+    const formatExecutionError = (errMsg: string | null) => {
+      if (!errMsg) return "Unknown broker error";
+      if (errMsg.startsWith("SPREAD_TOO_WIDE")) {
+        const spreadVal = errMsg.split(":")[1] || "";
+        return `Pre-Flight Spread Guard Rejection (Live spread ${spreadVal} points exceeded max tolerance — rollover or low liquidity)`;
+      }
+      if (errMsg.includes("VOLATILITY_SPIKE")) return "Pre-Flight Volatility Spike Guard (Excessive short-term ATR expansion)";
+      if (errMsg.includes("NEWS_BLOCKED")) return "Pre-Flight News Blackout Guard (High-impact macroeconomic event window active)";
+      if (errMsg.includes("10013")) return "Code:10013 (Invalid Request / Unmapped Symbol Alias — verify broker symbol e.g. SPX500->US500, NAS100->USTEC)";
+      if (errMsg.includes("10014")) return "Code:10014 (Invalid Volume / Lot Step)";
+      if (errMsg.includes("10015")) return "Code:10015 (Invalid Price / Slipped Breakout Entry)";
+      if (errMsg.includes("10016")) return "Code:10016 (Invalid Stops / TP Direction Mismatch)";
+      if (errMsg.includes("10018")) return "Code:10018 (Market Closed / Session Inactive)";
+      if (errMsg.includes("10019")) return "Code:10019 (Insufficient Free Margin)";
+      if (errMsg.includes("10044")) return "Code:10044 (Close Only / Symbol Trading Restricted or Alias Suffix Required — verify account permissions or symbol suffix e.g. NVDA_m/NVDAm)";
+      return errMsg;
+    };
 
+    if (recentFailedTrades && recentFailedTrades.length > 0) {
       const sample = recentFailedTrades[0];
-      const errorDesc = getErrorDescription(sample.error_message);
+      const errorDesc = formatExecutionError(sample.error_message);
       issues.push(`🚨 <b>Broker Execution Errors (${recentFailedTrades.length} in last hour):</b> ${sample.symbol} ${sample.side} failed with <code>${errorDesc}</code>.`);
     }
 
@@ -344,18 +350,6 @@ serve(async (req) => {
       .gte("created_at", twentyFourHoursAgoIso);
 
     if (allRecentFailedTrades && allRecentFailedTrades.length > 0) {
-      const getErrorDescription = (errMsg: string | null) => {
-        if (!errMsg) return "Unknown broker error";
-        if (errMsg.includes("10013")) return "Code:10013 (Invalid Request / Unmapped Symbol Alias — verify broker symbol e.g. SPX500->US500, NAS100->USTEC)";
-        if (errMsg.includes("10014")) return "Code:10014 (Invalid Volume / Lot Step)";
-        if (errMsg.includes("10015")) return "Code:10015 (Invalid Price / Slipped Breakout Entry)";
-        if (errMsg.includes("10016")) return "Code:10016 (Invalid Stops / TP Direction Mismatch)";
-        if (errMsg.includes("10018")) return "Code:10018 (Market Closed / Session Inactive)";
-        if (errMsg.includes("10019")) return "Code:10019 (Insufficient Free Margin)";
-        if (errMsg.includes("10044")) return "Code:10044 (Close Only / Symbol Trading Restricted or Alias Suffix Required — verify account permissions or symbol suffix e.g. NVDA_m/NVDAm)";
-        return errMsg;
-      };
-
       for (const ft of allRecentFailedTrades) {
         if (ft.opportunity_id) {
           const { data: opp } = await supabase
@@ -366,7 +360,7 @@ serve(async (req) => {
             .maybeSingle();
 
           if (opp) {
-            const specificReason = getErrorDescription(ft.error_message);
+            const specificReason = formatExecutionError(ft.error_message);
             const failReason = `Broker Execution Failed: ${specificReason}`;
             await supabase.from("trade_opportunities").update({
               status: "REJECTED",
