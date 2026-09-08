@@ -1280,6 +1280,65 @@ In `/functions/v1/vps-callback`:
 
 ---
 
+## ⚠️ 3T. Pre-Flight Spread Guard Rejections & Strict Technical Indicator Property Typing
+
+> [!CAUTION]
+> **Incident (2026-09-07):** During Asian session and market rollover, multiple Gold (`XAUUSD`) execution requests failed with `SPREAD_TOO_WIDE:90.0` because live broker spread exceeded allowable execution limits ($0.45 / 45 points). Additionally, in `agent-day`, proximity checks referenced `snapshot.pivot_s1` and `snapshot.pivot_r1` directly instead of the typed `LogicContext` array fields (`snapshot.htf_support?.[0]`, `snapshot.htf_resistance?.[0]`), causing Deno TypeScript compilation failures (`TS2339`).
+
+### Standard Rule:
+1. **Pre-Flight Spread Limit Guard:** In `agent-trade/index.ts`, orders are rejected prior to broker transmission if the live spread exceeds symbol-specific thresholds (e.g., `XAUUSD: 45` points, `EURUSD: 20` points). When rejected, `user_trades` records `status = 'FAILED'` with `error_message = 'SPREAD_TOO_WIDE:<current_spread>'`.
+2. **`agent-sre` Automated Telemetry Recognition:** `agent-sre` Probe 4F explicitly parses `SPREAD_TOO_WIDE:<spread>`, formats a descriptive incident notice in telemetry alerts, and auto-reconciles the parent opportunity to `REJECTED`.
+3. **Strict Indicator Property Typing:** In `packages/strategy/indicators.ts`, the `LogicContext` interface defines pivot points as:
+   - `htf_pivot?: number;` (HTF Daily/4H pivot point)
+   - `htf_support?: number[];` (Array of HTF support levels, `[0]` = S1, `[1]` = S2)
+   - `htf_resistance?: number[];` (Array of HTF resistance levels, `[0]` = R1, `[1]` = R2)
+---
+
+## ⚠️ 3U. Institutional Execution Best Practices & Algorithmic Filters
+
+> [!IMPORTANT]
+> **Audit & Institutional Alignment (2026-09-08):** To maximize quantitative expectancy, eliminate mid-range chop whipsaws, prevent premature weekend-defense closures on multi-day swing setups, and enforce floor pivot order flow mechanics, the autonomous trading agents enforce 4 institutional best practices:
+
+### 1. Range-Extreme Value Area Filter (Auction Market Theory / Market Profile)
+- **Problem:** In sideways or consolidating regimes (`trend_alignment = 'CHOP'`), the Point of Control (POC) / Value Area Midline represents fair value agreement with near-zero directional edge (50/50 chop).
+- **Rule:** In `agent-day/index.ts`, when `snapshot.trend_alignment === 'CHOP'`, evaluate relative Value Area position `(current_price - val_price) / (vah_price - val_price)`. If price is in the dead middle (30% to 70% of Value Area) without a confirmed boundary candlestick rejection, Asian session liquidity sweep, or structural S/R flip, reject candidate pre-AI with `REJECTED_BY_DETERMINISTIC_FILTER: Mid-Range Balance`.
+
+### 2. Late-Week Swing Entry Gate (Institutional Holding Horizon Governance)
+- **Problem:** Swing trades (1D timeframe) require 3 to 10 trading days runway to mature. Initiating non-crypto swing setups on Thursday afternoon or Friday gives them <8h before Friday 20:30 UTC `weekend-defense` cuts unestablished positions, creating recurring -0.1R frictional drag.
+- **Rule:** In `agent-swing/index.ts`, if `!isManual` and the asset is not 24/7 crypto (`!isCrypto(symbol)`), halt origination when `(UTC Day == 4 && UTC Hour >= 16) || UTC Day == 5` with `REJECTED_BY_WEEKEND_PROXIMITY_GATE: Late-Week Swing Freeze`. 24/7 Crypto assets (`BTCUSD`, `ETHUSD`) remain fully active through the weekend.
+
+### 3. Intraday Pivot Session Alignment Guard (Floor Trader Pivot Order Flow)
+- **Problem:** Below the Daily Central Pivot (`snapshot.htf_pivot`), aggregate intraday auction flow is structurally seller-controlled. Fading upward into the pivot without structural support confluence frequently runs into institutional overhead supply.
+- **Rule:** In `agent-day/index.ts` Layer B Cognitive Guard:
+  - Longs below Daily Pivot (>0.15% below) require structural S1/S2 extreme support (`htf_support[0]`), an Asian low sweep (`SWEPT_LOW`), a confirmed bullish S/R flip, or oversold RSI (≤30).
+  - Shorts above Daily Pivot (>0.15% above) require structural R1/R2 extreme resistance (`htf_resistance[0]`), an Asian high sweep (`SWEPT_HIGH`), a confirmed bearish S/R flip, or overbought RSI (≥70).
+  - Violations are rejected at Layer B with `Sub-Pivot Long Trap` or `Super-Pivot Short Trap`.
+
+### 4. Dynamic TP1 Momentum Scaling (Wilder's ADX Regime)
+- **Problem:** In explosive trend expansions ($ADX \ge 30$), scaling out 50% of the position at fixed 1.0R cuts winning momentum moves prematurely.
+- **Rule:** When `snapshot.adx_14 >= 30`:
+  - `agent-day` expands TP1 target ratio from 50% to 65% of structural span (~1.35R–1.50R).
+  - `agent-swing` scales `tp1Multiplier` from 1.0R to 1.35R.
+  - `calculateInstitutionalTradingCentralLevels` adapts TP1 factor to 60% for `isHighMomentum`.
+
+### 5. Pre-AI Cross-Asset Correlation Lock & Alignment
+- **Problem:** When an agent opens an active position in an asset class (e.g. `GER30 SHORT`), sibling agents on correlated assets (`NAS100`, `SPX500`, `US30`) frequently generate contradictory `LONG` signals, wasting LLM tokens and failing at the execution desk.
+- **Rule:** In `agent-day` and `agent-swing`, pre-AI checks query open trades across canonical correlation groups (`["XAUUSD", "XAGUSD"]`, `["US30", "NAS100", "SPX500", "GER30", "JP225"]`, `["EURUSD", "GBPUSD"]`, `["UKOIL", "USOIL"]`). Contradictory opposing signals are rejected in Layer B with `Rejected by Execution Desk: Contradictory signal against open highly correlated position`.
+
+### 6. Dynamic Limit Fill Urgency Factor (Market Microstructure Slippage Control)
+- **Problem:** High-conviction momentum setups ($ADX \ge 25$, volume surges) that calculate pullback limit orders too deep ($0.25\times\text{ ATR}$) frequently expire unfilled while the predicted move runs away.
+- **Rule:** In `calculateInstitutionalTradingCentralLevels`, when `isHighMomentum` is active, the entry offset is tightened dynamically to $0.04\times\text{ ATR}$ to ensure aggressive fill urgency while preserving $\ge 1:1.75$ R:R.
+
+### 7. Rollover Liquidity & Spread Protection Gate
+- **Problem:** Daily interbank settlement rollover (21:00 UTC to 22:15 UTC) causes broker spreads on Gold, Energy, and Forex to widen 3x–5x, causing signals to fail at MT5 transmission (`SPREAD_TOO_WIDE:90.0`).
+- **Rule:** In `agent-swing/index.ts`, non-crypto asset evaluation is bypassed between 21:00 UTC and 22:15 UTC with `REJECTED_BY_ROLLOVER_SPREAD_GATE`. 24/7 Crypto assets remain fully active.
+
+### 8. Higher Timeframe Directional Hierarchy (Hive Mind)
+- **Problem:** Intraday agents operating in isolation may fight dominant multi-day institutional flow established by the 1D swing desk.
+- **Rule:** In `agent-day/index.ts`, the agent dynamically queries active 1D swing opportunities and injects `[HIVE-MIND 1D MACRO DIRECTIVE]` into `fundamental_context`, forcing intraday tactical execution to align with top-down macro bias.
+
+---
+
 ## 4. External Integrations
 Verify that external data pipelines and notification systems are alive.
 
