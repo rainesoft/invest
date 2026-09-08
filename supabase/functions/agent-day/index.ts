@@ -706,6 +706,49 @@ serve(async (req) => {
               }
             }
 
+            // --- PRE-AI CORRELATED ASSET EXPOSURE & HIVE-MIND ALIGNMENT ---
+            const correlationGroups: string[][] = [
+              ["XAUUSD", "XAGUSD"],
+              ["US30", "NAS100", "SPX500", "GER30", "JP225"],
+              ["EURUSD", "GBPUSD"],
+              ["UKOIL", "USOIL"],
+            ];
+            const group = correlationGroups.find(g => g.includes(symbol));
+            let openCorrelatedTrades: { side: string; symbol: string }[] = [];
+            if (group && !isManual) {
+              const peers = group.filter(s => s !== symbol);
+              const { data: peerTrades } = await supabase
+                .from("user_trades")
+                .select("side, symbol")
+                .in("symbol", peers)
+                .in("status", ["OPEN", "PENDING", "VPS_PENDING", "VPS_PROCESSING"]);
+              if (peerTrades && peerTrades.length > 0) {
+                openCorrelatedTrades = peerTrades;
+              }
+            }
+
+            // --- HIVE-MIND MACRO SWING DIRECTIVE ---
+            let macroSwingDirective: string | null = null;
+            try {
+              const { data: activeSwings } = await supabase
+                .from("trade_opportunities")
+                .select("side, symbol, ai_summary, confidence")
+                .in("symbol", group || [symbol])
+                .eq("timeframe", "1d")
+                .in("status", ["ACTIVE", "APPROVED", "PUBLISHED", "PENDING_APPROVAL"])
+                .order("created_at", { ascending: false })
+                .limit(1);
+
+              if (activeSwings && activeSwings.length > 0) {
+                const swing = activeSwings[0];
+                macroSwingDirective = `[HIVE-MIND 1D MACRO DIRECTIVE] The 1D Swing Desk has an active ${swing.side} thesis on ${swing.symbol} (Confidence: ${swing.confidence}%). Intraday (30m) analysis MUST prioritize ${swing.side} setups or require exceptional counter-trend S/R divergence confirmation.`;
+                console.log(`[Hive Mind] ${symbol} aligned with 1D macro ${swing.side} directive from ${swing.symbol}.`);
+                sendEvent({ type: 'progress', message: `[Hive Mind] Aligned with 1D ${swing.side} thesis from ${swing.symbol}.` });
+              }
+            } catch (e: any) {
+              console.warn(`[Hive Mind] Failed to fetch 1D swing context: ${e.message}`);
+            }
+
             // --- SESSION-AWARE LIQUIDITY GATE FOR EQUITY INDICES ---
             const equityIndices = ["US30", "NAS100", "SPX500", "GER30"];
             if (!isManual && equityIndices.includes(symbol)) {
@@ -925,6 +968,10 @@ serve(async (req) => {
               }
             }
 
+            if (macroSwingDirective) {
+              fundamental_context += `\n\n${macroSwingDirective}`;
+            }
+
             // ETF flow sentiment for crypto assets
             let etf_flow_context: string | undefined;
             if (symbol.includes("BTC") || symbol.includes("ETH")) {
@@ -1113,8 +1160,8 @@ serve(async (req) => {
               const p = snapshot.current_price;
               const isNearPivots = Boolean(
                 (snapshot.htf_pivot && Math.abs(p - snapshot.htf_pivot) / p <= 0.0075) ||
-                (snapshot.pivot_s1 && Math.abs(p - snapshot.pivot_s1) / p <= 0.0075) ||
-                (snapshot.pivot_r1 && Math.abs(p - snapshot.pivot_r1) / p <= 0.0075) ||
+                (snapshot.htf_support?.[0] && Math.abs(p - snapshot.htf_support[0]) / p <= 0.0075) ||
+                (snapshot.htf_resistance?.[0] && Math.abs(p - snapshot.htf_resistance[0]) / p <= 0.0075) ||
                 (snapshot.vah_price && Math.abs(p - snapshot.vah_price) / p <= 0.0075) ||
                 (snapshot.val_price && Math.abs(p - snapshot.val_price) / p <= 0.0075) ||
                 (snapshot.poc_price && Math.abs(p - snapshot.poc_price) / p <= 0.0075)
@@ -1134,6 +1181,34 @@ serve(async (req) => {
                 });
                 rejections.push({ symbol, reason: rejectReason, layer: "Deterministic Filter" });
                 return;
+              }
+
+              // Range-Extreme Entry Filter (Auction Market Theory / Market Profile)
+              // In CHOP regime, Point of Control / Midline represents market balance with zero directional edge (50/50 chop).
+              // If price is within the dead middle (30% - 70% of Value Area) without an active boundary rejection or liquidity sweep, reject pre-AI.
+              if (snapshot.trend_alignment === "CHOP") {
+                if (snapshot.vah_price && snapshot.val_price && snapshot.vah_price > snapshot.val_price) {
+                  const vaRange = snapshot.vah_price - snapshot.val_price;
+                  const relativeVaPos = (snapshot.current_price - snapshot.val_price) / vaRange;
+                  const hasBoundaryRejection = snapshot.candlestick_pattern && snapshot.candlestick_pattern !== "NONE";
+                  const hasSweep = snapshot.asian_sweep && snapshot.asian_sweep !== "NONE";
+                  const hasSRFlip = snapshot.sr_flip && (snapshot.sr_flip as any).type !== "NONE" && (snapshot.sr_flip as any).holding_confirmed;
+
+                  // Dead middle: 30% to 70% of Value Area
+                  if (relativeVaPos >= 0.30 && relativeVaPos <= 0.70 && !hasBoundaryRejection && !hasSweep && !hasSRFlip) {
+                    const rejectReason = `Zero-Token Pre-Filter: Market in mid-range balance (${(relativeVaPos * 100).toFixed(0)}% of Value Area between VAL $${snapshot.val_price} and VAH $${snapshot.vah_price}). Auction Market Theory prohibits initiation at Point of Control / Midline without boundary sweep. LLM skipped.`;
+                    console.log(`[Deterministic Filter] Discarding ${symbol}: ${rejectReason}`);
+                    sendEvent({ type: 'progress', message: `[Deterministic Filter] ${symbol}: Mid-range balance (${(relativeVaPos * 100).toFixed(0)}% VA). Skipped LLM evaluation.` });
+                    await insertAuditLog(supabase, {
+                      actor_type: "SYSTEM",
+                      action: "REJECTED_BY_DETERMINISTIC_FILTER",
+                      entity_type: "research",
+                      payload_json: { symbol, reason: rejectReason },
+                    });
+                    rejections.push({ symbol, reason: rejectReason, layer: "Deterministic Filter" });
+                    return;
+                  }
+                }
               }
             }
 
@@ -1264,6 +1339,52 @@ serve(async (req) => {
               } else if (htfOpposing) {
                 is_valid = false;
                 institutional_rationale = `Execution Desk Rejected: Counter-trend mean reversion against confirmed Higher Timeframe trend (${snapshot.htf_trend}) is strictly forbidden.`;
+              }
+            }
+
+            // --- INTRADAY PIVOT SESSION ALIGNMENT GUARD ---
+            // Floor Trader Pivots govern intraday control. When price is below Central Daily Pivot, net order flow is seller-controlled.
+            // Buying below Central Pivot requires structural extreme support (S1/S2/HTF support), a bullish liquidity sweep, or confirmed bullish S/R flip.
+            // Shorting above Central Pivot requires structural extreme resistance (R1/R2/HTF resistance), a bearish liquidity sweep, or confirmed bearish S/R flip.
+            if (is_valid && snapshot.htf_pivot && snapshot.current_price) {
+              const p = snapshot.current_price;
+              const pivot = snapshot.htf_pivot;
+              const isLongBelowPivot = evaluation.recommended_direction === "LONG" && p < (pivot * 0.9985); // > 0.15% below pivot
+              const isShortAbovePivot = evaluation.recommended_direction === "SHORT" && p > (pivot * 1.0015); // > 0.15% above pivot
+
+              if (isLongBelowPivot) {
+                const nearSupport = Boolean(snapshot.htf_support?.[0] && Math.abs(p - snapshot.htf_support[0]) / p <= 0.0075);
+                const hasBullishSweep = snapshot.asian_sweep === "SWEPT_LOW";
+                const hasBullishSRFlip = Boolean(snapshot.sr_flip && (snapshot.sr_flip as any).type === "BULLISH_SR_FLIP" && (snapshot.sr_flip as any).holding_confirmed);
+                const isOversoldExtreme = Boolean(snapshot.rsi_14 && snapshot.rsi_14 <= 30);
+
+                if (!nearSupport && !hasBullishSweep && !hasBullishSRFlip && !isOversoldExtreme) {
+                  is_valid = false;
+                  institutional_rationale = `Execution Desk Rejected: Sub-Pivot Long Trap. Price ($${p.toFixed(2)}) is trading below Central Pivot ($${pivot.toFixed(2)}) under intraday seller control without structural S1/S2 extreme support, low liquidity sweep, or bullish S/R flip confluence.`;
+                  console.log(`[Layer B] [Pivot Alignment Guard] ${symbol}: Discarded counter-pivot Long.`);
+                }
+              } else if (isShortAbovePivot) {
+                const nearResistance = Boolean(snapshot.htf_resistance?.[0] && Math.abs(p - snapshot.htf_resistance[0]) / p <= 0.0075);
+                const hasBearishSweep = snapshot.asian_sweep === "SWEPT_HIGH";
+                const hasBearishSRFlip = Boolean(snapshot.sr_flip && (snapshot.sr_flip as any).type === "BEARISH_SR_FLIP" && (snapshot.sr_flip as any).holding_confirmed);
+                const isOverboughtExtreme = Boolean(snapshot.rsi_14 && snapshot.rsi_14 >= 70);
+
+                if (!nearResistance && !hasBearishSweep && !hasBearishSRFlip && !isOverboughtExtreme) {
+                  is_valid = false;
+                  institutional_rationale = `Execution Desk Rejected: Super-Pivot Short Trap. Price ($${p.toFixed(2)}) is trading above Central Pivot ($${pivot.toFixed(2)}) under intraday buyer control without structural R1/R2 extreme resistance, high liquidity sweep, or bearish S/R flip confluence.`;
+                  console.log(`[Layer B] [Pivot Alignment Guard] ${symbol}: Discarded counter-pivot Short.`);
+                }
+              }
+            }
+
+            // --- CROSS-ASSET CONTRADICTORY CORRELATION GUARD ---
+            if (is_valid && openCorrelatedTrades.length > 0) {
+              const opposingTrades = openCorrelatedTrades.filter(t => t.side !== evaluation.recommended_direction);
+              if (opposingTrades.length > 0) {
+                const peerDesc = opposingTrades.map(t => `${t.symbol} ${t.side}`).join(", ");
+                is_valid = false;
+                institutional_rationale = `Execution Desk Rejected: Contradictory signal against open highly correlated position (${peerDesc}). Institutional portfolio governance prohibits opposing correlated exposure.`;
+                console.log(`[Layer B] [Correlation Guard] Discarded contradictory setup on ${symbol} against ${peerDesc}.`);
               }
             }
 
@@ -1581,7 +1702,9 @@ serve(async (req) => {
               (evaluation.strategy_applied && (evaluation.strategy_applied.includes("BREAKOUT") || evaluation.strategy_applied.includes("MOMENTUM")))
             );
 
-            const tp1 = evaluation.execution_parameters?.take_profit_1 || Number((entry_price + (take_profit - entry_price) * 0.5).toFixed(5));
+            // Dynamic TP1 Momentum Scaling: Wilder's ADX >= 30 scales TP1 from 50% to 65% of target span (~1.35R-1.50R)
+            const tp1Ratio = (snapshot.adx_14 && snapshot.adx_14 >= 30) ? 0.65 : 0.50;
+            const tp1 = evaluation.execution_parameters?.take_profit_1 || Number((entry_price + (take_profit - entry_price) * tp1Ratio).toFixed(5));
             const tp2 = take_profit;
             const tcLevels = calculateInstitutionalTradingCentralLevels(
               snapshot.current_price,
