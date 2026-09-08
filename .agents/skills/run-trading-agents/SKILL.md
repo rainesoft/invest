@@ -200,7 +200,13 @@ When an asset fails to achieve S-Tier confidence (e.g. confidence < 75 due to mi
 
 1. **Edge Function Batching (150s Timeout Guard)**:
    - Always run `agent-day` and `agent-swing` in chunked symbol batches (e.g. 5-8 symbols per HTTP POST) when querying the full 24-asset roster to prevent exceeding the Supabase Edge Function 150-second execution limit.
-2. **Multi-Provider LLM Resilience**:
+2. **Multi-Provider LLM Resilience & Token Bounds**:
    - Ensure the LLM gateway supports seamless fallback across OpenAI, Azure OpenAI, Anthropic, or DeepSeek so automated agent runs are immune to single-provider 429 quota exhaustion.
+   - For Responses API and structured tool calls, ensure `max_output_tokens >= 800` to prevent JSON response truncation (`Unterminated string in JSON`) on verbose multi-target mathematical proofs.
 3. **Session Filter Overrides for Manual Audits**:
-   - Pass `--is_manual` or `{ "is_manual": true }` to evaluate structural Fibonacci, chartist patterns, and S/R flips during Asian session or weekend rollover without being blocked by execution session filters.
+   - Pass `--is_manual` or `{ "is_manual": true }` to evaluate structural Fibonacci, chartist patterns, and S/R flips during Asian session or weekend rollover without being blocked by execution session filters or portfolio heat caps.
+4. **Origination Risk Governor Dynamic ATR Calibration**:
+   - For high-volatility commodities and metals (`XAUUSD`, `XAGUSD`, `UKOIL`, `USOIL`), calibrate the maximum permissible entry offset buffer to `Math.max(dailyAtr * 0.50, currentPrice * 0.005)`. When raw stop loss exceeds the 3% capital cap, this allows the adaptive limit solver to safely compress the stop without prematurely rejecting valid institutional swing setups.
+5. **Multi-Agent Inter-Asset Context Routing**:
+   - `agent-news` writes high-impact catalysts into `market_context` with a 4-hour TTL. `agent-swing` and `agent-day` automatically consume this context and inherit correlated peer sentiment (`UKOIL` $\leftrightarrow$ `USOIL`, `XAGUSD` $\leftrightarrow$ `XAUUSD`, `EURUSD` $\leftrightarrow$ `USDCHF` inverse) to grant +20 confidence boosts.
+

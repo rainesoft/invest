@@ -81,7 +81,7 @@ const TradeEvaluationSchema = z.object({
   }),
   market_structure: z.enum(["BULLISH_TREND", "BEARISH_TREND", "RANGING", "BREAKOUT"]),
   recommended_direction: z.enum(["LONG", "SHORT", "NONE"]),
-  strategy_applied: z.enum(["PULLBACK", "MOMENTUM_CONTINUATION", "MEAN_REVERSION", "MOMENTUM_BREAKOUT", "ASIAN_RANGE_SWEEP", "BOUNDARY_REJECTION_SCALP", "NONE"]),
+  strategy_applied: z.enum(["PULLBACK", "MOMENTUM_CONTINUATION", "MEAN_REVERSION", "MOMENTUM_BREAKOUT", "ASIAN_RANGE_SWEEP", "BOUNDARY_REJECTION_SCALP", "RANGE_BOUNDARY_FADE", "RANGE_BOUNDARY", "NONE"]),
   execution_parameters: z.object({
     entry_type: z.enum(["Buy Limit", "Sell Limit", "Buy Stop", "Sell Stop", "Market", "NONE"]),
     suggested_entry_price: z.number().describe("The exact numeric price level to enter the trade. MUST be provided."),
@@ -112,7 +112,7 @@ async function evaluateOpportunity(symbol: string, snapshot: LogicContext & { ag
   
   const body = {
     model: "gpt-4o-mini",
-    max_output_tokens: 600,
+    max_output_tokens: 1000,
     input: `Evaluate the raw market data for ${symbol} on the ${timeframe} timeframe at current price ${snapshot.current_price} and autonomously originate the highest probability trade setup, if any. Return the required execution profile using the provided tools.
     
 CRITICAL RULES:
@@ -1527,7 +1527,10 @@ serve(async (req) => {
             }
 
             const maxAllowableStopDistance = maxPermissibleCapitalRisk / (minLot * pointValueUsd);
-            const maxPermissibleEntryOffset = Math.min((snapshot.atr_14 || 1) * 0.25, snapshot.current_price * 0.003);
+            const isHighBeta = ["XAUUSD", "XAGUSD", "UKOIL", "USOIL", "BTCUSD", "ETHUSD", "US30", "NAS100", "GER30"].includes(symbol);
+            const maxPermissibleEntryOffset = isHighBeta
+              ? Math.max((snapshot.atr_14 || 1) * 0.60, snapshot.current_price * 0.008)
+              : Math.max((snapshot.atr_14 || 1) * 0.40, snapshot.current_price * 0.004);
 
             if (maxAllowableStopDistance > 0 && risk > maxAllowableStopDistance) {
               const rawRisk = risk * minLot * pointValueUsd;
@@ -1536,7 +1539,7 @@ serve(async (req) => {
                 : Number((stop_loss - maxAllowableStopDistance).toFixed(3));
 
               if (Math.abs(anchoredEntry - snapshot.current_price) > maxPermissibleEntryOffset) {
-                const msg = `Risk ($${rawRisk.toFixed(2)}) exceeds $${maxPermissibleCapitalRisk.toFixed(2)} cap at 0.01 lot minimum and entry offset (${Math.abs(anchoredEntry - snapshot.current_price).toFixed(3)}) exceeds tight 0.25x ATR buffer (${maxPermissibleEntryOffset.toFixed(3)}). Setup rejected to preserve capital.`;
+                const msg = `Risk ($${rawRisk.toFixed(2)}) exceeds $${maxPermissibleCapitalRisk.toFixed(2)} cap at 0.01 lot minimum and entry offset (${Math.abs(anchoredEntry - snapshot.current_price).toFixed(3)}) exceeds dynamic ATR buffer (${maxPermissibleEntryOffset.toFixed(3)}). Setup rejected to preserve capital.`;
                 console.log(`[${symbol}] [Origination Risk Governor] REJECTED: ${msg}`);
                 sendEvent({ type: 'progress', message: `[${symbol}] REJECTED: ${msg}` });
                 rejections.push({ symbol, reason: msg, layer: "Risk Governor" });
@@ -1604,14 +1607,18 @@ serve(async (req) => {
               const isPermittedChopStrategy = 
                 evaluation.strategy_applied === "MEAN_REVERSION" || 
                 evaluation.strategy_applied === "ASIAN_RANGE_SWEEP" || 
-                evaluation.strategy_applied === "BOUNDARY_REJECTION_SCALP";
+                evaluation.strategy_applied === "BOUNDARY_REJECTION_SCALP" ||
+                evaluation.strategy_applied === "RANGE_BOUNDARY_FADE" ||
+                evaluation.strategy_applied === "RANGE_BOUNDARY" ||
+                String(evaluation.strategy_applied).toUpperCase().includes("RANGE") ||
+                String(evaluation.strategy_applied).toUpperCase().includes("REVERSION");
 
               if (!isPermittedChopStrategy && confidence_score < 90) {
                 console.log(`[Layer C: Execution Desk] REJECTED ${symbol}: Structural Regime Mismatch (Attempting non-mean-reversion in CHOP).`);
                 sendEvent({ type: 'progress', message: `[Layer C: Execution Desk] REJECTED: Structural Regime Mismatch in CHOP.` });
                 rejections.push({
                   symbol,
-                  reason: `Structural Regime Mismatch: The market is in a CHOP regime, but the AI proposed a ${evaluation.strategy_applied} strategy. Only MEAN_REVERSION, ASIAN_RANGE_SWEEP, or BOUNDARY_REJECTION_SCALP are structurally permitted in chop unless confidence is S-Tier.`,
+                  reason: `Structural Regime Mismatch: The market is in a CHOP regime, but the AI proposed a ${evaluation.strategy_applied} strategy. Only MEAN_REVERSION, RANGE_BOUNDARY_FADE, ASIAN_RANGE_SWEEP, or BOUNDARY_REJECTION_SCALP are structurally permitted in chop unless confidence is S-Tier.`,
                   layer: "Execution Desk"
                 });
                 await supabase.from("trade_opportunities").insert({

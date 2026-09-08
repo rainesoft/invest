@@ -430,7 +430,7 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
     ],
     tool_choice: "required",
     parallel_tool_calls: false,
-    max_output_tokens: 600
+    max_output_tokens: 1000
   };
 
   let responseData: any = null;
@@ -1904,7 +1904,10 @@ serve(async (req) => {
           }
 
           const maxAllowableStopDistance = maxPermissibleCapitalRisk / (minLot * pointValueUsd);
-          const maxPermissibleEntryOffset = Math.min((dailyAtr || 1) * 0.25, currentPrice * 0.003);
+          const isHighBeta = ["XAUUSD", "XAGUSD", "UKOIL", "USOIL", "BTCUSD", "ETHUSD", "US30", "NAS100", "GER30"].includes(symbol as string);
+          const maxPermissibleEntryOffset = isHighBeta
+            ? Math.max((dailyAtr || 1) * 0.60, currentPrice * 0.008)
+            : Math.max((dailyAtr || 1) * 0.40, currentPrice * 0.004);
 
           if (maxAllowableStopDistance > 0 && Math.abs(entry - sl) > maxAllowableStopDistance) {
             const rawRisk = Math.abs(entry - sl) * minLot * pointValueUsd;
@@ -1912,9 +1915,9 @@ serve(async (req) => {
               ? Number((sl + maxAllowableStopDistance).toFixed(5))
               : Number((sl - maxAllowableStopDistance).toFixed(5));
 
-            // Check if anchoring the entry moves it too far (>0.25x ATR or >0.3%) from current market price
+            // Check if anchoring the entry moves it too far from current market price
             if (Math.abs(anchoredEntry - currentPrice) > maxPermissibleEntryOffset) {
-              const msg = `Risk ($${rawRisk.toFixed(2)}) exceeds $${maxPermissibleCapitalRisk.toFixed(2)} cap at 0.01 lot minimum and requires entry offset (${Math.abs(anchoredEntry - currentPrice).toFixed(4)}) exceeding tight 0.25x ATR buffer (${maxPermissibleEntryOffset.toFixed(4)}). Setup rejected to preserve capital.`;
+              const msg = `Risk ($${rawRisk.toFixed(2)}) exceeds $${maxPermissibleCapitalRisk.toFixed(2)} cap at 0.01 lot minimum and requires entry offset (${Math.abs(anchoredEntry - currentPrice).toFixed(4)}) exceeding dynamic ATR buffer (${maxPermissibleEntryOffset.toFixed(4)}). Setup rejected to preserve capital.`;
               console.log(`[${symbol as string}] [Origination Risk Governor] REJECTED: ${msg}`);
               sendEvent({ type: "progress", message: `[${symbol as string}] REJECTED: ${msg}` });
               rejections.push({ symbol: symbol as string, reason: msg, layer: "Risk Governor" });
@@ -1950,7 +1953,7 @@ serve(async (req) => {
           evaluation.execution_parameters.take_profit_2 = tp2;
           evaluation.execution_parameters.take_profit_3 = tp3;
           const riskPct = Math.abs(entry - sl) / entry;
-          const maxRiskPct = ["XAUUSD", "XAGUSD", "BTCUSD", "UKOIL"].includes(symbol as string) ? 0.15 : 0.10;
+          const maxRiskPct = ["XAUUSD", "XAGUSD", "BTCUSD", "ETHUSD", "UKOIL", "USOIL", "US30", "NAS100", "SPX500", "GER30"].includes(symbol as string) ? 0.15 : 0.10;
 
           if (riskPct > maxRiskPct) {
             const msg = `Stop loss ${(riskPct * 100).toFixed(2)}% exceeds swing maximum of ${(maxRiskPct * 100).toFixed(0)}%`;
