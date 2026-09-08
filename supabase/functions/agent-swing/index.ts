@@ -4,7 +4,7 @@ import { fetchPaperBars, Bar } from "../../../packages/execution/index.ts";
 import { insertAuditLog } from "../../../packages/core/audit.ts";
 import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews, detectCentralBankEvent, detectUpcomingFedEvent, computeMacroConfidenceBoost, fetchETFFlowSentiment } from "../../../packages/core/news.ts";
 import { isAutoTradingEnabled, getTradingSymbols } from "../../../packages/core/settings.ts";
-import { isMarketOpen } from "../../../packages/core/market.ts";
+import { isMarketOpen, isCrypto } from "../../../packages/core/market.ts";
 
 import { revalidateOpportunity } from "../../../packages/strategy/revalidation.ts";
 
@@ -968,6 +968,82 @@ serve(async (req) => {
           }
         }
 
+        // --- LAYER -0.2: LATE-WEEK SWING ENTRY GATE (Institutional Holding Horizon Governance) ---
+        // Non-crypto swing trades (1D timeframe) require 3–10 days runway. Initiating within <24h of Friday market close
+        // results in unestablished positions being prematurely de-risked or closed by weekend-defense on Friday 20:30 UTC.
+        // 24/7 crypto assets (e.g. BTCUSD, ETHUSD) trade continuously and are strictly exempt.
+        if (!isManual && !isCrypto(symbol as string)) {
+          const now = new Date();
+          const day = now.getUTCDay(); // 4 = Thursday, 5 = Friday
+          const hour = now.getUTCHours();
+          const isLateThursday = day === 4 && hour >= 16;
+          const isFriday = day === 5;
+
+          if (isLateThursday || isFriday) {
+            const timeDesc = isFriday
+              ? `Friday (${hour.toString().padStart(2, "0")}:${now.getUTCMinutes().toString().padStart(2, "0")} UTC)`
+              : `Late Thursday (${hour.toString().padStart(2, "0")}:${now.getUTCMinutes().toString().padStart(2, "0")} UTC)`;
+            const rejectReason = `Late-Week Swing Freeze: Non-crypto swing trades (1D timeframe) require 3-10 days runway. ${timeDesc} is too close to Friday 20:30 UTC weekend-defense de-risking window. Exempt: 24/7 Crypto.`;
+            console.log(`[Late-Week Swing Gate] Skipping ${symbol}: ${rejectReason}`);
+            sendEvent({ type: "progress", message: `[Late-Week Swing Gate] Skipping ${symbol}: ${timeDesc} too close to weekend defense.` });
+            await insertAuditLog(supabase, {
+              actor_type: "SYSTEM",
+              action: "REJECTED_BY_WEEKEND_PROXIMITY_GATE",
+              entity_type: "research",
+              payload_json: { symbol, reason: rejectReason },
+            }).catch((e) => console.warn(`[Audit] Failed to log REJECTED_BY_WEEKEND_PROXIMITY_GATE for ${symbol}: ${e.message}`));
+            rejections.push({ symbol: symbol as string, reason: rejectReason, layer: "Late-Week Swing Gate" });
+            return;
+          }
+        }
+
+        // --- PRE-AI CORRELATED ASSET EXPOSURE CHECK ---
+        const correlationGroups: string[][] = [
+          ["XAUUSD", "XAGUSD"],
+          ["US30", "NAS100", "SPX500", "GER30", "JP225"],
+          ["EURUSD", "GBPUSD"],
+          ["UKOIL", "USOIL"],
+        ];
+        const group = correlationGroups.find(g => g.includes(symbol as string));
+        let openCorrelatedTrades: { side: string; symbol: string }[] = [];
+        if (group && !isManual) {
+          const peers = group.filter(s => s !== symbol);
+          const { data: peerTrades } = await supabase
+            .from("user_trades")
+            .select("side, symbol")
+            .in("symbol", peers)
+            .in("status", ["OPEN", "PENDING", "VPS_PENDING", "VPS_PROCESSING"]);
+          if (peerTrades && peerTrades.length > 0) {
+            openCorrelatedTrades = peerTrades;
+          }
+        }
+
+        // --- LAYER -0.1: ROLLOVER LIQUIDITY & SPREAD PROTECTION GATE ---
+        // Between 21:00 UTC and 22:15 UTC (daily interbank settlement rollover), broker spreads expand 3x-5x (e.g. Gold spread spikes to 90 pts).
+        // Pre-filtering candidate evaluation during rollover prevents originating signals that will be rejected at the execution desk by SPREAD_TOO_WIDE.
+        // 24/7 Crypto assets (BTCUSD, ETHUSD) trade on continuous exchange feeds and are exempt.
+        if (!isManual && !isCrypto(symbol as string)) {
+          const now = new Date();
+          const hour = now.getUTCHours();
+          const minute = now.getUTCMinutes();
+          const totalMinutes = hour * 60 + minute;
+          const isRolloverWindow = totalMinutes >= 1260 && totalMinutes <= 1335; // 21:00 UTC (1260m) to 22:15 UTC (1335m)
+
+          if (isRolloverWindow) {
+            const rejectReason = `Rollover Spread Gate: Daily interbank rollover window active (21:00-22:15 UTC). Elevated broker spread exceeds execution tolerance. LLM evaluation skipped. Exempt: 24/7 Crypto.`;
+            console.log(`[Spread Gate] Skipping ${symbol}: ${rejectReason}`);
+            sendEvent({ type: "progress", message: `[Spread Gate] Skipping ${symbol}: Daily rollover spread expansion window.` });
+            await insertAuditLog(supabase, {
+              actor_type: "SYSTEM",
+              action: "REJECTED_BY_ROLLOVER_SPREAD_GATE",
+              entity_type: "research",
+              payload_json: { symbol, reason: rejectReason },
+            }).catch((e) => console.warn(`[Audit] Failed to log REJECTED_BY_ROLLOVER_SPREAD_GATE for ${symbol}: ${e.message}`));
+            rejections.push({ symbol: symbol as string, reason: rejectReason, layer: "Spread Gate" });
+            return;
+          }
+        }
+
         // --- LAYER 0: MACRO BLACKOUT WINDOW ---
         if (["XAUUSD", "XAGUSD", "BTCUSD", "UKOIL"].includes(symbol) && allEvents) {
           const nowMs = Date.now();
@@ -1737,6 +1813,18 @@ serve(async (req) => {
             return;
           }
 
+          // === CROSS-ASSET CONTRADICTORY CORRELATION GUARD ===
+          if (openCorrelatedTrades && openCorrelatedTrades.length > 0) {
+            const opposingTrades = openCorrelatedTrades.filter(t => t.side !== dbSide);
+            if (opposingTrades.length > 0) {
+              const peerDesc = opposingTrades.map(t => `${t.symbol} ${t.side}`).join(", ");
+              const rejectReason = `Rejected by Execution Desk: Contradictory signal against open highly correlated position (${peerDesc}).`;
+              console.log(`[${symbol as string}] [Correlation Guard] ${rejectReason}`);
+              rejections.push({ symbol: symbol as string, reason: rejectReason, layer: "Correlation Guard" });
+              return;
+            }
+          }
+
           let order_type = isLong ? "BUY MARKET" : "SELL MARKET";
           const pendingOrderThreshold = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.15) : (currentPrice * 0.001);
 
@@ -1842,7 +1930,8 @@ serve(async (req) => {
 
           // === TAKE PROFIT DIRECTION & VOLATILITY-NORMALIZED R-MULTIPLE SANITIZATION ===
           const swingRiskDist = Math.abs(entry - sl);
-          const minTargetDistance = Math.max(swingRiskDist * 1.0, (dailyAtr || 0) * 0.80);
+          const tp1Multiplier = (snapshot.adx_14 && snapshot.adx_14 >= 30) ? 1.35 : 1.0;
+          const minTargetDistance = Math.max(swingRiskDist * tp1Multiplier, (dailyAtr || 0) * 0.80);
 
           if (swingRiskDist > 0) {
             if (isLong) {
