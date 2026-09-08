@@ -2272,8 +2272,9 @@ for (const [orderId, trade] of orderMap) {
       // --- DYNAMIC CORRELATION LIMITS ---
       const correlationGroups = [
         ["XAUUSD", "XAGUSD"],
-        ["US30", "NAS100", "SPX500"],
-        ["EURUSD", "GBPUSD"]
+        ["US30", "NAS100", "SPX500", "GER30", "JP225"],
+        ["EURUSD", "GBPUSD"],
+        ["UKOIL", "USOIL"]
       ];
       
       const group = correlationGroups.find(g => g.includes(signal.symbol));
