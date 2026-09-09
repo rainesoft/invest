@@ -2103,7 +2103,8 @@ serve(async (req) => {
             isLong ? "LONG" : "SHORT",
             1.70,
             snapshot.atr_14 || undefined,
-            isHighMomentum
+            isHighMomentum,
+            symbol as string
           );
 
           // Apply adaptive Trading Central levels (clamped entry + expanded TP2 to enforce institutional 1:1.75 R:R)
