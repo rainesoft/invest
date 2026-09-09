@@ -1679,6 +1679,8 @@ for (const [orderId, trade] of orderMap) {
           let newSl: number | null = null;
           let actionName = "";
 
+          const tp1 = opp.take_profit_json?.tp1 || opp.take_profit_json?.tp;
+
           // 1. Dynamic Chandelier ATR Trailing & Stepped R-Locks for RUNNER legs
           if (trade.trade_type === "RUNNER") {
             const chandelierSl = isLong ? currentPrice - (atr * 2.0) : currentPrice + (atr * 2.0);
@@ -1696,9 +1698,9 @@ for (const [orderId, trade] of orderMap) {
             } else if (priceMoveInR >= 1.5) {
               steppedFloor = isLong ? entryPrice + (riskDist * 0.75) : entryPrice - (riskDist * 0.75);
               floorLabel = "LOCK_IN_0.75R";
-            } else if (priceMoveInR >= 0.75 || profit > 0) {
-              steppedFloor = entryPrice; // Breakeven
-              floorLabel = "BREAK_EVEN";
+            } else if (priceMoveInR >= 0.50 || (tp1 && (isLong ? currentPrice >= tp1 : currentPrice <= tp1)) || profit > 0) {
+              steppedFloor = isLong ? entryPrice + (riskDist * 0.05) : entryPrice - (riskDist * 0.05); // Breakeven + 0.05R buffer
+              floorLabel = "BREAK_EVEN_PLUS_0.05R";
             }
 
             let candidateSl: number | null = null;
@@ -1750,12 +1752,12 @@ for (const [orderId, trade] of orderMap) {
                 newSl = lockSl;
                 actionName = `LOCK_IN_0.5R (profit +${priceMoveInR.toFixed(1)}R)`;
               }
-            } else if (priceMoveInR >= 1.0) {
-              const beSl = Number(entryPrice.toFixed(decimals));
+            } else if (priceMoveInR >= 0.50 || (tp1 && (isLong ? currentPrice >= tp1 : currentPrice <= tp1))) {
+              const beSl = Number((isLong ? entryPrice + (riskDist * 0.05) : entryPrice - (riskDist * 0.05)).toFixed(decimals));
               const isImprovement = isLong ? beSl > currentSl : beSl < currentSl;
               if (isImprovement) {
                 newSl = beSl;
-                actionName = `BREAK_EVEN_AT_1R (profit +${priceMoveInR.toFixed(1)}R)`;
+                actionName = `EARLY_BREAKEVEN_0.5R_OR_TP1 (profit +${priceMoveInR.toFixed(1)}R)`;
               }
             } else if (barsElapsed >= 20 && profit > 0 && priceMoveInR >= 0.75) {
               const beSl = Number(entryPrice.toFixed(decimals));
