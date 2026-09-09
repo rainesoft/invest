@@ -1540,25 +1540,26 @@ export function computeHtfFibAlignment(
 // where    α = min(1, totalTrades / 20)
 // ============================================================
 export function calibrateProbability(
-  rawProbability: number,   // AI-generated 1–99
+  rawProbability: number,   // AI-generated 1–99 (bounded to 5–95)
   wonCount: number,
   lostCount: number
 ): number {
+  const boundedRaw = Math.min(95, Math.max(5, rawProbability));
   const totalTrades = wonCount + lostCount;
 
   if (totalTrades === 0) {
-    // No history — return AI estimate unchanged
-    return rawProbability;
+    // No history — return bounded AI estimate
+    return boundedRaw;
   }
 
   const historicalWinRate = (wonCount / totalTrades) * 100; // convert to 1-99 scale
   const alpha = Math.min(1, totalTrades / 20); // weight grows with sample size
 
-  const calibrated = alpha * historicalWinRate + (1 - alpha) * rawProbability;
-  const rounded = Math.round(calibrated * 10) / 10;
+  const calibrated = alpha * historicalWinRate + (1 - alpha) * boundedRaw;
+  const rounded = Math.round(Math.min(95, Math.max(5, calibrated)) * 10) / 10;
 
   console.log(
-    `[KellyCalibration] Raw=${rawProbability.toFixed(1)}% | Historical=${historicalWinRate.toFixed(1)}% (n=${totalTrades}) | α=${alpha.toFixed(2)} | Calibrated=${rounded}%`
+    `[KellyCalibration] Raw=${boundedRaw.toFixed(1)}% | Historical=${historicalWinRate.toFixed(1)}% (n=${totalTrades}) | α=${alpha.toFixed(2)} | Calibrated=${rounded}%`
   );
 
   return rounded;
