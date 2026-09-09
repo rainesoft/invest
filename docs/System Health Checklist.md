@@ -1425,6 +1425,14 @@ In `/functions/v1/vps-callback`:
 - **Problem:** Japanese equities are heavily exporter-weighted and structurally tethered to the Yen carry trade. Initiating `JP225 LONG` during aggressive Yen appreciation (sharp `USDJPY` drop) leads to high failure rates.
 - **Rule:** In `agent-swing/index.ts`, `JP225` evaluation queries active `USDJPY` macro sentiment from `market_context`. If USDJPY has active `BEARISH` sentiment (Yen surging), a `-25` confidence penalty is applied to `JP225 LONG` setups.
 
+### 19. Ground-Truth Master Broker Balance Auto-Sync & Deposit Normalization
+- **Problem:** External deposits, withdrawals, or broker balance adjustments on MT5 occur outside closed trade events, causing the internal virtual ledger (`portfolio_capital`) to desync from true broker cash until manually updated or triggering false daily drawdown alerts on new deposits.
+- **Rule:** In `vps-poll/index.ts` and `exness-history-sync/index.ts`:
+  - When the MT5 EA or MetaAPI reports live cash balance for Master accounts (`is_master_account = true`), any discrepancy $\ge \$0.01$ automatically reconciles `user_risk_settings.portfolio_capital`.
+  - When capital increases due to a deposit, `daily_starting_equity` is automatically stepped up (`Math.max(daily_starting_equity, newBalance)`) to prevent false daily drawdown circuit breaker alarms, and `high_water_mark_equity` is updated.
+  - Live `free_margin` is dynamically updated in `system_settings.treasury_status` with `is_solvent: true`.
+  - Material adjustments ($\ge \$1.00$) record `BROKER_BALANCE_AUTO_SYNC` in `audit_log`.
+
 ---
 
 ## ⚠️ 3V. Pre-Flight Margin Level & Free Margin Buffer Diagnostics (`MARGIN_LEVEL_BELOW_300` / `INSUFFICIENT_FREE_MARGIN_BUFFER`)
