@@ -1,6 +1,46 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.108.2";
 
+async function computeHash(input: string) {
+  const data = new TextEncoder().encode(input);
+  const buf = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function insertAudit(supabase: any, entry: { action: string; entity_type?: string; entity_id?: string; actor_id?: string; payload_json?: Record<string, any> }) {
+  try {
+    const { data: last } = await supabase
+      .from("audit_log")
+      .select("hash")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const prevHash = last?.hash ?? "";
+    const hash = await computeHash(prevHash + JSON.stringify(entry));
+
+    const record: any = {
+      actor_type: "SYSTEM",
+      action: entry.action,
+      entity_type: entry.entity_type || "system",
+      payload_json: entry.payload_json || {},
+      hash,
+    };
+    if (entry.entity_id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry.entity_id)) {
+      record.entity_id = entry.entity_id;
+    }
+    if (entry.actor_id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry.actor_id)) {
+      record.actor_id = entry.actor_id;
+    }
+
+    await supabase.from("audit_log").insert(record);
+  } catch (err) {
+    console.error("[VPS Poll] Failed to insert audit log:", err);
+  }
+}
+
 serve(async (req) => {
   try {
     if (req.headers.get("x-vps-secret") !== Deno.env.get("VPS_SECRET_KEY")) {
@@ -14,7 +54,95 @@ serve(async (req) => {
     );
 
     // 1. Update heartbeat for all users (since it's a single-bot central architecture)
-    await supabase.from("user_risk_settings").update({ vps_last_heartbeat: new Date().toISOString() }).neq("user_id", "00000000-0000-0000-0000-000000000000");
+    const nowIso = new Date().toISOString();
+    await supabase.from("user_risk_settings").update({ vps_last_heartbeat: nowIso }).neq("user_id", "00000000-0000-0000-0000-000000000000");
+
+    // 1b. Ground-Truth Master Broker Balance Auto-Sync (Deposits, Withdrawals, Realized PnL)
+    const rawBalance = url.searchParams.get("balance");
+    const rawEquity = url.searchParams.get("equity");
+    const rawFreeMargin = url.searchParams.get("free_margin");
+
+    if (rawBalance && !isNaN(Number(rawBalance)) && Number(rawBalance) > 0) {
+      const reportedBalance = Number(Number(rawBalance).toFixed(2));
+      const reportedEquity = rawEquity && !isNaN(Number(rawEquity)) ? Number(Number(rawEquity).toFixed(2)) : reportedBalance;
+      const reportedFreeMargin = rawFreeMargin && !isNaN(Number(rawFreeMargin)) ? Number(Number(rawFreeMargin).toFixed(2)) : reportedBalance;
+
+      const { data: masterAccounts } = await supabase
+        .from("user_risk_settings")
+        .select("id, user_id, portfolio_capital, daily_starting_equity, high_water_mark_equity")
+        .eq("is_master_account", true);
+
+      if (masterAccounts && masterAccounts.length > 0) {
+        for (const master of masterAccounts) {
+          const prevCapital = Number(master.portfolio_capital || 0);
+          const capitalDelta = reportedBalance - prevCapital;
+
+          // Reconcile if difference is at least 1 cent
+          if (Math.abs(capitalDelta) >= 0.01) {
+            const currentDailyStart = Number(master.daily_starting_equity || prevCapital);
+            const currentHwm = Number(master.high_water_mark_equity || prevCapital);
+
+            // Step up daily_starting_equity on deposits to prevent false daily drawdown alarms
+            const updatedDailyStart = reportedBalance > currentDailyStart ? reportedBalance : currentDailyStart;
+            const updatedHwm = Math.max(currentHwm, reportedBalance);
+
+            await supabase
+              .from("user_risk_settings")
+              .update({
+                portfolio_capital: reportedBalance,
+                daily_starting_equity: updatedDailyStart,
+                high_water_mark_equity: updatedHwm,
+                updated_at: nowIso,
+              })
+              .eq("id", master.id);
+
+            if (Math.abs(capitalDelta) >= 1.00) {
+              await insertAudit(supabase, {
+                action: "BROKER_BALANCE_AUTO_SYNC",
+                entity_type: "user_risk_settings",
+                entity_id: master.id,
+                actor_id: master.user_id,
+                payload_json: {
+                  previous_capital: prevCapital,
+                  new_capital: reportedBalance,
+                  delta: Number(capitalDelta.toFixed(2)),
+                  equity: reportedEquity,
+                  free_margin: reportedFreeMargin,
+                  source: "VPS_HEARTBEAT",
+                  reason: capitalDelta > 0 ? "Deposit / Realized Profit Detected" : "Withdrawal / Realized Loss Reconciled",
+                },
+              });
+              console.log(`[VPS Poll] Auto-synced Master Account ${master.user_id.slice(0, 8)} Capital from $${prevCapital.toFixed(2)} to $${reportedBalance.toFixed(2)} (Delta: $${capitalDelta.toFixed(2)})`);
+            }
+          }
+        }
+      }
+
+      // Update Treasury Status with live broker metrics
+      const { data: currentTreasury } = await supabase
+        .from("system_settings")
+        .select("value")
+        .eq("key", "treasury_status")
+        .maybeSingle();
+
+      let currentSolvencyRatio = 2.98;
+      if (currentTreasury?.value) {
+        const parsed = typeof currentTreasury.value === "string" ? JSON.parse(currentTreasury.value) : currentTreasury.value;
+        currentSolvencyRatio = Number(parsed.solvency_ratio || 2.98);
+      }
+
+      await supabase
+        .from("system_settings")
+        .upsert({
+          key: "treasury_status",
+          value: JSON.stringify({
+            is_solvent: true,
+            updated_at: nowIso,
+            free_margin: reportedFreeMargin,
+            solvency_ratio: currentSolvencyRatio,
+          }),
+        });
+    }
 
     // 2. Fetch HFT bias (Permanently locked to NEUTRAL to disable unmanaged HFT_NATIVE blind scalps)
     const currentBias = "NEUTRAL";
