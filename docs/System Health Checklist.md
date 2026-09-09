@@ -741,6 +741,52 @@ In `supabase/functions/agent-trade/index.ts` and `packages/strategy/agent-risk.t
 
 ---
 
+## ⚠️ 2O. AI Model Output Token Truncation & JSON Parse Resiliency
+
+> [!CAUTION]
+> **Incident (2026-09-08):** `agent-day` and `agent-swing` experienced `API_TIMEOUT` / JSON parsing failures (`Unterminated string in JSON`, `Expected ',' or '}' after property value`, `Unterminated fractional number`) during market evaluations on `UKOIL`, `XAUUSD`, `GER30`, and `SPX500`. 
+> 
+> **Root Cause:** `max_output_tokens` was hardcoded to `1000`. When `gpt-4o-mini` generated extensive structured rationales (`thought_process`, `rejection_math_proof`, `rationale`, `structural_confirmation`), the token ceiling was breached mid-payload, cutting off valid JSON closure.
+
+### Standard Rules & Mitigations:
+1. **Token Allocation Ceiling:** `max_output_tokens` in `agent-day/index.ts` and `agent-swing/index.ts` must be configured to at least `2500` to provide ample buffer for multi-layer institutional reasoning. `agent-news/index.ts` must use at least `500` tokens.
+2. **Resilient JSON Parse Repair:** Before failing on unhandled syntax errors, edge functions must execute automated string quote and brace repair to close open JSON blocks and extract valid properties:
+   ```typescript
+   let args: any;
+   try {
+     args = JSON.parse(toolCall.arguments);
+   } catch (parseErr: any) {
+     console.warn(`[Responses API] Direct JSON.parse failed for ${symbol}: ${parseErr.message}. Attempting resilient repair...`);
+     let rawArgs = (toolCall.arguments || "").trim();
+     const quoteCount = (rawArgs.match(/(?<!\\)"/g) || []).length;
+     if (quoteCount % 2 !== 0) rawArgs += '"';
+     const openBraces = (rawArgs.match(/{/g) || []).length;
+     const closeBraces = (rawArgs.match(/}/g) || []).length;
+     for (let b = 0; b < openBraces - closeBraces; b++) rawArgs += "}";
+     args = JSON.parse(rawArgs);
+   }
+   ```
+3. **Diagnostic Query:**
+   ```sql
+   SELECT created_at, action, payload_json->>'symbol' AS symbol, payload_json->>'reason' AS reason, payload_json->>'error' AS error
+   FROM audit_log
+   WHERE action = 'API_TIMEOUT' AND created_at > NOW() - INTERVAL '48 hours'
+   ORDER BY created_at DESC;
+   ```
+
+---
+
+## ⚠️ 2P. US Equities Lot Capping & Sector Correlation Basket (Preventing MARGIN_LEVEL_BELOW_300)
+
+> [!CAUTION]
+> **Incident (2026-09-08):** At US market open (13:30/14:38 UTC), `agent-swing-stocks-daily` simultaneously originated multiple US equity setups (`TSLA`, `AAPL`, `NVDA`) with 0.15 lots each (0.11 + 0.04). Because US equities were missing from `assetLotCaps` in `agent-trade/index.ts` (defaulting to 0.20 lots) and not grouped in `correlationGroups`, the simultaneous entries demanded >$1,000 margin on a ~$1,184 account, triggering MT5 pre-flight margin rejections (`MARGIN_LEVEL_BELOW_300`).
+
+### Standard Rules:
+1. **Asset Lot Caps for Equities:** `assetLotCaps` in `agent-trade/index.ts` must explicitly cap US stocks (`AAPL`, `TSLA`, `NVDA`, `AMZN`, `MSFT`, `META`, `GOOGL`) to `0.02` lots per leg.
+2. **Equities Correlation Basket:** `correlationGroups` across `agent-trade`, `agent-swing`, and `agent-day` must include `["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "META", "GOOGL"]` to enforce a 0.5x risk modifier or veto contradictory directional exposure across US tech equities.
+
+---
+
 ## ⚠️ 3A. Trade Execution — Status Mismatch (Orphaned PENDING)
 
 > [!WARNING]
@@ -1336,6 +1382,54 @@ In `/functions/v1/vps-callback`:
 ### 8. Higher Timeframe Directional Hierarchy (Hive Mind)
 - **Problem:** Intraday agents operating in isolation may fight dominant multi-day institutional flow established by the 1D swing desk.
 - **Rule:** In `agent-day/index.ts`, the agent dynamically queries active 1D swing opportunities and injects `[HIVE-MIND 1D MACRO DIRECTIVE]` into `fundamental_context`, forcing intraday tactical execution to align with top-down macro bias.
+
+### 9. Late-Session Intraday Liquidity Cutoff (18:30–22:00 UTC Intraday Freeze)
+- **Problem:** Between 18:30 UTC and 22:00 UTC, US market depth thins and interbank spreads widen heading into the daily settlement rollover. Intraday 30m breakouts initiated in this window suffer high false-breakout rates and unrecoverable spread drag.
+- **Rule:** In `agent-day/index.ts`, non-crypto assets are automatically bypassed between 18:30 UTC and 22:00 UTC (`currentUtcTime >= 18.5 && currentUtcTime < 22.0`) with `REJECTED_BY_SESSION_GATE: Late-Session Liquidity Cutoff`. 24/7 Crypto assets (`BTCUSD`, `ETHUSD`) remain fully active.
+
+### 10. Dual Indicator Divergence Conflict Veto (Oscillator Momentum Exhaustion Guard)
+- **Problem:** When both RSI and MACD display conflicting divergence opposing the candidate trade direction (e.g., Bearish RSI + Bearish MACD divergence on a Long setup), entering into exhaustion leads to poor asymmetric expectancy.
+- **Rule:** In `agent-day/index.ts` and `agent-swing/index.ts`, if both `rsi_divergence` and `macd_divergence` conflict with the proposed trade side, the candidate is vetoed at Layer B unless supported by a confirmed S/R flip (`holding_confirmed`) and a structural reversal candlestick pattern (`HAMMER`, `ENGULFING`, `PINBAR`).
+
+### 11. NY Open Opening Cross Market-to-Limit Order Protection (13:30–14:45 UTC)
+- **Problem:** During the opening cross (13:30–14:45 UTC), market orders experience severe spread expansion, price spikes, and slippage.
+- **Rule:** In `agent-day/index.ts`, any opportunity generated during 13:30–14:45 UTC is automatically converted from an instant market order to a structural pullback limit order (`BUY LIMIT`/`SELL LIMIT`) offset by $0.04\times\text{ ATR}$ from market price, ensuring controlled execution fills.
+
+### 12. Pre-AI Asian Session Non-Asian FX Routing (Zero-Token Governance)
+- **Problem:** European and US FX pairs (`EURUSD`, `GBPUSD`, `USDCAD`, `USDCHF`, `EURGBP`) experience thinned market depth, wider spreads, and rangebound chop during the Tokyo/Asian session (22:00–06:00 UTC). Evaluating these pairs every 30 minutes burns LLM tokens and creates repetitive execution desk rejections.
+- **Rule:** In `agent-day/index.ts`, non-Asian FX pairs are bypassed pre-AI between 22:00 UTC and 06:00 UTC with `REJECTED_BY_SESSION_GATE: Asian Session Kill Zone`. Asian/Pacific pairs (`USDJPY`, `GBPJPY`, `EURJPY`, `AUDUSD`, `NZDUSD`, `JP225`) and 24/7 Crypto (`BTCUSD`, `ETHUSD`) remain fully active.
+
+### 13. Relative Volume (RVOL) Expansion & Structural Geometry Hurdle Gate
+- **Problem:** Breakouts or pullbacks initiated during anemic volume ($RVOL < 0.65\times$) frequently result in false breakouts and liquidity traps. Similarly, setups initiated directly into an immediate opposing Daily Central Pivot ($< 0.75\times\text{ ATR}$) lack structural headroom.
+- **Rule:** In `agent-day/index.ts` Layer A:
+  - Candidates with `volume_ratio < 0.65` and `volume_regime === 'ANEMIC'` are discarded pre-AI unless supported by an active liquidity sweep or confirmed S/R flip.
+  - Candidates where distance to the opposing Daily Pivot is $< 0.75\times\text{ ATR}$ are discarded pre-AI with `REJECTED_BY_DETERMINISTIC_FILTER: Structural headroom suffocated by Central Pivot`.
+
+### 14. Institutional Session Open Liquidity Multiplier (+5 Confidence Bonus)
+- **Problem:** Signal conviction should dynamically reflect global interbank liquidity cycles where volume and trend follow-through peak.
+- **Rule:** In `agent-day/index.ts` and `agent-swing/index.ts`, setups triggered during the London Open (06:30–09:30 UTC) or NY Open (12:30–15:30 UTC) receive an automatic `+5` confidence bonus to prioritize prime liquidity windows.
+
+---
+
+## ⚠️ 3V. Pre-Flight Margin Level & Free Margin Buffer Diagnostics (`MARGIN_LEVEL_BELOW_300` / `INSUFFICIENT_FREE_MARGIN_BUFFER`)
+
+> [!CAUTION]
+> **Incident (2026-09-08):** Multiple stock and commodity trades failed with `MARGIN_LEVEL_BELOW_300` because total margin requirements exceeded account safety thresholds. In `RaineInvestEA.mq5`, two pre-flight margin guardrails protect against broker stop-outs:
+> 1. `ACCOUNT_MARGIN_LEVEL < 300.0%`: Execution blocked with `MARGIN_LEVEL_BELOW_300`.
+> 2. `requiredMargin > freeMargin * 0.50`: Execution blocked with `INSUFFICIENT_FREE_MARGIN_BUFFER`.
+
+### Verification Steps:
+1. **Query Failed Trades:**
+   ```sql
+   SELECT id, symbol, side, volume, error_message, created_at
+   FROM user_trades
+   WHERE status = 'FAILED'
+     AND (error_message ILIKE '%MARGIN%' OR error_message ILIKE '%10019%')
+     AND created_at > NOW() - INTERVAL '7 days'
+   ORDER BY created_at DESC;
+   ```
+2. **Auto-Reconciliation:** Verify that `agent-sre` Probe 4F auto-reconciles parent `trade_opportunities` to `status = 'REJECTED'` with reason `Broker Execution Failed: Pre-Flight Margin Level Guard`.
+3. **Margin Settings Check:** Verify `user_risk_settings` has healthy `portfolio_capital` and `assetLotCaps` enforce strict limits (`0.02` for stocks, `0.01` for commodities, `0.05` for indices).
 
 ---
 
