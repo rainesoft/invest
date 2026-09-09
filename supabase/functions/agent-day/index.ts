@@ -1518,10 +1518,37 @@ serve(async (req) => {
                 const hasSRFlip = Boolean(snapshot.sr_flip && (snapshot.sr_flip as any).holding_confirmed);
                 const hasReversalCandle = Boolean(snapshot.candlestick_pattern && ["HAMMER", "BULLISH_ENGULFING", "SHOOTING_STAR", "BEARISH_ENGULFING", "PINBAR"].includes(snapshot.candlestick_pattern));
 
-                if (!hasSRFlip || !hasReversalCandle) {
+                // --- ADAPTIVE RETEST LIMIT PROTOCOL FOR PARABOLIC IMPULSE DIVERGENCE ---
+                // When dual opposing divergence flags momentum exhaustion after a macro impulse (e.g. Oil surging on war headlines),
+                // market orders at highs are retail exhaustion traps. However, institutional order flow anticipates the mean-reverting
+                // retest of broken resistance (S/R flip) or FVG discount. Instead of discarding the setup, convert into an Adaptive
+                // Pullback Limit Order resting at the structural retest level to capture the secondary continuation wave with high R:R.
+                const flipLevel = (snapshot.sr_flip && (snapshot.sr_flip as any).flip_level) ? Number((snapshot.sr_flip as any).flip_level) : null;
+                const fvgRetest = isLongOpposing ? (snapshot.bullish_fvg_50pct || null) : (snapshot.bearish_fvg_50pct || null);
+                const structuralAnchor = flipLevel || fvgRetest;
+                const currentPrice = snapshot.current_price;
+                const atrVal = snapshot.atr_14 || Math.abs(currentPrice * 0.005);
+
+                const isAnchorValidForPullback = structuralAnchor && (
+                  isLongOpposing ? (structuralAnchor < currentPrice && (currentPrice - structuralAnchor) <= (atrVal * 3.5))
+                                 : (structuralAnchor > currentPrice && (structuralAnchor - currentPrice) <= (atrVal * 3.5))
+                );
+
+                if (isAnchorValidForPullback) {
+                  console.log(`[Layer B] [Divergence Retest Solver] ${symbol}: Dual divergence detected at highs. Converting to Pullback Limit @ ${structuralAnchor} (S/R Flip / FVG discount).`);
+                  sendEvent({ type: 'progress', message: `[Divergence Retest Solver] ${symbol}: Dual momentum divergence at highs. Converted to Pullback Limit @ ${structuralAnchor} at structural retest.` });
+
+                  entry_price = Number(structuralAnchor.toFixed(3));
+                  stop_loss = isLongOpposing
+                    ? Number((entry_price - (atrVal * 1.25)).toFixed(3))
+                    : Number((entry_price + (atrVal * 1.25)).toFixed(3));
+
+                  institutional_rationale += ` [Adaptive Retest Solver: Dual momentum divergence (${rsiDiv} & ${macdDiv}) flagged exhaustion at market highs. Re-anchored entry to structural retest Limit @ $${entry_price} with SL @ $${stop_loss} to capture secondary impulse with institutional R:R].`;
+                  is_valid = true;
+                } else if (!hasSRFlip || !hasReversalCandle) {
                   is_valid = false;
-                  institutional_rationale = `Execution Desk Rejected: Dual Momentum Divergence Conflict. Both RSI (${rsiDiv}) and MACD (${macdDiv}) indicate institutional exhaustion against ${evaluation.recommended_direction}. Fading dual divergence requires confirmed S/R flip and reversal candlestick pattern.`;
-                  console.log(`[Layer B] [Divergence Veto] ${symbol}: Discarded setup due to dual opposing momentum divergence.`);
+                  institutional_rationale = `Execution Desk Rejected: Dual Momentum Divergence Conflict. Both RSI (${rsiDiv}) and MACD (${macdDiv}) indicate institutional exhaustion against ${evaluation.recommended_direction}. Fading dual divergence requires confirmed S/R flip or FVG retest level.`;
+                  console.log(`[Layer B] [Divergence Veto] ${symbol}: Discarded setup due to dual opposing momentum divergence without valid retest anchor.`);
                 }
               }
             }
@@ -1859,7 +1886,8 @@ serve(async (req) => {
               dbSide as "LONG" | "SHORT",
               1.70,
               snapshot.atr_14 || undefined,
-              isHighMomentum
+              isHighMomentum,
+              symbol
             );
 
             // Apply adaptive Trading Central levels (clamped entry + expanded TP2 to guarantee institutional 1:1.75 R:R)
