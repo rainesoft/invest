@@ -2536,19 +2536,20 @@ for (const [orderId, trade] of orderMap) {
             }
           }
 
-          // 2. If at minimum 0.01 lot the dollar risk STILL exceeds 3% (e.g. Gold 150pt stop), fine-tune limit entry if within tight 1.15x buffer or block cleanly
+          // 2. If at minimum 0.01 lot the dollar risk STILL exceeds 3% (e.g. Silver/Gold wide stop), fine-tune limit entry if within 1.40x buffer (S-Tier/A-Tier) or block cleanly
           if (riskAmount > maxPermissibleRisk) {
             const isLimitOrder = aiOrderType.includes("LIMIT");
             const isHighConfidence = (signal.confidence || 0) >= 80;
             const maxPointsAtRisk = maxPermissibleRisk / (volumeStep * pointValueUsd);
+            const allowableCompressionFactor = (signal.confidence || 0) >= 90 ? 1.40 : 1.25;
             
-            if (isLimitOrder && isHighConfidence && maxPointsAtRisk > 0 && pointsAtRisk <= maxPointsAtRisk * 1.15) {
+            if (isLimitOrder && isHighConfidence && maxPointsAtRisk > 0 && pointsAtRisk <= maxPointsAtRisk * allowableCompressionFactor) {
               const isLong = signal.side === "LONG" || signal.side === "BUY";
               const optimizedEntryPrice = isLong
                 ? Number((stopLoss + maxPointsAtRisk).toFixed(5))
                 : Number((stopLoss - maxPointsAtRisk).toFixed(5));
 
-              console.log(`[Smart Order Sizing] Fine-Tuning ${signal.symbol} Limit Entry: Refined entry closer to SL ($${entryPrice} → $${optimizedEntryPrice}) to satisfy 3% cap ($${maxPermissibleRisk.toFixed(2)}).`);
+              console.log(`[Smart Order Sizing] Fine-Tuning ${signal.symbol} Limit Entry: Refined entry closer to SL ($${entryPrice} → $${optimizedEntryPrice}) to satisfy 3% cap ($${maxPermissibleRisk.toFixed(2)}). Compression ratio: ${(pointsAtRisk / maxPointsAtRisk).toFixed(2)}x.`);
               
               scaledEntry.price = optimizedEntryPrice;
               defaultEntryPrice = optimizedEntryPrice;
