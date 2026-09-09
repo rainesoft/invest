@@ -1862,7 +1862,8 @@ export function calculateInstitutionalTradingCentralLevels(
   direction: "LONG" | "SHORT",
   minRr = 1.70,
   atr?: number,
-  isHighMomentum = false
+  isHighMomentum = false,
+  symbol?: string
 ): TradingCentralLevels {
   const isLong = direction === "LONG";
   const riskDist = Math.abs(currentPrice - pivotSl);
@@ -1914,6 +1915,29 @@ export function calculateInstitutionalTradingCentralLevels(
     } else {
       suggestedEntry = calculatedLimit;
       orderType = isLong ? "BUY LIMIT" : "SELL LIMIT";
+    }
+  }
+
+  // High-point-value commodity risk compression (e.g. Silver XAGUSD 5,000 oz contract):
+  // 0.01 lot = $50/pt. Max allowable stop distance for 3% risk on $1,100 capital is $0.66.
+  if (symbol && (symbol.includes("XAG") || symbol.includes("SILVER"))) {
+    const maxSilverStopDist = 0.66;
+    const currentDist = Math.abs(suggestedEntry - pivotSl);
+    if (currentDist > maxSilverStopDist) {
+      suggestedEntry = isLong
+        ? Number((pivotSl + maxSilverStopDist).toFixed(5))
+        : Number((pivotSl - maxSilverStopDist).toFixed(5));
+      orderType = isLong ? "BUY LIMIT" : "SELL LIMIT";
+
+      // Re-expand TP2 and TP1 to guarantee minimum R:R
+      const effectiveRisk = Math.abs(suggestedEntry - pivotSl);
+      const targetReward = effectiveRisk * (minRr + 0.05);
+      finalTp2 = isLong
+        ? Number((suggestedEntry + targetReward).toFixed(5))
+        : Number((suggestedEntry - targetReward).toFixed(5));
+      finalTp1 = isLong
+        ? Number((suggestedEntry + (targetReward * (isHighMomentum ? 0.60 : 0.50))).toFixed(5))
+        : Number((suggestedEntry - (targetReward * (isHighMomentum ? 0.60 : 0.50))).toFixed(5));
     }
   }
 
