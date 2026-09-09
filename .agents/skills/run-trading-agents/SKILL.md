@@ -192,6 +192,24 @@ When an asset fails to achieve S-Tier confidence (e.g. confidence < 75 due to mi
       * At $75\%$ Win Probability (S-Tier Fib floor + macro alignment):
         $$EV_{\text{TP2}} = (0.75 \times \$303.30) - (0.25 \times \$41.00) = \$227.48 - \$10.25 = +\$217.23\text{ per trade}$$
         $$EV_{\text{TP3}} = (0.75 \times \$475.00) - (0.25 \times \$41.00) = \$356.25 - \$10.25 = +\$346.00\text{ per trade}$$
+    - **BTCUSD Contract Mathematics (0.01 lot = 0.01 BTC = $0.01 / $1.00 move)**:
+      * Point Value = $\$0.01\text{ per } \$1.00\text{ move}$.
+      * Example S-Tier Swing Buy Market @ $\$79,543.35$, SL @ $\$76,711.34$ (Risk Distance = $\$2,832.01 \implies \$28.32\text{ risk USD}$), TP1 @ $\$83,366.56$ (Reward Distance = $\$3,823.21 \implies \$38.23\text{ reward}$), TP2 @ $\$86,198.57$ (Reward Distance = $\$6,655.22 \implies \$66.55\text{ reward}$), TP3 @ $\$90,413.70$ (Reward Distance = $\$10,870.35 \implies \$108.70\text{ reward}$), R:R = $1:2.35$ to TP2, $1:3.84$ to TP3.
+      * At $75\%$ Win Probability (S-Tier standard):
+        $$EV_{\text{TP2}} = (0.75 \times \$66.55) - (0.25 \times \$28.32) = \$49.91 - \$7.08 = +\$42.83\text{ per 0.01 lot}$$
+        $$EV_{\text{TP3}} = (0.75 \times \$108.70) - (0.25 \times \$28.32) = \$81.53 - \$7.08 = +\$74.45\text{ per 0.01 lot}$$
+      * Account Risk Efficiency: Excellent ($<\$30$ risk on $\$1,100$ equity, yielding $>+2.35R$).
+
+    - **XAGUSD Contract Mathematics (0.01 lot = 50 oz = $50.00 / $1.00 move)**:
+      * Point Value = $\$50.00\text{ per } \$1.00\text{ move}$.
+      * Maximum Allowable Stop Distance to stay under $3.0\%$ capital cap ($\$33.00$):
+        $$\text{Max Allowable SL Distance} = \frac{\$33.00}{\$50.00} = \$0.66$$
+      * Example S-Tier Buy Limit @ $\$66.45$, SL @ $\$65.57$ (Risk Distance = $\$0.88 \implies \$44.00\text{ risk}$).
+      * **Volume Allocation Intervention**: Because $\$44.00 > \$33.00$, the Execution Desk rejects the order with `Execution Skipped: No volume allocated (10% Account Blowout Protection hard cap reached)`.
+      * **The Fix**: The Adaptive Pullback Limit Solver must compress entry closer to the support pivot: Buy Limit @ $\$66.23$, SL @ $\$65.57$ (Risk Distance = $\$0.66 \implies \$33.00\text{ risk}$), TP2 @ $\$67.92$ (Reward Distance = $\$1.69 \implies \$84.50\text{ reward}$, R:R $= 1:2.56$).
+      * At $75\%$ Win Probability:
+        $$EV_{\text{TP2}} = (0.75 \times \$84.50) - (0.25 \times \$33.00) = \$63.38 - \$8.25 = +\$55.13\text{ per 0.01 lot}$$
+
     - Prioritize capital allocation to setups with $EV > 1.0R$ and asymmetric upside multipliers.
 
 ---
@@ -209,4 +227,13 @@ When an asset fails to achieve S-Tier confidence (e.g. confidence < 75 due to mi
    - For high-volatility commodities and metals (`XAUUSD`, `XAGUSD`, `UKOIL`, `USOIL`), calibrate the maximum permissible entry offset buffer to `Math.max(dailyAtr * 0.50, currentPrice * 0.005)`. When raw stop loss exceeds the 3% capital cap, this allows the adaptive limit solver to safely compress the stop without prematurely rejecting valid institutional swing setups.
 5. **Multi-Agent Inter-Asset Context Routing**:
    - `agent-news` writes high-impact catalysts into `market_context` with a 4-hour TTL. `agent-swing` and `agent-day` automatically consume this context and inherit correlated peer sentiment (`UKOIL` $\leftrightarrow$ `USOIL`, `XAGUSD` $\leftrightarrow$ `XAUUSD`, `EURUSD` $\leftrightarrow$ `USDCHF` inverse) to grant +20 confidence boosts.
+6. **Crypto Spread Guard Handling (`SPREAD_TOO_WIDE`)**:
+   - During crypto volatility spikes or broker roll-over, MT5 spreads for `BTCUSD` can widen (e.g. 275 points). If an S-Tier signal encounters `Execution Failed: SPREAD_TOO_WIDE:275.0`, configure the VPS execution bridge to:
+     * Convert the order to a passive Limit Order resting outside the current bid/ask spread.
+     * Expand the broker maximum spread tolerance filter for crypto pairs from 150 points to 350 points in `agent-risk.ts`.
+7. **Dual Momentum Divergence Exhaustion Handling (e.g. Oil Parabolic Breakouts)**:
+   - When an asset explodes on geopolitical news (e.g. Brent Crude `UKOIL` surging to $100), `agent-day` may flag `Dual Momentum Divergence Conflict (RSI REGULAR_BEARISH & MACD REGULAR_BEARISH)`.
+   - Chasing market orders into dual bearish divergence has a low expected value. Instead of rejecting the trade entirely, the pipeline should originate an **Adaptive Pullback Limit Order** anchored at the confirmed S/R flip level ($95.62 – $96.15) or FVG discount zone, capturing the secondary expansion wave with $\ge 1:2.0$ R:R.
+8. **Intraday vs. Swing Timeframe Decoupling**:
+   - In `scripts/call_agents.mjs`, timeframe flags are now decoupled: `agent-day` is locked to intraday M30 resolution (`30m`), while `agent-swing` processes macro swing charts (`1D`). Passing `--timeframe 1D` will correctly evaluate swing setups on daily bars while allowing `agent-day` to scan intraday liquidity without resolution corruption.
 
