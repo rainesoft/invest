@@ -103,6 +103,14 @@ function isIndex(symbol: string): boolean {
   return ["US30", "NAS100", "USTEC", "SPX500", "US500", "GER30", "GER40", "DE30", "JP225"].includes(upper);
 }
 
+function isAsianOrPacificAsset(symbol: string): boolean {
+  if (!symbol) return false;
+  const upper = symbol.toUpperCase();
+  if (isCrypto(upper)) return true;
+  const asianKeywords = ["JPY", "AUD", "NZD", "JP225", "NIKKEI", "HK50", "CHINA50"];
+  return asianKeywords.some(k => upper.includes(k));
+}
+
 function isMarketOpen(symbol: string): boolean {
   if (!symbol) return false;
   const upper = symbol.toUpperCase();
@@ -1865,13 +1873,15 @@ for (const [orderId, trade] of orderMap) {
     }
 
     // === EXECUTION GUARD: TIME OF DAY KILL ZONE ===
-    // Prevent automated execution during Asian session (22:00 - 06:00 UTC) to avoid low volume chop
+    // Prevent automated execution during Asian session (22:00 - 06:00 UTC) for non-Asian pairs to avoid low volume chop
+    // Swing trades, Asian/Pacific assets (USDJPY, AUDUSD, NZDUSD, JP225), and 24/7 Crypto are fully permitted
     const isSwingTrade = signal.source === "agent-swing" || signal.source_agent === "agent-swing" || ["4h", "1d", "1w"].includes(signal.timeframe?.toLowerCase()) || signal.ai_summary?.includes("[SWING]");
-    if (!isManual && !isSwingTrade) {
+    const isAsianAsset = isAsianOrPacificAsset(signal.symbol);
+    if (!isManual && !isSwingTrade && !isAsianAsset) {
       const currentHourUTC = new Date().getUTCHours();
       if (currentHourUTC >= 22 || currentHourUTC < 6) {
-        console.log(`[PAMM Router] Execution blocked: Inside Asian Session Kill Zone (${currentHourUTC}:00 UTC).`);
-        const rejectReason = `Rejected: Inside Asian Session Kill Zone (${currentHourUTC}:00 UTC). (Only bypassed for Swing Trades)`;
+        console.log(`[PAMM Router] Execution blocked: Inside Asian Session Kill Zone (${currentHourUTC}:00 UTC) for non-Asian asset ${signal.symbol}.`);
+        const rejectReason = `Rejected: Inside Asian Session Kill Zone (${currentHourUTC}:00 UTC). (Only bypassed for Swing Trades & Asian/Pacific assets)`;
         await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + rejectReason, ai_risks: rejectReason }).eq("id", signal.id);
         return new Response(`Blocked by Kill Zone filter at ${currentHourUTC}:00 UTC`, { status: 200 });
       }
@@ -2274,7 +2284,8 @@ for (const [orderId, trade] of orderMap) {
         ["XAUUSD", "XAGUSD"],
         ["US30", "NAS100", "SPX500", "GER30", "JP225"],
         ["EURUSD", "GBPUSD"],
-        ["UKOIL", "USOIL"]
+        ["UKOIL", "USOIL"],
+        ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "META", "GOOGL"]
       ];
       
       const group = correlationGroups.find(g => g.includes(signal.symbol));
@@ -2490,6 +2501,13 @@ for (const [orderId, trade] of orderMap) {
           NZDUSD: 0.20,
           EURJPY: 0.20,
           GBPJPY: 0.20,
+          AAPL: 0.02,
+          TSLA: 0.02,
+          NVDA: 0.02,
+          AMZN: 0.02,
+          MSFT: 0.02,
+          META: 0.02,
+          GOOGL: 0.02,
         };
         const maxAssetCap = assetLotCaps[signal.symbol] || 0.20;
         const userMaxCap = Number(user.max_volume_per_trade) || maxAssetCap;
