@@ -181,7 +181,7 @@ const SwingTradeSchema = z.object({
       "Stretch/runner target — major Fib extension or psychological level",
     ),
   }),
-  confidence_score: z.number().describe("0-100. S-Tier = 90+. Requires multi-confluence: Fib + structure + macro"),
+  confidence_score: z.number().describe("0-95. S-Tier = 90-95. A confidence of 100 is statistically impossible in trading. Requires multi-confluence: Fib + structure + macro"),
   swing_rationale: z.object({
     fib_entry_level: z.string().describe("e.g. '61.8% retracement at $3,950'"),
     structural_confirmation: z.string().describe("e.g. 'Weekly support zone, daily wick rejection'"),
@@ -387,7 +387,7 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
           type: "object",
           properties: {
             thought_process: { type: "string", description: "Step-by-step reasoning for the approval. You MUST calculate the exact R:R for TP1, TP2, and TP3 here before filling in the execution parameters. You MUST verify that the suggested_entry_price exactly matches the chosen Fib level or SMC zone." },
-            confidence_score: { type: "number", description: "Score 0-100" },
+            confidence_score: { type: "number", description: "Score 0-95 (Max 95, S-Tier = 90-95. A confidence of 100 is statistically impossible in trading)" },
             recommended_direction: { type: "string", enum: ["LONG", "SHORT", "REQUIRE_LTF_DRILLDOWN"] },
             fib_entry_level: { type: "string", description: "e.g. 61.8% or 78.6%" },
             structural_confirmation: { type: "string" },
@@ -1536,8 +1536,9 @@ serve(async (req) => {
             return;
           }
 
+          const MAX_CONFIDENCE_CEILING = 95;
           const confidence = evaluation.confidence_score;
-          let adjustedConfidence = confidence;
+          let adjustedConfidence = Math.min(MAX_CONFIDENCE_CEILING, confidence);
           const confidenceAdjustments: string[] = [];
 
           // === FEATURE 4: NEWS-ENHANCED CONFIDENCE BOOST (+8) ===
@@ -1549,7 +1550,7 @@ serve(async (req) => {
             headlines
           );
           if (newsBoost > 0) {
-            adjustedConfidence = Math.min(100, adjustedConfidence + newsBoost);
+            adjustedConfidence = Math.min(MAX_CONFIDENCE_CEILING, adjustedConfidence + newsBoost);
             confidenceAdjustments.push(`+${newsBoost} News-Macro Alignment`);
             sendEvent({ type: 'progress', message: `[${symbol as string}] News-Macro Boost: +${newsBoost} (macro event aligns with ${evaluation.recommended_direction} direction)` });
           }
@@ -1559,7 +1560,7 @@ serve(async (req) => {
           if (fomcModeActive && evaluation.recommended_direction !== "NONE") {
             const fomcBoost = computeMacroConfidenceBoost(symbol as string, evaluation.recommended_direction, allEvents, headlines);
             if (fomcBoost > 0) {
-              adjustedConfidence = Math.min(100, adjustedConfidence + 8);
+              adjustedConfidence = Math.min(MAX_CONFIDENCE_CEILING, adjustedConfidence + 8);
               confidenceAdjustments.push(`+8 FOMC Window Alignment (${fomcPreEventActive ? "pre-event" : "post-event"})`);
               sendEvent({ type: 'progress', message: `[${symbol as string}] FOMC Window Boost: +8 (${fomcPreEventActive ? "pre-event" : "post-event"} macro alignment)` });
             }
@@ -1567,7 +1568,7 @@ serve(async (req) => {
 
           // === FEATURE 3 (applied): HTF FIB ALIGNMENT BONUS (+5) ===
           if ((snapshot as any).htf_fib_alignment === true) {
-            adjustedConfidence = Math.min(100, adjustedConfidence + 5);
+            adjustedConfidence = Math.min(MAX_CONFIDENCE_CEILING, adjustedConfidence + 5);
             confidenceAdjustments.push(`+5 HTF Fib Alignment (Daily ${(snapshot as any).htf_fib_daily_level?.toFixed(2)} ≈ Weekly ${(snapshot as any).htf_fib_weekly_level?.toFixed(2)})`);
             sendEvent({ type: 'progress', message: `[${symbol as string}] HTF Fib Alignment Bonus: +5 (daily/weekly Fib zones overlap within 0.3%)` });
           }
@@ -1579,7 +1580,7 @@ serve(async (req) => {
               (evaluation.recommended_direction === 'LONG' && srFlip.type === 'BULLISH_SR_FLIP') ||
               (evaluation.recommended_direction === 'SHORT' && srFlip.type === 'BEARISH_SR_FLIP');
             if (isSRAligned) {
-              adjustedConfidence = Math.min(100, adjustedConfidence + 10);
+              adjustedConfidence = Math.min(MAX_CONFIDENCE_CEILING, adjustedConfidence + 10);
               confidenceAdjustments.push(`+10 S/R Flip Confluence (${srFlip.type} holding @ ${srFlip.flip_level?.toFixed(2)})`);
               sendEvent({ type: 'progress', message: `[${symbol as string}] S/R Flip Bonus: +10 (${srFlip.narrative})` });
             }
@@ -1593,7 +1594,7 @@ serve(async (req) => {
             const isLondonOpen = utcMins >= 390 && utcMins <= 570; // 06:30 to 09:30 UTC
             const isNyOpen = utcMins >= 750 && utcMins <= 930;     // 12:30 to 15:30 UTC
             if (isLondonOpen || isNyOpen) {
-              adjustedConfidence = Math.min(100, adjustedConfidence + 5);
+              adjustedConfidence = Math.min(MAX_CONFIDENCE_CEILING, adjustedConfidence + 5);
               const sessionName = isLondonOpen ? "London Open" : "NY Open";
               confidenceAdjustments.push(`+5 ${sessionName} Liquidity Expansion`);
               console.log(`[Layer B] [${symbol as string}] ${sessionName} Liquidity Expansion Bonus: +5`);
@@ -1603,7 +1604,7 @@ serve(async (req) => {
 
           // === MACRO SCOUT ALIGNMENT BONUS (+20) / PENALTY (-30) ===
           if (pendingNewsSide && evaluation.recommended_direction === pendingNewsSide) {
-             adjustedConfidence = Math.min(100, adjustedConfidence + 20);
+             adjustedConfidence = Math.min(MAX_CONFIDENCE_CEILING, adjustedConfidence + 20);
              confidenceAdjustments.push(`+20 Macro Scout Fundamental Confluence (${pendingNewsSide})`);
              sendEvent({ type: 'progress', message: `[${symbol as string}] MASSIVE BOOST: Technicals align perfectly with macro sentiment (${pendingNewsSide})` });
           } else if (pendingNewsSide && evaluation.recommended_direction !== "NONE") {

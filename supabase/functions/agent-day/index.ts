@@ -170,6 +170,11 @@ CRITICAL RULES:
 17. SUPPORT / RESISTANCE (S/R) FLIP CONFLUENCE:
     - If snapshot.sr_flip is present with type === 'BULLISH_SR_FLIP' and holding_confirmed === true: A prior resistance level has broken out and is now holding as institutional support. Anchor Buy Limit / Pullback entries to snapshot.sr_flip.flip_level (+10 confidence bonus).
     - If snapshot.sr_flip is present with type === 'BEARISH_SR_FLIP' and holding_confirmed === true: A prior support level has broken down and is now acting as institutional resistance. Anchor Sell Limit / Pullback entries to snapshot.sr_flip.flip_level (+10 confidence bonus).
+18. CONFIDENCE CALIBRATION (CRITICAL):
+    - A confidence score of 100 is STATISTICALLY IMPOSSIBLE in trading. Do not ever output a confidence of 100.
+    - S-Tier (90-95): High-conviction multi-confluence setup (Regime + S/R + Momentum).
+    - A-Tier (80-89): Strong setup, clear structure.
+    - B-Tier (70-79): Valid setup but counter-trend or near major chop zone.
 
 Historical Memory:
 ${historicalMemory || "None"}
@@ -185,7 +190,7 @@ ${JSON.stringify(snapshot, null, 2)}`,
           type: "object",
           properties: {
             thought_process: { type: "string", description: "Step-by-step reasoning for the approval. You MUST calculate your R:R before filling in the execution parameters. You MUST verify that the suggested_entry_price exactly matches the chosen structural or SMC zone." },
-            confidence_score: { type: "number", description: "Score 0-100" },
+            confidence_score: { type: "number", description: "Score 0-95 (Max 95, S-Tier = 90-95. A confidence of 100 is statistically impossible in trading)" },
             recommended_direction: { type: "string", enum: ["LONG", "SHORT", "REQUIRE_LTF_DRILLDOWN"] },
             structural_confirmation: { type: "string" },
             market_structure: { type: "string" },
@@ -1393,8 +1398,10 @@ serve(async (req) => {
             let stop_loss = Number((evaluation.execution_parameters?.suggested_stop_loss || (dbSide === "LONG" ? snapshot.safe_long_stop_loss : snapshot.safe_short_stop_loss)).toFixed(3));
             // --- TRUST AI STRUCTURAL STOPS (No Dynamic ATR Override) ---
             
+            const MAX_CONFIDENCE_CEILING = 95;
             let raw_confidence = evaluation.confidence_score || 50;
             let confidence_score = raw_confidence <= 1.0 ? raw_confidence * 100 : raw_confidence;
+            confidence_score = Math.min(MAX_CONFIDENCE_CEILING, confidence_score);
 
             // === S/R FLIP CONFLUENCE BONUS (+10) ===
             const srFlip = (snapshot as any).sr_flip;
@@ -1403,7 +1410,7 @@ serve(async (req) => {
                 (evaluation.recommended_direction === 'LONG' && srFlip.type === 'BULLISH_SR_FLIP') ||
                 (evaluation.recommended_direction === 'SHORT' && srFlip.type === 'BEARISH_SR_FLIP');
               if (isSRAligned) {
-                confidence_score = Math.min(100, confidence_score + 10);
+                confidence_score = Math.min(MAX_CONFIDENCE_CEILING, confidence_score + 10);
                 console.log(`[Layer B] [${symbol}] S/R Flip Confluence Bonus: +10 (${srFlip.narrative})`);
                 sendEvent({ type: 'progress', message: `[${symbol}] S/R Flip Bonus: +10 (${srFlip.type} holding @ ${srFlip.flip_level})` });
               }
@@ -1417,7 +1424,7 @@ serve(async (req) => {
               const isLondonOpen = utcMins >= 390 && utcMins <= 570; // 06:30 to 09:30 UTC
               const isNyOpen = utcMins >= 750 && utcMins <= 930;     // 12:30 to 15:30 UTC
               if (isLondonOpen || isNyOpen) {
-                confidence_score = Math.min(100, confidence_score + 5);
+                confidence_score = Math.min(MAX_CONFIDENCE_CEILING, confidence_score + 5);
                 const sessionName = isLondonOpen ? "London Open" : "NY Open";
                 console.log(`[Layer B] [${symbol}] ${sessionName} Liquidity Expansion Bonus: +5`);
                 sendEvent({ type: 'progress', message: `[${symbol}] ${sessionName} Liquidity Bonus: +5` });
