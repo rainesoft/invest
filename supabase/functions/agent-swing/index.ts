@@ -430,7 +430,7 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
     ],
     tool_choice: "required",
     parallel_tool_calls: false,
-    max_output_tokens: 1000
+    max_output_tokens: 2500
   };
 
   let responseData: any = null;
@@ -476,7 +476,27 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
   }
 
   console.log(`[Responses API] Tool called: ${toolCall.name}`);
-  const args = JSON.parse(toolCall.arguments);
+  let args: any;
+  try {
+    args = JSON.parse(toolCall.arguments);
+  } catch (parseErr: any) {
+    console.warn(`[Responses API] Direct JSON.parse failed for ${symbol}: ${parseErr.message}. Attempting resilient repair...`);
+    try {
+      let rawArgs = (toolCall.arguments || "").trim();
+      const quoteCount = (rawArgs.match(/(?<!\\)"/g) || []).length;
+      if (quoteCount % 2 !== 0) {
+        rawArgs += '"';
+      }
+      const openBraces = (rawArgs.match(/{/g) || []).length;
+      const closeBraces = (rawArgs.match(/}/g) || []).length;
+      for (let b = 0; b < openBraces - closeBraces; b++) {
+        rawArgs += "}";
+      }
+      args = JSON.parse(rawArgs);
+    } catch (_) {
+      throw new Error(`AI evaluation response JSON parse failed: ${parseErr.message}`);
+    }
+  }
 
   if (toolCall.name === "reject_trade") {
     const mathProof = args.rejection_math_proof ? `\n[Math Proof]: ${args.rejection_math_proof}` : "";
@@ -1003,6 +1023,7 @@ serve(async (req) => {
           ["US30", "NAS100", "SPX500", "GER30", "JP225"],
           ["EURUSD", "GBPUSD"],
           ["UKOIL", "USOIL"],
+          ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "META", "GOOGL"],
         ];
         const group = correlationGroups.find(g => g.includes(symbol as string));
         let openCorrelatedTrades: { side: string; symbol: string }[] = [];
@@ -1545,6 +1566,22 @@ serve(async (req) => {
             }
           }
 
+          // === INSTITUTIONAL SESSION OPEN LIQUIDITY BONUS (+5) ===
+          // London Open (06:30-09:30 UTC) and NY Open (12:30-15:30 UTC) provide peak institutional volume expansion and follow-through.
+          if (evaluation.recommended_direction !== "NONE") {
+            const now = new Date();
+            const utcMins = now.getUTCHours() * 60 + now.getUTCMinutes();
+            const isLondonOpen = utcMins >= 390 && utcMins <= 570; // 06:30 to 09:30 UTC
+            const isNyOpen = utcMins >= 750 && utcMins <= 930;     // 12:30 to 15:30 UTC
+            if (isLondonOpen || isNyOpen) {
+              adjustedConfidence = Math.min(100, adjustedConfidence + 5);
+              const sessionName = isLondonOpen ? "London Open" : "NY Open";
+              confidenceAdjustments.push(`+5 ${sessionName} Liquidity Expansion`);
+              console.log(`[Layer B] [${symbol as string}] ${sessionName} Liquidity Expansion Bonus: +5`);
+              sendEvent({ type: 'progress', message: `[${symbol as string}] ${sessionName} Liquidity Bonus: +5` });
+            }
+          }
+
           // === MACRO SCOUT ALIGNMENT BONUS (+20) / PENALTY (-30) ===
           if (pendingNewsSide && evaluation.recommended_direction === pendingNewsSide) {
              adjustedConfidence = Math.min(100, adjustedConfidence + 20);
@@ -1822,6 +1859,26 @@ serve(async (req) => {
               console.log(`[${symbol as string}] [Correlation Guard] ${rejectReason}`);
               rejections.push({ symbol: symbol as string, reason: rejectReason, layer: "Correlation Guard" });
               return;
+            }
+          }
+
+          // === DUAL INDICATOR DIVERGENCE CONFLICT VETO ===
+          if (snapshot.rsi_divergence && snapshot.macd_divergence) {
+            const rsiDiv = snapshot.rsi_divergence;
+            const macdDiv = snapshot.macd_divergence;
+            const isLongOpposing = dbSide === "LONG" && (rsiDiv.includes("BEARISH") && macdDiv.includes("BEARISH"));
+            const isShortOpposing = dbSide === "SHORT" && (rsiDiv.includes("BULLISH") && macdDiv.includes("BULLISH"));
+
+            if (isLongOpposing || isShortOpposing) {
+              const hasSRFlip = Boolean(snapshot.sr_flip && (snapshot.sr_flip as any).holding_confirmed);
+              const hasReversalCandle = Boolean(snapshot.candlestick_pattern && ["HAMMER", "BULLISH_ENGULFING", "SHOOTING_STAR", "BEARISH_ENGULFING", "PINBAR"].includes(snapshot.candlestick_pattern));
+
+              if (!hasSRFlip || !hasReversalCandle) {
+                const rejectReason = `Execution Desk Rejected: Dual Momentum Divergence Conflict. Both RSI (${rsiDiv}) and MACD (${macdDiv}) indicate institutional exhaustion against ${dbSide}. Fading dual divergence requires confirmed S/R flip and reversal candlestick pattern.`;
+                console.log(`[${symbol as string}] [Divergence Veto] ${rejectReason}`);
+                rejections.push({ symbol: symbol as string, reason: rejectReason, layer: "Divergence Veto" });
+                return;
+              }
             }
           }
 

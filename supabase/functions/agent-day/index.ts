@@ -3,7 +3,7 @@ import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2.108.2"
 import { fetchPaperBars, Bar, placePaperOrder, makeClientOrderId } from "../../../packages/execution/index.ts";
 import { sma, rsi, detectRegime } from "../../../packages/strategy/index.ts";
 import { insertAuditLog } from "../../../packages/core/audit.ts";
-import { isMarketOpen } from "../../../packages/core/market.ts";
+import { isMarketOpen, isCrypto, isUsEquity, isAsianOrPacificAsset } from "../../../packages/core/market.ts";
 import { netEdge, transactionCost, slippage } from "../../../packages/strategy/index.ts";
 import { getContextSnapshot, LogicContext, calculatePivotPoints, computeLiquiditySweepScore, calculateInstitutionalTradingCentralLevels } from "../../../packages/strategy/indicators.ts";
 import { validateGlobalSignal, validateCentralBankIntervention } from "../../../packages/strategy/agent-risk.ts";
@@ -112,7 +112,7 @@ async function evaluateOpportunity(symbol: string, snapshot: LogicContext & { ag
   
   const body = {
     model: "gpt-4o-mini",
-    max_output_tokens: 1000,
+    max_output_tokens: 2500,
     input: `Evaluate the raw market data for ${symbol} on the ${timeframe} timeframe at current price ${snapshot.current_price} and autonomously originate the highest probability trade setup, if any. Return the required execution profile using the provided tools.
     
 CRITICAL RULES:
@@ -271,7 +271,27 @@ ${JSON.stringify(snapshot, null, 2)}`,
   }
 
   console.log(`[Responses API] Tool called: ${toolCall.name}`);
-  const args = JSON.parse(toolCall.arguments);
+  let args: any;
+  try {
+    args = JSON.parse(toolCall.arguments);
+  } catch (parseErr: any) {
+    console.warn(`[Responses API] Direct JSON.parse failed for ${symbol}: ${parseErr.message}. Attempting resilient repair...`);
+    try {
+      let rawArgs = (toolCall.arguments || "").trim();
+      const quoteCount = (rawArgs.match(/(?<!\\)"/g) || []).length;
+      if (quoteCount % 2 !== 0) {
+        rawArgs += '"';
+      }
+      const openBraces = (rawArgs.match(/{/g) || []).length;
+      const closeBraces = (rawArgs.match(/}/g) || []).length;
+      for (let b = 0; b < openBraces - closeBraces; b++) {
+        rawArgs += "}";
+      }
+      args = JSON.parse(rawArgs);
+    } catch (_) {
+      throw new Error(`AI evaluation response JSON parse failed: ${parseErr.message}`);
+    }
+  }
 
   if (toolCall.name === "reject_trade") {
     const mathProof = args.rejection_math_proof ? `\n[Math Proof]: ${args.rejection_math_proof}` : "";
@@ -712,6 +732,7 @@ serve(async (req) => {
               ["US30", "NAS100", "SPX500", "GER30", "JP225"],
               ["EURUSD", "GBPUSD"],
               ["UKOIL", "USOIL"],
+              ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "META", "GOOGL"],
             ];
             const group = correlationGroups.find(g => g.includes(symbol));
             let openCorrelatedTrades: { side: string; symbol: string }[] = [];
@@ -1032,6 +1053,46 @@ serve(async (req) => {
               return;
             }
 
+            // --- LATE-SESSION INTRADAY LIQUIDITY & ROLLOVER PROXIMITY CUTOFF ---
+            // Intraday 30m positions entered after 18:30 UTC face widening spreads and dropping market depth ahead of 21:00 UTC rollover.
+            // 24/7 Crypto (BTCUSD, ETHUSD) and US Equities during market open are exempt.
+            if (!isManual && !isCrypto(symbol) && !isUsEquity(symbol)) {
+              const now = new Date();
+              const utcHours = now.getUTCHours();
+              const utcMinutes = now.getUTCMinutes();
+              const totalUtcMins = utcHours * 60 + utcMinutes;
+              // 18:30 UTC (1110 mins) to 22:00 UTC (1320 mins)
+              if (totalUtcMins >= 1110 && totalUtcMins <= 1320) {
+                const rejectReason = `Skipped: Late-Session Liquidity Cutoff (18:30-22:00 UTC). Interbank depth-of-book thins ahead of daily settlement rollover. Intraday 30m entries halted to protect expectancy.`;
+                console.log(`[${symbol}] [Session Cutoff] ${rejectReason}`);
+                sendEvent({ type: 'progress', message: `[${symbol}] ${rejectReason}` });
+                rejections.push({ symbol, reason: rejectReason, layer: "Session Cutoff" });
+                return;
+              }
+            }
+
+            // --- PRE-AI ASIAN SESSION LOW-LIQUIDITY CUTOFF FOR NON-ASIAN FX ---
+            // European and US pairs (EURUSD, GBPUSD, USDCAD, USDCHF, etc.) have low liquidity and wide spreads during Asian hours (22:00-06:00 UTC).
+            // Bypassing them pre-AI eliminates ~80% of unnecessary LLM evaluations and prevents Asian chop traps.
+            // Asian/Pacific pairs (USDJPY, GBPJPY, EURJPY, AUDUSD, NZDUSD, JP225) and 24/7 Crypto remain active.
+            if (!isManual && !isAsianOrPacificAsset(symbol)) {
+              const now = new Date();
+              const utcHours = now.getUTCHours();
+              if (utcHours >= 22 || utcHours < 6) {
+                const rejectReason = `Skipped: Asian Session Kill Zone (${utcHours}:00 UTC). Non-Asian FX pairs lack institutional liquidity during Tokyo hours. Pre-AI filter skipped LLM evaluation.`;
+                console.log(`[${symbol}] [Asian Session Gate] ${rejectReason}`);
+                sendEvent({ type: 'progress', message: `[${symbol}] Asian session low-liquidity window. Skipped LLM.` });
+                await insertAuditLog(supabase, {
+                  actor_type: "SYSTEM",
+                  action: "REJECTED_BY_SESSION_GATE",
+                  entity_type: "research",
+                  payload_json: { symbol, reason: rejectReason },
+                });
+                rejections.push({ symbol, reason: rejectReason, layer: "Session Gate" });
+                return;
+              }
+            }
+
             // --- COMMODITY DAILY ROLLOVER BLACKOUT GUARD ---
             if (["UKOIL", "USOIL"].includes(symbol)) {
               const now = new Date();
@@ -1210,6 +1271,49 @@ serve(async (req) => {
                   }
                 }
               }
+
+              // Relative Volume (RVOL) Expansion Filter
+              // If relative volume is anemic (<0.65x) without an active boundary liquidity sweep or confirmed S/R flip, reject pre-AI.
+              if (snapshot.volume_ratio != null && snapshot.volume_ratio < 0.65 && snapshot.volume_regime === "ANEMIC") {
+                const hasSweep = snapshot.asian_sweep && snapshot.asian_sweep !== "NONE";
+                const hasSRFlip = snapshot.sr_flip && (snapshot.sr_flip as any).type !== "NONE" && (snapshot.sr_flip as any).holding_confirmed;
+                if (!hasSweep && !hasSRFlip) {
+                  const rejectReason = `Zero-Token Pre-Filter: Anemic relative volume (RVOL ${(snapshot.volume_ratio * 100).toFixed(0)}% < 65% 20-SMA). Institutional breakout/pullback follow-through requires volume expansion. LLM skipped.`;
+                  console.log(`[Deterministic Filter] Discarding ${symbol}: ${rejectReason}`);
+                  sendEvent({ type: 'progress', message: `[Deterministic Filter] ${symbol}: Low volume (${(snapshot.volume_ratio * 100).toFixed(0)}% RVOL). Skipped LLM.` });
+                  await insertAuditLog(supabase, {
+                    actor_type: "SYSTEM",
+                    action: "REJECTED_BY_DETERMINISTIC_FILTER",
+                    entity_type: "research",
+                    payload_json: { symbol, reason: rejectReason },
+                  });
+                  rejections.push({ symbol, reason: rejectReason, layer: "Deterministic Filter" });
+                  return;
+                }
+              }
+
+              // Pre-AI Structural Geometry Hurdle Floor
+              // If the immediate distance from current price to the nearest opposing major level is suffocated (< 0.75x ATR), the structural headroom is insufficient.
+              if (snapshot.atr_14 && snapshot.atr_14 > 0 && snapshot.current_price && snapshot.htf_pivot) {
+                const p = snapshot.current_price;
+                const atr = snapshot.atr_14;
+                const distToPivot = Math.abs(p - snapshot.htf_pivot);
+                const isOpposingTrend = (snapshot.trend_alignment.startsWith("BULLISH") && p < snapshot.htf_pivot) ||
+                                        (snapshot.trend_alignment.startsWith("BEARISH") && p > snapshot.htf_pivot);
+                if (isOpposingTrend && distToPivot < (0.75 * atr)) {
+                  const rejectReason = `Zero-Token Pre-Filter: Structural headroom suffocated by Central Pivot ($${snapshot.htf_pivot}). Distance to hurdle (${distToPivot.toFixed(4)}) < 0.75x ATR (${(0.75 * atr).toFixed(4)}). LLM skipped.`;
+                  console.log(`[Deterministic Filter] Discarding ${symbol}: ${rejectReason}`);
+                  sendEvent({ type: 'progress', message: `[Deterministic Filter] ${symbol}: Compressed headroom to Pivot. Skipped LLM.` });
+                  await insertAuditLog(supabase, {
+                    actor_type: "SYSTEM",
+                    action: "REJECTED_BY_DETERMINISTIC_FILTER",
+                    entity_type: "research",
+                    payload_json: { symbol, reason: rejectReason },
+                  });
+                  rejections.push({ symbol, reason: rejectReason, layer: "Deterministic Filter" });
+                  return;
+                }
+              }
             }
 
             // LAYER B: Cognitive Guard (Senior Risk Officer)
@@ -1288,9 +1392,6 @@ serve(async (req) => {
             let entry_price = Number((evaluation.execution_parameters?.suggested_entry_price || snapshot.current_price).toFixed(3));
             let stop_loss = Number((evaluation.execution_parameters?.suggested_stop_loss || (dbSide === "LONG" ? snapshot.safe_long_stop_loss : snapshot.safe_short_stop_loss)).toFixed(3));
             // --- TRUST AI STRUCTURAL STOPS (No Dynamic ATR Override) ---
-            // The AI is trained to tuck stops tightly behind structural order blocks to achieve > 1.75 R:R.
-            // We explicitly do NOT mechanically widen the stop loss here, as doing so artificially inflates risk
-            // and corrupts the mathematical R:R calculation, causing valid asymmetric setups to be rejected.
             
             let raw_confidence = evaluation.confidence_score || 50;
             let confidence_score = raw_confidence <= 1.0 ? raw_confidence * 100 : raw_confidence;
@@ -1305,6 +1406,21 @@ serve(async (req) => {
                 confidence_score = Math.min(100, confidence_score + 10);
                 console.log(`[Layer B] [${symbol}] S/R Flip Confluence Bonus: +10 (${srFlip.narrative})`);
                 sendEvent({ type: 'progress', message: `[${symbol}] S/R Flip Bonus: +10 (${srFlip.type} holding @ ${srFlip.flip_level})` });
+              }
+            }
+
+            // === INSTITUTIONAL SESSION OPEN LIQUIDITY BONUS (+5) ===
+            // London Open (06:30-09:30 UTC) and NY Open (12:30-15:30 UTC) provide peak institutional volume expansion and follow-through.
+            if (is_valid) {
+              const now = new Date();
+              const utcMins = now.getUTCHours() * 60 + now.getUTCMinutes();
+              const isLondonOpen = utcMins >= 390 && utcMins <= 570; // 06:30 to 09:30 UTC
+              const isNyOpen = utcMins >= 750 && utcMins <= 930;     // 12:30 to 15:30 UTC
+              if (isLondonOpen || isNyOpen) {
+                confidence_score = Math.min(100, confidence_score + 5);
+                const sessionName = isLondonOpen ? "London Open" : "NY Open";
+                console.log(`[Layer B] [${symbol}] ${sessionName} Liquidity Expansion Bonus: +5`);
+                sendEvent({ type: 'progress', message: `[${symbol}] ${sessionName} Liquidity Bonus: +5` });
               }
             }
 
@@ -1385,6 +1501,28 @@ serve(async (req) => {
                 is_valid = false;
                 institutional_rationale = `Execution Desk Rejected: Contradictory signal against open highly correlated position (${peerDesc}). Institutional portfolio governance prohibits opposing correlated exposure.`;
                 console.log(`[Layer B] [Correlation Guard] Discarded contradictory setup on ${symbol} against ${peerDesc}.`);
+              }
+            }
+
+            // --- DUAL INDICATOR DIVERGENCE CONFLICT VETO ---
+            // If both RSI and MACD show conflicting divergence against the trade direction, reject counter-divergence entries to avoid exhaustion traps
+            if (is_valid && snapshot.rsi_divergence && snapshot.macd_divergence) {
+              const rsiDiv = snapshot.rsi_divergence;
+              const macdDiv = snapshot.macd_divergence;
+              const isLongOpposing = evaluation.recommended_direction === "LONG" &&
+                (rsiDiv.includes("BEARISH") && macdDiv.includes("BEARISH"));
+              const isShortOpposing = evaluation.recommended_direction === "SHORT" &&
+                (rsiDiv.includes("BULLISH") && macdDiv.includes("BULLISH"));
+
+              if (isLongOpposing || isShortOpposing) {
+                const hasSRFlip = Boolean(snapshot.sr_flip && (snapshot.sr_flip as any).holding_confirmed);
+                const hasReversalCandle = Boolean(snapshot.candlestick_pattern && ["HAMMER", "BULLISH_ENGULFING", "SHOOTING_STAR", "BEARISH_ENGULFING", "PINBAR"].includes(snapshot.candlestick_pattern));
+
+                if (!hasSRFlip || !hasReversalCandle) {
+                  is_valid = false;
+                  institutional_rationale = `Execution Desk Rejected: Dual Momentum Divergence Conflict. Both RSI (${rsiDiv}) and MACD (${macdDiv}) indicate institutional exhaustion against ${evaluation.recommended_direction}. Fading dual divergence requires confirmed S/R flip and reversal candlestick pattern.`;
+                  console.log(`[Layer B] [Divergence Veto] ${symbol}: Discarded setup due to dual opposing momentum divergence.`);
+                }
               }
             }
 
@@ -1729,6 +1867,20 @@ serve(async (req) => {
             order_type = tcLevels.order_type;
             const finalTp1 = tcLevels.tp1;
             const finalTp2 = tcLevels.tp2;
+
+            // NY Open Opening Cross Protection: Force BUY LIMIT / SELL LIMIT during 13:30-14:45 UTC to prevent market-order slippage
+            const nowTime = new Date();
+            const totalUtcMins = nowTime.getUTCHours() * 60 + nowTime.getUTCMinutes();
+            const isNyOpenWindow = totalUtcMins >= 810 && totalUtcMins <= 885; // 13:30 - 14:45 UTC
+            if (isNyOpenWindow && order_type.includes("MARKET")) {
+              const isLong = dbSide === "LONG";
+              order_type = isLong ? "BUY LIMIT" : "SELL LIMIT";
+              const atrOffset = (snapshot.atr_14 && snapshot.atr_14 > 0) ? snapshot.atr_14 * 0.04 : snapshot.current_price * 0.0005;
+              entry_price = isLong
+                ? Number((snapshot.current_price - atrOffset).toFixed(5))
+                : Number((snapshot.current_price + atrOffset).toFixed(5));
+              console.log(`[NY Open Guard] Converted ${symbol} market entry to ${order_type} @ ${entry_price} to prevent opening-cross slippage.`);
+            }
 
             const { data, error } = await supabase
               .from("trade_opportunities")
