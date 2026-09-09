@@ -1409,6 +1409,22 @@ In `/functions/v1/vps-callback`:
 - **Problem:** Signal conviction should dynamically reflect global interbank liquidity cycles where volume and trend follow-through peak.
 - **Rule:** In `agent-day/index.ts` and `agent-swing/index.ts`, setups triggered during the London Open (06:30–09:30 UTC) or NY Open (12:30–15:30 UTC) receive an automatic `+5` confidence bonus to prioritize prime liquidity windows.
 
+### 15. Early Breakeven Protection at $+0.50\text{R}$ or Target 1 Touch ($+0.05\text{R}$ Buffer)
+- **Problem:** Allowing trades that hit Target 1 or gain $+0.50\text{R}$ to reverse completely into a -1.0R loss introduces severe asymmetric drag.
+- **Rule:** In `agent-trade/index.ts` (`MANAGE_POSITIONS`), when an active position (`SWING`, `RUNNER`, or `QUICK_EXIT`) gains $\ge +0.50\text{R}$ or price touches/surpasses Target 1, automatically advance Stop Loss to Breakeven $+0.05\text{R}$ (`entryPrice ± (riskDist * 0.05)`) to lock in a risk-free trade and cover broker spreads/commissions.
+
+### 16. Strict Target 1 Geometric Floor Normalization ($|TP1 - \text{Entry}| \ge \max(0.80\text{R}, 0.80\times\text{ ATR})$)
+- **Problem:** Disproportionately narrow TP1 targets ($<0.5\text{R}$, such as the 0.16R TP1 on JP225) fail to capture meaningful asymmetric payoff.
+- **Rule:** In `agent-swing/index.ts`, enforce that $|TP1 - \text{Entry}|$ must be $\ge \max(0.80\text{R}, 0.80\times\text{ ATR})$. If the LLM generates a TP1 within this minimum threshold, automatically sanitize TP1 to `entry ± minTargetDistance`.
+
+### 17. Swing Index CFD Market-to-Limit Pullback Converter ($0.04\times\text{ ATR}$)
+- **Problem:** Executing market orders on daily swing index CFDs (`US30`, `NAS100`, `SPX500`, `GER30`, `JP225`) during low-momentum consolidation ($ADX < 30$) frequently buys/sells range ceilings/floors.
+- **Rule:** In `agent-swing/index.ts`, market orders on Index CFDs with $ADX < 30$ are automatically converted to structural pullback limit orders (`BUY LIMIT` / `SELL LIMIT`) offset by $0.04\times\text{ ATR}$ from market price.
+
+### 18. Nikkei 225 (`JP225`) USDJPY & Yen Macro Sentiment Inheritance
+- **Problem:** Japanese equities are heavily exporter-weighted and structurally tethered to the Yen carry trade. Initiating `JP225 LONG` during aggressive Yen appreciation (sharp `USDJPY` drop) leads to high failure rates.
+- **Rule:** In `agent-swing/index.ts`, `JP225` evaluation queries active `USDJPY` macro sentiment from `market_context`. If USDJPY has active `BEARISH` sentiment (Yen surging), a `-25` confidence penalty is applied to `JP225 LONG` setups.
+
 ---
 
 ## ⚠️ 3V. Pre-Flight Margin Level & Free Margin Buffer Diagnostics (`MARGIN_LEVEL_BELOW_300` / `INSUFFICIENT_FREE_MARGIN_BUFFER`)
