@@ -95,18 +95,20 @@ async function run() {
     });
     console.log(`\nTargeting specific symbol(s): ${symList.join(', ')}`);
     
-    // Run Intraday M30
+    // Run Intraday M30 (guarantee intraday timeframe)
+    const intradayTf = timeframeArg && ['5m', '15m', '30m', '1h', '4h'].includes(timeframeArg.toLowerCase()) ? timeframeArg : '30m';
     await callAgent('agent-day', {
       symbols: symList,
       is_manual: isManual,
-      timeframe: timeframeArg || '30m'
+      timeframe: intradayTf
     });
 
-    // Run Macro Swing
+    // Run Macro Swing (guarantee macro swing timeframe)
+    const swingTf = timeframeArg && ['1d', '1w'].includes(timeframeArg.toLowerCase()) ? timeframeArg : '1D';
     await callAgent('agent-swing', {
       symbols: symList,
       is_manual: isManual,
-      timeframe: timeframeArg || '1D'
+      timeframe: swingTf
     });
   } else {
     // 2. Run Intraday M30 Scalper in chunks to avoid 150s Edge Function timeouts
