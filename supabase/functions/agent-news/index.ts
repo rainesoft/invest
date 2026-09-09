@@ -666,7 +666,7 @@ Headline: "${title}"`;
               model: "gpt-4o-mini",
               messages: [{ role: "user", content: prompt }],
               temperature: 0.0,
-              max_tokens: 150
+              max_tokens: 500
             })
           });
 
@@ -697,7 +697,27 @@ Headline: "${title}"`;
           if (resultText.startsWith("```json")) {
              resultText = resultText.replace(/^```json\n?/, "").replace(/\n?```$/, "").trim();
           }
-          const parsed = JSON.parse(resultText);
+          let parsed: any = null;
+          try {
+            parsed = JSON.parse(resultText);
+          } catch (parseErr: any) {
+            console.warn(`[Macro Scout] [Trace: ${traceId}] Failed to parse JSON for "${title}": ${parseErr.message}`);
+            const symMatch = resultText.match(/"symbol":\s*"([^"]+)"/);
+            const sentMatch = resultText.match(/"sentiment":\s*"([^"]+)"/);
+            const confMatch = resultText.match(/"confidence":\s*(\d+)/);
+            if (symMatch && sentMatch) {
+              parsed = {
+                symbol: symMatch[1],
+                sentiment: sentMatch[1],
+                confidence: confMatch ? Number(confMatch[1]) : 0,
+                requires_verification: true,
+                rationale: "Extracted via fallback regex parser"
+              };
+            } else {
+              debugInfo.ai_errors.push({ error: `JSON Parse error: ${parseErr.message}`, raw: resultText });
+              continue;
+            }
+          }
 
           // Mark headline as processed in cache
           processedSet.add(headlineIdentifier);

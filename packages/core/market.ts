@@ -24,6 +24,14 @@ export function isIndex(symbol: string): boolean {
   return ["US30", "NAS100", "USTEC", "SPX500", "US500", "GER30", "GER40", "DE30", "JP225"].includes(upper);
 }
 
+export function isAsianOrPacificAsset(symbol: string): boolean {
+  if (!symbol) return false;
+  const upper = symbol.toUpperCase();
+  if (isCrypto(upper)) return true;
+  const asianKeywords = ["JPY", "AUD", "NZD", "JP225", "NIKKEI", "HK50", "CHINA50"];
+  return asianKeywords.some(k => upper.includes(k));
+}
+
 export function isMarketOpen(symbol: string): boolean {
   if (!symbol) return false;
   const upper = symbol.toUpperCase();

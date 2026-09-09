@@ -326,6 +326,8 @@ serve(async (req) => {
       }
       if (errMsg.includes("VOLATILITY_SPIKE")) return "Pre-Flight Volatility Spike Guard (Excessive short-term ATR expansion)";
       if (errMsg.includes("NEWS_BLOCKED")) return "Pre-Flight News Blackout Guard (High-impact macroeconomic event window active)";
+      if (errMsg.includes("MARGIN_LEVEL_BELOW_300")) return "Pre-Flight Margin Level Guard (Account margin level < 300% — execution blocked to prevent broker margin call)";
+      if (errMsg.includes("INSUFFICIENT_FREE_MARGIN_BUFFER")) return "Pre-Flight Free Margin Guard (Required margin exceeds 50% of available free margin buffer)";
       if (errMsg.includes("10013")) return "Code:10013 (Invalid Request / Unmapped Symbol Alias — verify broker symbol e.g. SPX500->US500, NAS100->USTEC)";
       if (errMsg.includes("10014")) return "Code:10014 (Invalid Volume / Lot Step)";
       if (errMsg.includes("10015")) return "Code:10015 (Invalid Price / Slipped Breakout Entry)";
