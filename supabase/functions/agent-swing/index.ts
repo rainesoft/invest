@@ -4,7 +4,7 @@ import { fetchPaperBars, Bar } from "../../../packages/execution/index.ts";
 import { insertAuditLog } from "../../../packages/core/audit.ts";
 import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews, detectCentralBankEvent, detectUpcomingFedEvent, computeMacroConfidenceBoost, fetchETFFlowSentiment } from "../../../packages/core/news.ts";
 import { isAutoTradingEnabled, getTradingSymbols } from "../../../packages/core/settings.ts";
-import { isMarketOpen, isCrypto } from "../../../packages/core/market.ts";
+import { isMarketOpen, isCrypto, isIndex } from "../../../packages/core/market.ts";
 
 import { revalidateOpportunity } from "../../../packages/strategy/revalidation.ts";
 
@@ -1346,6 +1346,25 @@ serve(async (req) => {
                  sendEvent({ type: 'progress', message: `[${symbol}] Inherited macro sentiment (${peerSide}) from correlated peer ${correlatedPeer}.` });
                }
              } catch (e) {}
+          } else if (symbol === "JP225") {
+             // Nikkei 225 / Japanese Yen Macro Correlation: Exporter-heavy Nikkei inverse correlation to Yen strength
+             try {
+               const { data: usdjpyNews } = await supabase
+                 .from("market_context")
+                 .select("macro_bias, narrative")
+                 .eq("symbol", "USDJPY")
+                 .eq("agent_persona", "MACRO_SCOUT")
+                 .gt("expires_at", new Date().toISOString())
+                 .order("created_at", { ascending: false })
+                 .limit(1)
+                 .maybeSingle();
+
+               if (usdjpyNews) {
+                 const usdjpySide = usdjpyNews.macro_bias === "BULLISH" ? "LONG" : "SHORT";
+                 macroContext += `\n\n[NIKKEI 225 / YEN CARRY TRADE MACRO CATALYST]\nA live Tier-1 macro sentiment event has fired for USDJPY (${usdjpySide}). Details: ${usdjpyNews.narrative}. Due to the strong positive correlation between USDJPY and the Nikkei 225 (export earnings & Yen carry unwind), JP225 LONG setups require USDJPY macro support. If USDJPY is BEARISH (Yen surging), JP225 LONG is vulnerable to liquidation.`;
+                 sendEvent({ type: 'progress', message: `[${symbol}] Factored in USDJPY macro sentiment (${usdjpySide}) for Nikkei 225.` });
+               }
+             } catch (e) {}
           }
 
           // === HISTORICAL MEMORY ===
@@ -1592,6 +1611,26 @@ serve(async (req) => {
              adjustedConfidence = Math.max(0, adjustedConfidence - 30);
              confidenceAdjustments.push(`-30 CONFLICT: Technicals contradict macro sentiment (${pendingNewsSide})`);
              sendEvent({ type: 'progress', message: `[${symbol as string}] PENALTY: Technicals contradict macro sentiment (${pendingNewsSide})` });
+          }
+
+          // === NIKKEI 225 USDJPY MACRO PENALTY (-25) ===
+          if (symbol === "JP225" && evaluation.recommended_direction === "LONG") {
+            try {
+              const { data: usdjpyNews } = await supabase
+                .from("market_context")
+                .select("macro_bias")
+                .eq("symbol", "USDJPY")
+                .eq("agent_persona", "MACRO_SCOUT")
+                .gt("expires_at", new Date().toISOString())
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+              if (usdjpyNews && usdjpyNews.macro_bias === "BEARISH") {
+                adjustedConfidence = Math.max(0, adjustedConfidence - 25);
+                confidenceAdjustments.push("-25 CONFLICT: USDJPY Bearish (Yen surging creates macro headwind for Nikkei)");
+                sendEvent({ type: 'progress', message: `[JP225] PENALTY: -25 (USDJPY is Bearish / Yen surging)` });
+              }
+            } catch (_) {}
           }
 
           // === FEATURE 5: KELLY CRITERION PROBABILITY CALIBRATION ===
@@ -1988,22 +2027,33 @@ serve(async (req) => {
             safeRationale += ` [Origination Risk Governor: Entry anchored to Limit @ $${entry} within tight ATR buffer so 0.01 lot dollar risk stays strictly within 3% risk cap ($${maxPermissibleCapitalRisk.toFixed(2)})]`;
           }
 
+          // === SWING INDEX CFD MARKET-TO-LIMIT CONVERTER ===
+          // For high-volatility Index CFDs, converting market orders to 0.04x ATR limit pullbacks prevents chasing range ceilings
+          if (isIndex(symbol as string) && order_type.includes("MARKET") && (snapshot.adx_14 == null || snapshot.adx_14 < 30)) {
+            const pullbackOffset = (dailyAtr || 0) * 0.04;
+            entry = isLong ? Number((entry - pullbackOffset).toFixed(5)) : Number((entry + pullbackOffset).toFixed(5));
+            order_type = isLong ? "BUY LIMIT" : "SELL LIMIT";
+            evaluation.execution_parameters.suggested_entry_price = entry;
+            evaluation.execution_parameters.entry_type = isLong ? "Buy Limit" : "Sell Limit";
+            safeRationale += ` [Swing Index Microstructure: Market order converted to $0.04x ATR Pullback Limit @ $${entry} to prevent range ceiling chasing]`;
+          }
+
           // === TAKE PROFIT DIRECTION & VOLATILITY-NORMALIZED R-MULTIPLE SANITIZATION ===
           const swingRiskDist = Math.abs(entry - sl);
-          const tp1Multiplier = (snapshot.adx_14 && snapshot.adx_14 >= 30) ? 1.35 : 1.0;
+          const tp1Multiplier = (snapshot.adx_14 && snapshot.adx_14 >= 30) ? 1.35 : 0.80;
           const minTargetDistance = Math.max(swingRiskDist * tp1Multiplier, (dailyAtr || 0) * 0.80);
 
           if (swingRiskDist > 0) {
             if (isLong) {
               // Strictly above entry with volatility-normalized spacing
-              if (!tp1 || tp1 <= entry) tp1 = Number((entry + minTargetDistance).toFixed(5));
-              if (!tp2 || tp2 <= tp1) tp2 = Number((tp1 + swingRiskDist * 1.0).toFixed(5));
-              if (!tp3 || tp3 <= tp2) tp3 = Number((tp2 + swingRiskDist * 1.5).toFixed(5));
+              if (!tp1 || (tp1 - entry) < minTargetDistance) tp1 = Number((entry + minTargetDistance).toFixed(5));
+              if (!tp2 || (tp2 - tp1) < (swingRiskDist * 0.90)) tp2 = Number((tp1 + swingRiskDist * 1.0).toFixed(5));
+              if (!tp3 || (tp3 - tp2) < (swingRiskDist * 1.0)) tp3 = Number((tp2 + swingRiskDist * 1.5).toFixed(5));
             } else {
               // Strictly below entry with volatility-normalized spacing
-              if (!tp1 || tp1 >= entry) tp1 = Number((entry - minTargetDistance).toFixed(5));
-              if (!tp2 || tp2 >= tp1) tp2 = Number((tp1 - swingRiskDist * 1.0).toFixed(5));
-              if (!tp3 || tp3 >= tp2) tp3 = Number((tp2 - swingRiskDist * 1.5).toFixed(5));
+              if (!tp1 || (entry - tp1) < minTargetDistance) tp1 = Number((entry - minTargetDistance).toFixed(5));
+              if (!tp2 || (tp1 - tp2) < (swingRiskDist * 0.90)) tp2 = Number((tp1 - swingRiskDist * 1.0).toFixed(5));
+              if (!tp3 || (tp2 - tp3) < (swingRiskDist * 1.0)) tp3 = Number((tp2 - swingRiskDist * 1.5).toFixed(5));
             }
           }
           evaluation.execution_parameters.take_profit_1 = tp1;
