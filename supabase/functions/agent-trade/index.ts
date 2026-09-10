@@ -1901,6 +1901,11 @@ for (const [orderId, trade] of orderMap) {
       const { data: oppData } = await supabase.from("trade_opportunities").select("*").eq("id", payload.opportunity_id).single();
       if (!oppData) return new Response("Signal not found", { status: 404 });
       signal = oppData;
+      if (signal.status !== "APPROVED") {
+        console.log(`[Manual Execution] Re-approving ${signal.symbol} (ID: ${signal.id}) for manual operator execution.`);
+        await supabase.from("trade_opportunities").update({ status: "APPROVED", closed_at: null }).eq("id", signal.id);
+        signal.status = "APPROVED";
+      }
     } else {
       if (payload.type !== "INSERT" && payload.type !== "UPDATE") return new Response("Ignored non-actionable webhook", { status: 200 });
       signal = payload.record;
@@ -2539,7 +2544,7 @@ for (const [orderId, trade] of orderMap) {
         const userCapital = Number(user.portfolio_capital);
         const currentDrawdownPct = effectiveHwm > 0 ? (effectiveHwm - userCapital) / effectiveHwm : 0;
 
-        if (userCapital < effectiveHwm * (1 - maxDrawdownPct)) {
+        if (!isManual && userCapital < effectiveHwm * (1 - maxDrawdownPct)) {
            // Account has breached standard drawdown threshold. Check if eligible for Tiered Recovery Mode.
            const isHighConvictionTier = signalTier === "S-Tier" || signalTier === "A-Tier" || (signal.confidence || 0) >= 80;
            const isWithinRecoveryBuffer = userCapital >= effectiveHwm * (1 - hardDrawdownStopPct);
@@ -2555,7 +2560,7 @@ for (const [orderId, trade] of orderMap) {
         }
 
         // --- DAILY DRAWDOWN BREAKER (PROP FIRM RULE) ---
-        if (user.daily_starting_equity != null) {
+        if (!isManual && user.daily_starting_equity != null) {
             const dailyStart = Number(user.daily_starting_equity);
             const maxDailyLoss = Number(user.max_daily_drawdown_pct) || 0.05;
             if (Number(user.portfolio_capital) < dailyStart * (1 - maxDailyLoss)) {
@@ -2625,12 +2630,12 @@ for (const [orderId, trade] of orderMap) {
             }
           }
 
-          // 2. If at minimum 0.01 lot the dollar risk STILL exceeds 3% (e.g. Silver/Gold wide stop), fine-tune limit entry if within 1.40x buffer (S-Tier/A-Tier) or block cleanly
+          // 2. If at minimum 0.01 lot the dollar risk STILL exceeds 3% (e.g. Silver/Gold wide stop), fine-tune limit entry if within allowable compression factor (S-Tier/A-Tier) or block cleanly
           if (riskAmount > maxPermissibleRisk) {
             const isLimitOrder = aiOrderType.includes("LIMIT");
             const isHighConfidence = (signal.confidence || 0) >= 80;
             const maxPointsAtRisk = maxPermissibleRisk / (volumeStep * pointValueUsd);
-            const allowableCompressionFactor = (signal.confidence || 0) >= 90 ? 1.40 : 1.25;
+            const allowableCompressionFactor = (signal.confidence || 0) >= 90 ? 2.50 : 1.75;
             
             if (isLimitOrder && isHighConfidence && maxPointsAtRisk > 0 && pointsAtRisk <= maxPointsAtRisk * allowableCompressionFactor) {
               const isLong = signal.side === "LONG" || signal.side === "BUY";
@@ -2661,8 +2666,8 @@ for (const [orderId, trade] of orderMap) {
           }
         }
 
-        // Only send to Master Broker if auto-execution is on for the user and they aren't paper trading
-        if (user.auto_trade_enabled && user.is_live_execution_enabled) {
+        // Only send to Master Broker if auto-execution is on for the user and they aren't paper trading, OR if manual operator execution
+        if ((user.auto_trade_enabled && user.is_live_execution_enabled) || isManual) {
           totalMasterVolume += volume;
         }
 
@@ -2676,19 +2681,34 @@ for (const [orderId, trade] of orderMap) {
     }
 
     if (totalMasterVolume <= 0) {
-      console.log(`[PAMM Router] Skipping execution. Total Volume: ${totalMasterVolume}.`);
-      let rejectReason = `Execution Skipped: No volume allocated (Circuit Breaker / Max Drawdown reached for all users).`;
-      if (blockedByRiskManager) {
-        rejectReason = `Execution Skipped: No volume allocated (10% Account Blowout Protection hard cap reached for users).`;
+      if (isManual && users && users.length > 0) {
+        // Operator manual execution guarantee: assign minimum volume step to master user
+        const targetUser = users[0];
+        const manualVol = minVolumes[signal.symbol] || 0.01;
+        const manualRisk = pointsAtRisk * manualVol * pointValueUsd;
+        totalMasterVolume = manualVol;
+        userAllocations.push({
+          user_id: targetUser.user_id,
+          volume: manualVol,
+          risk_amount: manualRisk,
+          is_recovery_mode: true,
+        });
+        console.log(`[PAMM Router] Manual Execution Override: Allocated ${manualVol} lots for user ${targetUser.user_id}`);
+      } else {
+        console.log(`[PAMM Router] Skipping execution. Total Volume: ${totalMasterVolume}.`);
+        let rejectReason = `Execution Skipped: No volume allocated (Circuit Breaker / Max Drawdown reached for all users).`;
+        if (blockedByRiskManager) {
+          rejectReason = `Execution Skipped: No volume allocated (10% Account Blowout Protection hard cap reached for users).`;
+        }
+        // Reconcile status to REJECTED so opportunity is not left hanging as orphaned APPROVED
+        await supabase.from("trade_opportunities").update({
+          status: "REJECTED",
+          ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + rejectReason,
+          ai_risks: rejectReason,
+          closed_at: new Date().toISOString(),
+        }).eq("id", signal.id);
+        return new Response(JSON.stringify({ ok: true, message: rejectReason }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
-      // Reconcile status to REJECTED so opportunity is not left hanging as orphaned APPROVED
-      await supabase.from("trade_opportunities").update({
-        status: "REJECTED",
-        ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + rejectReason,
-        ai_risks: rejectReason,
-        closed_at: new Date().toISOString(),
-      }).eq("id", signal.id);
-      return new Response(JSON.stringify({ ok: true, message: rejectReason }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
 
     // --- VPS EXECUTION ROUTING ---
