@@ -732,17 +732,18 @@ serve(async (req) => {
         cleanRiskReason = cleanRiskReason.slice(0, 197) + "...";
       }
 
+      const isProfitSecured = signal.status === "WON" || cleanRiskReason.toLowerCase().includes("profit secured");
       let tgMessage: string;
       if (closedCount > 0) {
         tgMessage = [
-          `🛡️ <b>RISK ENGINE | EMERGENCY AUTO-EJECT (${signal.symbol})</b>`,
+          isProfitSecured ? `🎯 <b>PROFIT ENGINE | TAKE PROFIT SECURED (${signal.symbol})</b>` : `🛡️ <b>RISK ENGINE | EMERGENCY AUTO-EJECT (${signal.symbol})</b>`,
           `━━━━━━━━━━━━━━━━━━━━━`,
-          `⚠️ <b>Trigger:</b> Active Signal Invalidation`,
+          isProfitSecured ? `✅ <b>Trigger:</b> Early Take-Profit Secured` : `⚠️ <b>Trigger:</b> Active Signal Invalidation`,
           `<i>${cleanRiskReason}</i>`,
           ``,
           `⚡ <b>Action Taken:</b>`,
-          `• Liquidated <b>${closedCount} active position${closedCount > 1 ? "s" : ""}</b> via ${isVpsAlive ? "MT5 VPS" : "MetaAPI"} to flatten exposure`,
-          errorCount > 0 ? `• ⚠️ ${errorCount} error(s) occurred during closure` : `• ✅ All open trades closed successfully`
+          `• Closed <b>${closedCount} active position${closedCount > 1 ? "s" : ""}</b> via ${isVpsAlive ? "MT5 VPS" : "MetaAPI"} with profit locked in`,
+          errorCount > 0 ? `• ⚠️ ${errorCount} error(s) occurred during closure` : `• ✅ All positions closed successfully`
         ].join("\n");
       } else {
         tgMessage = [
@@ -1257,40 +1258,39 @@ for (const [orderId, trade] of orderMap) {
              try {
                  let isMissedFill = false;
                  
-                 // 1. Price-Action / Runaway Based GC: Did the market hit TP1 or take off without us (>= 1.0x ATR)?
-                 const currentPrice = orderData.currentPrice || ptiMap.get(trade.symbol)?.c;
-                 const opp = trade.trade_opportunities;
-                 const tp1 = opp?.take_profit_json?.tp1 || opp?.take_profit_json?.tp;
-                 const entryPrice = opp?.entry_plan_json?.price || opp?.entry_plan_json?.entry_price || opp?.entry_plan_json?.limit_price;
-                 const atr = atrCache.get(trade.symbol) || 0;
-                 
-                 const isLong = trade.side === "LONG" || trade.side === "BUY";
-                 if (currentPrice && tp1) {
-                    if (isLong && currentPrice >= tp1) isMissedFill = true;
-                    if (!isLong && currentPrice <= tp1) isMissedFill = true;
-                 }
-                 if (currentPrice && entryPrice && atr > 0) {
-                    // If market moved >= 1.0x ATR in favorable direction without triggering our limit, cancel runaway order
-                    const favorableMove = isLong ? (currentPrice - entryPrice) : (entryPrice - currentPrice);
-                    if (favorableMove >= atr * 1.0) {
+                  // 1. Timeframe-Aware Dynamic TTL:
+                  // 30m / Intraday: 3 hours (6 bars)
+                  // 1D / 4H / Swing: 12 hours
+                  const opp = trade.trade_opportunities;
+                  const tf = opp?.timeframe?.toLowerCase() || "30m";
+                  const maxTtlHours = (tf === "1d" || tf === "4h" || opp?.source === "agent-swing") ? 12 : 3;
+
+                  let ageHours = 0;
+                  if (orderData.time) {
+                    const orderTime = new Date(orderData.time).getTime();
+                    ageHours = (Date.now() - orderTime) / (1000 * 60 * 60);
+                  } else if (trade.created_at) {
+                    const tradeTime = new Date(trade.created_at).getTime();
+                    ageHours = (Date.now() - tradeTime) / (1000 * 60 * 60);
+                  }
+
+                  // 2. Price-Action / Runaway Based GC: Did the market hit the primary target without filling?
+                  // STRICT GUARDS:
+                  // a. Pending order must be active for at least 1.0 hour (never prematurely kill resting limits in first 60m)
+                  // b. Check against primary target (TP2 / TP), NOT intermediate TP1
+                  // c. Ensure target is structurally aligned with trade direction
+                  const currentPrice = orderData.currentPrice || ptiMap.get(trade.symbol)?.c;
+                  const targetPrice = opp?.take_profit_json?.tp2 || opp?.take_profit_json?.tp;
+                  const entryPrice = opp?.entry_plan_json?.price || opp?.entry_plan_json?.suggested_entry_price;
+                  const isLong = trade.side === "LONG" || trade.side === "BUY";
+
+                  if (ageHours >= 1.0 && currentPrice && targetPrice && entryPrice) {
+                    if (isLong && targetPrice > entryPrice && currentPrice >= targetPrice) {
+                      isMissedFill = true;
+                    } else if (!isLong && targetPrice < entryPrice && currentPrice <= targetPrice) {
                       isMissedFill = true;
                     }
-                 }
-
-                 // 2. Timeframe-Aware Dynamic TTL:
-                 // 30m / Intraday: 3 hours (6 bars)
-                 // 1D / 4H / Swing: 12 hours
-                 const tf = opp?.timeframe?.toLowerCase() || "30m";
-                 const maxTtlHours = (tf === "1d" || tf === "4h" || opp?.source === "agent-swing") ? 12 : 3;
-
-                 let ageHours = 0;
-                 if (orderData.time) {
-                   const orderTime = new Date(orderData.time).getTime();
-                   ageHours = (Date.now() - orderTime) / (1000 * 60 * 60);
-                 } else if (trade.created_at) {
-                   const tradeTime = new Date(trade.created_at).getTime();
-                   ageHours = (Date.now() - tradeTime) / (1000 * 60 * 60);
-                 }
+                  }
                    
                  if (ageHours >= maxTtlHours || isMissedFill) {
                    const reasonStr = isMissedFill 
@@ -2370,7 +2370,7 @@ for (const [orderId, trade] of orderMap) {
            }
            
            if (oppositeDirectionCount > 0) {
-              const rejectReason = `Rejected by Execution Desk: Contradictory signal against open highly correlated asset (${openCorrelatedTrades.map(t => t.symbol).join(', ')}).`;
+              const rejectReason = `Rejected by Execution Desk: Contradictory signal against open highly correlated asset (${openCorrelatedTrades.map((t: any) => t.symbol).join(', ')}).`;
               await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + rejectReason, ai_risks: rejectReason }).eq("id", signal.id);
               console.log(`[Execution Desk] Rejected ${signal.symbol} due to contradictory open correlated position.`);
               return new Response(JSON.stringify({ success: true, message: "Rejected due to correlation contradiction" }), { status: 200 });
@@ -2487,20 +2487,21 @@ for (const [orderId, trade] of orderMap) {
       }
     } catch (_) {}
 
+    const contractSizes: Record<string, number> = {
+      UKOIL: 1000, USOIL: 1000, XAUUSD: 100, XAGUSD: 5000,
+      US30: 1, NAS100: 1, SPX500: 1, GER30: 1, JP225: 100,
+      BTCUSD: 1, ETHUSD: 1,
+      EURUSD: 100000, GBPUSD: 100000, USDJPY: 100000,
+      AUDUSD: 100000, NZDUSD: 100000, USDCAD: 100000, USDCHF: 100000,
+      EURJPY: 100000, GBPJPY: 100000, CADJPY: 100000, AUDJPY: 100000, EURGBP: 100000,
+      AAPL: 1, MSFT: 1, NVDA: 1, AMZN: 1, TSLA: 1, META: 1, GOOGL: 1,
+    };
+
     for (const scaledEntry of scaledEntries) {
       const entryPrice = scaledEntry.price;
       const entryWeight = scaledEntry.weight || 1.0;
       const pointsAtRisk = Math.abs(entryPrice - stopLoss);
       
-      const contractSizes: Record<string, number> = {
-        UKOIL: 1000, USOIL: 1000, XAUUSD: 100, XAGUSD: 5000,
-        US30: 1, NAS100: 1, SPX500: 1, GER30: 1, JP225: 100,
-        BTCUSD: 1, ETHUSD: 1,
-        EURUSD: 100000, GBPUSD: 100000, USDJPY: 100000,
-        AUDUSD: 100000, NZDUSD: 100000, USDCAD: 100000, USDCHF: 100000,
-        EURJPY: 100000, GBPJPY: 100000, CADJPY: 100000, AUDJPY: 100000, EURGBP: 100000,
-        AAPL: 1, MSFT: 1, NVDA: 1, AMZN: 1, TSLA: 1, META: 1, GOOGL: 1,
-      };
       const contractSize = contractSizes[signal.symbol] || 100000;
       let pointValueUsd = contractSize;
       if (signal.symbol === "JP225") {
@@ -2578,25 +2579,30 @@ for (const [orderId, trade] of orderMap) {
           USOIL: 0.01,
           XAUUSD: 0.01,
           XAGUSD: 0.01,
-          US30: 0.05,
-          NAS100: 0.05,
-          SPX500: 0.05,
-          GER30: 0.05,
+          EURUSD: 0.10,
+          GBPUSD: 0.10,
+          USDJPY: 0.10,
+          AUDUSD: 0.10,
+          NZDUSD: 0.10,
+          USDCAD: 0.10,
+          USDCHF: 0.10,
+          EURJPY: 0.10,
+          GBPJPY: 0.10,
+          CADJPY: 0.10,
+          AUDJPY: 0.10,
+          EURGBP: 0.10,
+          US30: 0.02,
+          NAS100: 0.02,
+          SPX500: 0.02,
+          GER30: 0.02,
           JP225: 0.02,
           BTCUSD: 0.02,
-          ETHUSD: 0.04,
-          EURUSD: 0.20,
-          GBPUSD: 0.20,
-          USDJPY: 0.20,
-          AUDUSD: 0.20,
-          NZDUSD: 0.20,
-          EURJPY: 0.20,
-          GBPJPY: 0.20,
+          ETHUSD: 0.02,
           AAPL: 0.02,
-          TSLA: 0.02,
+          MSFT: 0.02,
           NVDA: 0.02,
           AMZN: 0.02,
-          MSFT: 0.02,
+          TSLA: 0.02,
           META: 0.02,
           GOOGL: 0.02,
         };
@@ -2635,7 +2641,7 @@ for (const [orderId, trade] of orderMap) {
             const isLimitOrder = aiOrderType.includes("LIMIT");
             const isHighConfidence = (signal.confidence || 0) >= 80;
             const maxPointsAtRisk = maxPermissibleRisk / (volumeStep * pointValueUsd);
-            const allowableCompressionFactor = (signal.confidence || 0) >= 90 ? 2.50 : 1.75;
+            const allowableCompressionFactor = signal.symbol === "XAGUSD" ? 4.50 : (signal.confidence || 0) >= 90 ? 2.50 : 1.75;
             
             if (isLimitOrder && isHighConfidence && maxPointsAtRisk > 0 && pointsAtRisk <= maxPointsAtRisk * allowableCompressionFactor) {
               const isLong = signal.side === "LONG" || signal.side === "BUY";
@@ -2685,7 +2691,16 @@ for (const [orderId, trade] of orderMap) {
         // Operator manual execution guarantee: assign minimum volume step to master user
         const targetUser = users[0];
         const manualVol = minVolumes[signal.symbol] || 0.01;
-        const manualRisk = pointsAtRisk * manualVol * pointValueUsd;
+        const ptsAtRisk = Math.abs((defaultEntryPrice || 0) - (stopLoss || 0));
+        let manualPointValueUsd = contractSizes[signal.symbol] || 100000;
+        if (signal.symbol === "JP225") {
+          manualPointValueUsd = manualPointValueUsd / usdjpyLiveRate;
+        } else if (signal.symbol.endsWith("JPY") && defaultEntryPrice > 0) {
+          manualPointValueUsd = manualPointValueUsd / defaultEntryPrice;
+        } else if (signal.symbol === "GER30" || signal.symbol === "EURGBP") {
+          manualPointValueUsd = manualPointValueUsd * 1.1;
+        }
+        const manualRisk = ptsAtRisk * manualVol * manualPointValueUsd;
         totalMasterVolume = manualVol;
         userAllocations.push({
           user_id: targetUser.user_id,
