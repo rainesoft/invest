@@ -61,14 +61,48 @@ serve(async (req) => {
     if (finalStatus === "WON" && trade.trade_type === "QUICK_EXIT" && trade.opportunity_id) {
       const { data: runnerTrade } = await supabase
         .from("user_trades")
-        .select("id, symbol, status")
+        .select("id, symbol, status, side")
         .eq("opportunity_id", trade.opportunity_id)
         .eq("trade_type", "RUNNER")
         .in("status", ["OPEN", "VPS_PROCESSING"])
         .maybeSingle();
 
       if (runnerTrade) {
-        console.log(`[VPS History] QUICK_EXIT WON on ${trade.symbol}. Companion RUNNER ${runnerTrade.id} is active and protected at Breakeven.`);
+        console.log(`[VPS History] QUICK_EXIT WON on ${trade.symbol}. Triggering companion RUNNER ${runnerTrade.id} Breakeven lock.`);
+        const { data: parentOpp } = await supabase
+          .from("trade_opportunities")
+          .select("entry_plan_json, stop_plan_json")
+          .eq("id", trade.opportunity_id)
+          .maybeSingle();
+
+        if (parentOpp?.entry_plan_json && parentOpp?.stop_plan_json) {
+          const entryPrice = Number(parentOpp.entry_plan_json.price || parentOpp.entry_plan_json.entry_price || 0);
+          const origStop = Number(parentOpp.stop_plan_json.stop || 0);
+          const riskDist = (entryPrice > 0 && origStop > 0) ? Math.abs(entryPrice - origStop) : 0;
+          const isLong = runnerTrade.side === "LONG" || runnerTrade.side === "BUY";
+          const sym = runnerTrade.symbol;
+
+          let minBuffer = 0;
+          let dec = 5;
+          if (sym === "BTCUSD" || sym === "ETHUSD") { minBuffer = 2.0; dec = 2; }
+          else if (["US30", "NAS100", "SPX500", "GER30", "JP225", "DE30", "USTEC", "US500"].includes(sym)) { minBuffer = 0.50; dec = 2; }
+          else if (sym.includes("XAU") || sym.includes("XAG")) { minBuffer = 0.25; dec = 2; }
+          else if (sym.includes("OIL")) { minBuffer = 0.05; dec = 2; }
+          else if (sym.endsWith("JPY")) { minBuffer = 0.015; dec = 3; }
+          else { minBuffer = 0.00012; dec = 5; }
+
+          const buffer = Math.max(riskDist * 0.05, minBuffer);
+          const beSl = Number((isLong ? entryPrice + buffer : entryPrice - buffer).toFixed(dec));
+
+          const isImprovement = isLong ? beSl > origStop : beSl < origStop;
+          if (entryPrice > 0 && (isImprovement || origStop === 0)) {
+            await supabase
+              .from("trade_opportunities")
+              .update({ stop_plan_json: { ...parentOpp.stop_plan_json, stop: beSl } })
+              .eq("id", trade.opportunity_id);
+            console.log(`[VPS History] Synchronized parent opportunity ${trade.opportunity_id} stop to Breakeven @ ${beSl}`);
+          }
+        }
       }
     }
 

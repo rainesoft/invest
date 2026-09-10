@@ -1058,11 +1058,13 @@ void MonitorPositions()
                      double ask = SymbolInfoDouble(closedSymbol, SYMBOL_ASK);
                      double bid = SymbolInfoDouble(closedSymbol, SYMBOL_BID);
                      double spread = ask - bid;
+                     double pt = SymbolInfoDouble(closedSymbol, SYMBOL_POINT);
+                     double beBuffer = MathMax(spread > 0 ? spread * 1.0 : 0, 2.0 * pt);
                      int symDigits = (int)SymbolInfoInteger(closedSymbol, SYMBOL_DIGITS);
                      
                      if(compType == POSITION_TYPE_BUY)
                        {
-                        double targetBe = NormalizeDouble(compOpenPrice + (spread > 0 ? spread * 0.5 : 0), symDigits);
+                        double targetBe = NormalizeDouble(compOpenPrice + beBuffer, symDigits);
                         if(compSl < targetBe || compSl == 0)
                           {
                            ModifyTrade(compTicket, targetBe, compTp);
@@ -1071,7 +1073,7 @@ void MonitorPositions()
                        }
                      else if(compType == POSITION_TYPE_SELL)
                        {
-                        double targetBe = NormalizeDouble(compOpenPrice - (spread > 0 ? spread * 0.5 : 0), symDigits);
+                        double targetBe = NormalizeDouble(compOpenPrice - beBuffer, symDigits);
                         if(compSl > targetBe || compSl == 0)
                           {
                            ModifyTrade(compTicket, targetBe, compTp);

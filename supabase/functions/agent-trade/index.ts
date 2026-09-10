@@ -1582,6 +1582,23 @@ for (const [orderId, trade] of orderMap) {
              continue; // Skip all remaining trailing stop/leveraging logic for pending orders
           }
 
+          const getDecimals = (sym: string) => {
+            if (["US30", "NAS100", "SPX500", "GER30", "BTCUSD", "XAUUSD", "XAGUSD", "UKOIL", "US500", "USTEC", "DE30", "JP225"].includes(sym)) return 2;
+            if (sym.endsWith("JPY")) return 3;
+            return 5;
+          };
+
+          const getMinFrictionBuffer = (sym: string, dec: number, risk: number) => {
+            let minPts = 0;
+            if (sym === "BTCUSD" || sym === "ETHUSD") minPts = 2.0;
+            else if (["US30", "NAS100", "SPX500", "GER30", "JP225", "DE30", "USTEC", "US500"].includes(sym)) minPts = 0.50;
+            else if (sym.includes("XAU") || sym.includes("XAG")) minPts = 0.25;
+            else if (sym.includes("OIL")) minPts = 0.05;
+            else if (dec === 3) minPts = 0.015;
+            else minPts = 0.00012;
+            return Math.max(risk * 0.05, minPts);
+          };
+
           // --- 2. AUTONOMOUS DE-LEVERAGING (Emergency Trimming) ---
           if (!isSolvent && trade.status === "OPEN") {
              const profit = Number(position.profit) || 0;
@@ -1589,16 +1606,31 @@ for (const [orderId, trade] of orderMap) {
              const entryPrice = opp.entry_plan_json?.price || opp.entry_plan_json?.entry_price;
              
              if (profit > 0 && entryPrice) {
-                 // Profitable: Move SL to Breakeven
-                 console.log(`[Position Manager] DE-LEVERAGING: Moving SL to Breakeven for ${orderId}`);
+                 const isLong = trade.side === "LONG" || trade.side === "BUY";
+                 const dec = getDecimals(trade.symbol);
+                 const origStop = opp.stop_plan_json?.stop || entryPrice * 0.99;
+                 const risk = Math.abs(entryPrice - origStop);
+                 const buffer = getMinFrictionBuffer(trade.symbol, dec, risk);
+                 const beSl = Number((isLong ? entryPrice + buffer : entryPrice - buffer).toFixed(dec));
+
+                 // Profitable: Move SL to Breakeven + Buffer
+                 console.log(`[Position Manager] DE-LEVERAGING: Moving SL to Breakeven for ${orderId} @ ${beSl}`);
                  const currentTp = position.takeProfit || opp.take_profit_json?.tp;
-                 const modifyPayload: any = { actionType: "POSITION_MODIFY", positionId: orderId, stopLoss: entryPrice };
-                 if (currentTp) modifyPayload.takeProfit = currentTp;
-                 await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
-                     method: "POST",
-                     headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
-                     body: JSON.stringify(modifyPayload)
-                 });
+                 
+                 if (opp.id) {
+                   const updatedStopJson = { ...(opp.stop_plan_json || {}), stop: beSl };
+                   await supabase.from("trade_opportunities").update({ stop_plan_json: updatedStopJson }).eq("id", opp.id);
+                 }
+
+                 if (!isVpsAlive) {
+                   const modifyPayload: any = { actionType: "POSITION_MODIFY", positionId: orderId, stopLoss: beSl };
+                   if (currentTp) modifyPayload.takeProfit = currentTp;
+                   await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                       method: "POST",
+                       headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                       body: JSON.stringify(modifyPayload)
+                   });
+                 }
              } else if (currentVol > 0.01) {
                  // Losing: Partial Close by 50%
                  console.log(`[Position Manager] DE-LEVERAGING: Partially closing 50% of ${orderId} (${trade.symbol}).`);
@@ -1622,15 +1654,30 @@ for (const [orderId, trade] of orderMap) {
             const entryPrice = opp.entry_plan_json?.price || opp.entry_plan_json?.entry_price;
 
             if (profit > 0 && entryPrice) {
-              console.log(`[Position Manager] EOD PROFIT LOCK: Moving SL to Breakeven for ${orderId} (${trade.symbol})`);
+              const isLong = trade.side === "LONG" || trade.side === "BUY";
+              const dec = getDecimals(trade.symbol);
+              const origStop = opp.stop_plan_json?.stop || entryPrice * 0.99;
+              const risk = Math.abs(entryPrice - origStop);
+              const buffer = getMinFrictionBuffer(trade.symbol, dec, risk);
+              const beSl = Number((isLong ? entryPrice + buffer : entryPrice - buffer).toFixed(dec));
+
+              console.log(`[Position Manager] EOD PROFIT LOCK: Moving SL to Breakeven for ${orderId} (${trade.symbol}) @ ${beSl}`);
               const currentTp = position.takeProfit || opp.take_profit_json?.tp;
-              const modifyPayload: any = { actionType: "POSITION_MODIFY", positionId: orderId, stopLoss: entryPrice };
-              if (currentTp) modifyPayload.takeProfit = currentTp;
-              await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
-                method: "POST",
-                headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
-                body: JSON.stringify(modifyPayload)
-              });
+
+              if (opp.id) {
+                const updatedStopJson = { ...(opp.stop_plan_json || {}), stop: beSl };
+                await supabase.from("trade_opportunities").update({ stop_plan_json: updatedStopJson }).eq("id", opp.id);
+              }
+
+              if (!isVpsAlive) {
+                const modifyPayload: any = { actionType: "POSITION_MODIFY", positionId: orderId, stopLoss: beSl };
+                if (currentTp) modifyPayload.takeProfit = currentTp;
+                await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                  method: "POST",
+                  headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                  body: JSON.stringify(modifyPayload)
+                });
+              }
               continue;
             }
 
@@ -1680,13 +1727,9 @@ for (const [orderId, trade] of orderMap) {
             ? (currentPrice - entryPrice) / riskDist
             : (entryPrice - currentPrice) / riskDist;
 
-          const getDecimals = (sym: string) => {
-            if (["US30", "NAS100", "SPX500", "GER30", "BTCUSD", "XAUUSD", "XAGUSD", "UKOIL"].includes(sym)) return 2;
-            if (sym.endsWith("JPY")) return 3;
-            return 5;
-          };
           const decimals = getDecimals(trade.symbol);
           const atr = atrCache.get(trade.symbol) || riskDist;
+          const minBuffer = getMinFrictionBuffer(trade.symbol, decimals, riskDist);
           let newSl: number | null = null;
           let actionName = "";
 
@@ -1709,9 +1752,9 @@ for (const [orderId, trade] of orderMap) {
             } else if (priceMoveInR >= 1.5) {
               steppedFloor = isLong ? entryPrice + (riskDist * 0.75) : entryPrice - (riskDist * 0.75);
               floorLabel = "LOCK_IN_0.75R";
-            } else if (priceMoveInR >= 0.50 || (tp1 && (isLong ? currentPrice >= tp1 : currentPrice <= tp1)) || profit > 0) {
-              steppedFloor = isLong ? entryPrice + (riskDist * 0.05) : entryPrice - (riskDist * 0.05); // Breakeven + 0.05R buffer
-              floorLabel = "BREAK_EVEN_PLUS_0.05R";
+            } else if (priceMoveInR >= 0.35 || (tp1 && (isLong ? currentPrice >= tp1 : currentPrice <= tp1)) || profit > 0) {
+              steppedFloor = isLong ? entryPrice + minBuffer : entryPrice - minBuffer;
+              floorLabel = "BREAK_EVEN_PROTECTED";
             }
 
             let candidateSl: number | null = null;
@@ -1720,7 +1763,7 @@ for (const [orderId, trade] of orderMap) {
               candidateSl = isLong
                 ? Math.max(chandelierSl, steppedFloor)
                 : Math.min(chandelierSl, steppedFloor);
-            } else if (priceMoveInR >= 0.5) {
+            } else if (priceMoveInR >= 0.35) {
               candidateSl = chandelierSl;
             }
 
@@ -1763,15 +1806,15 @@ for (const [orderId, trade] of orderMap) {
                 newSl = lockSl;
                 actionName = `LOCK_IN_0.5R (profit +${priceMoveInR.toFixed(1)}R)`;
               }
-            } else if (priceMoveInR >= 0.50 || (tp1 && (isLong ? currentPrice >= tp1 : currentPrice <= tp1))) {
-              const beSl = Number((isLong ? entryPrice + (riskDist * 0.05) : entryPrice - (riskDist * 0.05)).toFixed(decimals));
+            } else if (priceMoveInR >= 0.35 || (tp1 && (isLong ? currentPrice >= tp1 : currentPrice <= tp1))) {
+              const beSl = Number((isLong ? entryPrice + minBuffer : entryPrice - minBuffer).toFixed(decimals));
               const isImprovement = isLong ? beSl > currentSl : beSl < currentSl;
               if (isImprovement) {
                 newSl = beSl;
-                actionName = `EARLY_BREAKEVEN_0.5R_OR_TP1 (profit +${priceMoveInR.toFixed(1)}R)`;
+                actionName = `EARLY_BREAKEVEN_0.35R_OR_TP1 (profit +${priceMoveInR.toFixed(1)}R)`;
               }
-            } else if (barsElapsed >= 20 && profit > 0 && priceMoveInR >= 0.75) {
-              const beSl = Number(entryPrice.toFixed(decimals));
+            } else if (barsElapsed >= 20 && profit > 0 && priceMoveInR >= 0.50) {
+              const beSl = Number((isLong ? entryPrice + minBuffer : entryPrice - minBuffer).toFixed(decimals));
               const isImprovement = isLong ? beSl > currentSl : beSl < currentSl;
               if (isImprovement) {
                 newSl = beSl;

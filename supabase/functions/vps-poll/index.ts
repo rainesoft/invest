@@ -233,8 +233,30 @@ serve(async (req) => {
           .maybeSingle();
 
         if (qeLeg?.status === "WON") {
-          // Breakeven Lock: Set SL to entry price
-          safeSl = safeEntry;
+          // Breakeven Lock: Set SL to entry price with spread/commission friction buffer
+          const isLong = trade.side === "LONG" || trade.side === "BUY";
+          let minBuffer = 0;
+          if (trade.symbol === "BTCUSD" || trade.symbol === "ETHUSD") minBuffer = 2.0;
+          else if (["US30", "NAS100", "SPX500", "GER30", "JP225", "DE30", "USTEC", "US500"].includes(trade.symbol)) minBuffer = 0.50;
+          else if (trade.symbol.includes("XAU") || trade.symbol.includes("XAG")) minBuffer = 0.25;
+          else if (trade.symbol.includes("OIL")) minBuffer = 0.05;
+          else if (decimals === 3) minBuffer = 0.015;
+          else minBuffer = 0.00012;
+
+          const buffer = Math.max(riskDistance * 0.05, minBuffer);
+          const beSl = Number((isLong ? safeEntry + buffer : safeEntry - buffer).toFixed(decimals));
+
+          const isImprovement = isLong ? beSl > safeSl : beSl < safeSl;
+          if (isImprovement || safeSl === 0) {
+            safeSl = beSl;
+            // Also sync trade_opportunities.stop_plan_json if needed
+            if (opp?.stop_plan_json && opp.stop_plan_json.stop !== safeSl) {
+              await supabase
+                .from("trade_opportunities")
+                .update({ stop_plan_json: { ...opp.stop_plan_json, stop: safeSl } })
+                .eq("id", trade.opportunity_id);
+            }
+          }
         }
       }
 
