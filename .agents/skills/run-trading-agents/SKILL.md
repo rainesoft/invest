@@ -245,4 +245,33 @@ When an asset fails to achieve S-Tier confidence (e.g. confidence < 75 due to mi
     - When an S-Tier signal generates `Execution Skipped: No volume allocated (Circuit Breaker / Max Drawdown reached for all users)`, the opportunity was successfully approved and scored by AI agents (e.g. `UKOIL` S-Tier 95%), but the PAMM risk desk halts trade execution because account equity drawdown limits were reached. Check account balances, open drawdown, and reset watermarks in `user_accounts` and `system_settings`.
 12. **Counter-Trend Falling Knife Protection (Deterministic Alignment Veto)**:
     - For assets trading at macro extremes (e.g. Gold `XAUUSD` above $4,400 with Daily Hidden Bearish Divergence), agents enforce a Deterministic Alignment Veto to reject counter-trend longs. To originate S-Tier setups, agents should pivot to pullback short limit orders at key resistance or wait for confirmed structural break of swing support.
-
+13. **Inter-Asset Sentiment Fallback in `pendingNewsSide` Pre-Filter**:
+    - In `agent-swing` (lines 947-963), `pendingNewsSide` fetches direct sentiment for `symbol`. When `agent-news` detects a catalyst for benchmark pairs (e.g. `USOIL` Bearish or `XAUUSD` Bearish from surging 30Y Treasury yields), ensure `pendingNewsSide` falls back to the correlated peer (`UKOIL` $\leftarrow$ `USOIL`, `XAGUSD` $\leftarrow$ `XAUUSD`). This guarantees that correlated commodities receive the deterministic **+20 Macro Scout Fundamental Confluence** boost, upgrading 85% A-Tier setups into 95% S-Tier opportunities.
+14. **Origination Risk Governor Dynamic Offset Calibration for Metals (`XAGUSD`)**:
+    - For `XAGUSD` (Contract Size = 5,000 oz $\implies \$50.00$ per $\$1.00$ move), the maximum stop distance allowed under the $\$45.00$ cap ($3.0\%$ of $\$1,500$ equity) is strictly:
+      $$\text{Max Stop Distance} = \frac{\$45.00}{0.01 \times \$50.00} = \$0.90$$
+    - When daily/intraday ATR is elevated, raw stop placement (e.g. $\$3.09$) creates $\$154.60$ risk. The Risk Governor attempts to pull back the entry, but if the required entry offset exceeds `dynamic ATR buffer` ($0.515$), the setup is rejected with `entry offset exceeds dynamic ATR buffer`.
+    - **Remediation**: The Adaptive Pullback Limit Solver must anchor the Limit Order strictly within $\$0.90$ of the confirmed swing invalidation pivot, or configure the metal buffer threshold to `Math.max(atr_14 * 1.5, currentPrice * 0.05)`.
+15. **Cross-Timeframe Transition Handling (Intraday Extension $\to$ Macro Swing Exhaustion)**:
+    - As demonstrated in `UKOIL`, `agent-day` captured an S-Tier 95% Bullish Continuation setup on M30 (Entry @ $\$102.49$, hitting TP2 @ $\$105.28$, status: `WON`). Simultaneously, once price expanded into the apex of the Daily Rising Wedge with RSI at 73.3, `agent-swing` originated an A-Tier 85% Short (@ $\$104.75$, TP2 @ $\$94.49$).
+    - Pipeline operators must ensure intraday trend positions are fully realized / scaled out at TP2 before taking macro exhaustion swing entries to avoid margin netting conflicts.
+16. **Consolidation / CHOP Passive Limit Recovery Protocol (`XAUUSD` & `BTCUSD`)**:
+    - When pareto assets enter macro range consolidation (e.g. `XAUUSD` at $4,352 or `BTCUSD` at $77,270), `agent-swing` rejects with `No valid swing setup identified: Consolidation / CHOP without clear edge`.
+    - Instead of discarding the asset, the pipeline should anchor a passive Limit Order at the 50.0% / 61.8% Fibonacci Golden Pocket or nearest structural Order Block / FVG (e.g. BTCUSD Buy Limit at 61.8% Fib $70,006, Gold Sell Limit at $4,397 FVG). This compresses stop distance, expands R:R to $\ge 1:2.5$, and elevates the setup into S-Tier.
+17. **`agent-day` Macro Scout Fundamental Alignment Bonus (+20)**:
+    - While `agent-swing` grants +20 confidence for aligning with `pendingNewsSide`, `agent-day` currently lacks an explicit +20 Macro Scout bonus in `agent-day/index.ts` (only applying +10 for S/R flips and +5 for session opens).
+    - Implementing this fundamental alignment check in `agent-day` elevates high-probability intraday setups (75-80 confidence) into the 95+ S-Tier bracket when technicals align with live macro news from `market_context`.
+18. **Adaptive Limit Solver Order Type Decoupling in `agent-swing`**:
+    - In `agent-swing/index.ts` (line 562), the Adaptive Limit Solver is conditionally locked to `entry_type === "Market"`. If the LLM proposes a Limit order where Target 2 R:R is $< 1:1.70$, the solver is bypassed, routing the trade to `REQUIRE_LTF_DRILLDOWN` or rejection.
+    - Removing the `"Market"` string restriction allows the solver to automatically recalculate any sub-optimal Limit order to guarantee the institutional $\ge 1:1.75$ R:R threshold.
+19. **Live S-Tier Intraday Benchmark Case Study (`XAGUSD` M30 Short)**:
+    - **Execution Proof**: Ticket `602943419`, Status `ACTIVE`, Confidence `92` (S-Tier 🏆).
+    - **Parameters**: Sell Limit @ $\$65.31208$, SL @ $\$65.9771$ ($1.25\times\text{ATR}$ Volatility Guard), TP1 @ $\$64.5741$, TP2 @ $\$64.1121$, TP3 @ $\$63.1221$.
+    - **Capital Efficiency**: Stop distance of $\$0.665 \times \$50.00 = \$33.25$ risk (under 3% cap), yielding $EV_{\text{TP2}} = +\$36.69$ ($+1.10R$) and $EV_{\text{TP3}} = +\$73.82$ ($+2.22R$) per 0.01 lot.
+20. **Revalidation Seasoning & Unfilled Limit Order Protection**:
+    - **Problem**: When `agent-day` or `agent-swing` originates a Limit Order awaiting a pullback fill (e.g. `XAGUSD` Sell Limit @ $65.31 while spot is $64.19), Phase 1 signal revalidation must NOT evaluate it prematurely or confuse resting limit distance with an active position approaching TP.
+    - **Resolution**:
+      * **Minimum Seasoning Guard**: Signals created $<15$ minutes ago (`hoursElapsed < 0.25`) are strictly bypassed during revalidation passes.
+      * **Programmatic Limit Guard (`isUnfilledLimit`)**: If a limit order has not yet been filled (`currentPrice > entryPrice` for LONG, or `currentPrice < entryPrice` for SHORT), any AI-generated `TAKE_PROFIT` or `TIGHTEN_STOP` is intercepted and overridden to `MAINTAIN`.
+      * **Timeframe Scoping**: `agent-swing` strictly revalidates daily swing signals (`1d`), preventing cross-agent interference with intraday scalps.
+      * **Profit Securing Status Mapping**: Legitimate early profit securing on filled active positions updates `status: "WON"`, never `"REJECTED"`, preserving transparency in dashboard metrics.
