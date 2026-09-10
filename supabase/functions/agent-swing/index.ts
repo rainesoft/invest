@@ -334,7 +334,7 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
    - If the Percentage Distance is > ${inflectionThresholdPct}%, the price is NOT resting on a level. You CANNOT use INFLECTION_POINT_WAIT.
    - If price is resting squarely on a boundary (<= ${inflectionThresholdPct}%) AND momentum indicators (RSI flat, ADX low) do not provide overwhelming confirmation, do NOT instantly reject it as 'chop'. Instead, look for a Momentum Breakout setup using Buy-Stop or Sell-Stop orders just outside the Fib zone to catch the inevitable volatility expansion.
    - Invoke the reject_trade tool with the exact reason: 'INFLECTION_POINT_WAIT' to sideline capital until a definitive bounce or breakdown is confirmed via a candle close.
-   - LIMIT ORDERS FOR MID-RANGE MARKETS: If price is floating mid-range between key Fibonacci levels (e.g., between 38.2% and 50%), do NOT reject the setup as 'No setup'. Instead, originate a 'Buy Limit' or 'Sell Limit' order exactly at the optimal Fibonacci level to catch the wick when the price retraces.
+   - LIMIT ORDERS FOR MID-RANGE MARKETS & RANGE CHOP: If price is floating mid-range between key Fibonacci levels (e.g., between 38.2% and 50%) or consolidating in a range/chop regime (e.g. BTCUSD, XAUUSD), NEVER reject the setup with 'No setup' or 'Consolidation / CHOP without clear edge'. Professional institutional desks establish passive liquidity at the range extremes: originate a 'Buy Limit' at the 50.0% or 61.8% Fibonacci Golden Pocket / discount FVG for bullish HTF structure, or a 'Sell Limit' at the 50.0% or 61.8% Golden Pocket / premium FVG for bearish HTF structure. This locks in minimum 1:1.75 to 1:2.5+ R:R on Target 2 and delivers valid S-Tier / A-Tier setups.
 
 9. DYNAMIC ADX OSCILLATOR THRESHOLDS (EXHAUSTION VS CONTINUATION):
    - In a strong runaway trend where ADX > 25, you are FORBIDDEN from taking a Mean Reversion trade against the trend.
@@ -415,7 +415,7 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
       {
         type: "function",
         name: "reject_trade",
-        description: "Submit this action when the trade contradicts macro bias or is technically weak.",
+        description: "Submit this action ONLY when the trade contradicts macro bias or is technically broken. Do NOT reject if price is in consolidation or range chop; instead use approve_trade with a Buy/Sell Limit order anchored at the 50.0% / 61.8% Golden Pocket or nearest FVG.",
         parameters: {
           type: "object",
           properties: {
@@ -558,8 +558,8 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
         // Trading Central Minimum R:R 1:1.70 on Target 2 (TP2)
         let requiredRR = 1.70;
 
-        // 1. Adaptive Limit Solver for Swings when R:R < 1.70
-        if (rr < requiredRR && data.execution_parameters.entry_type === "Market") {
+        // 1. Adaptive Limit Solver for Swings when R:R < 1.70 (Decoupled from 'Market' only)
+        if (rr < requiredRR && data.execution_parameters.entry_type) {
           const targetRR = 1.75;
           const solvedEntry = (tp2 + (targetRR * sl)) / (1 + targetRR);
           const isIndexOrCrypto = ['US30', 'NAS100', 'GER30', 'SPX500', 'JP225', 'BTCUSD', 'ETHUSD'].includes(symbol);
@@ -567,8 +567,8 @@ CRITICAL MACRO DIRECTIVE: If there are no major macroeconomic catalysts, the mac
           const formattedEntry = Number(solvedEntry.toFixed(decimals));
 
           const isLong = data.recommended_direction === "LONG";
-          const isEntryValidLong = isLong && formattedEntry < entry && formattedEntry > sl;
-          const isEntryValidShort = !isLong && formattedEntry > entry && formattedEntry < sl;
+          const isEntryValidLong = isLong && formattedEntry > sl;
+          const isEntryValidShort = !isLong && formattedEntry < sl;
 
           if (isEntryValidLong || isEntryValidShort) {
             console.log(`[Swing Desk] Adaptive Limit: Adjusted ${symbol} entry to ${formattedEntry} to lock in 1:${targetRR.toFixed(2)} R:R.`);
@@ -794,13 +794,20 @@ serve(async (req) => {
         const { data: activeSignals } = await supabase
           .from("trade_opportunities")
           .select("*")
-          .eq("status", "APPROVED");
+          .eq("status", "APPROVED")
+          .in("timeframe", ["1d", "1D"]);
 
         if (activeSignals && activeSignals.length > 0) {
           await Promise.all(activeSignals.map(async (signal: any) => {
             try {
               // 1. Math Validation (20-Period Daily Horizon TTL: 20 Trading Days = 480 Hours)
               const hoursElapsed = (Date.now() - new Date(signal.created_at).getTime()) / (1000 * 60 * 60);
+              // Minimum 15-minute seasoning guard: Never revalidate signals created < 15 mins ago
+              if (hoursElapsed < 0.25) {
+                console.log(`[Validation] SKIPPED ${signal.symbol}: Swing signal created recently (${(hoursElapsed * 60).toFixed(1)}m ago). Allowing minimum 15m seasoning.`);
+                return;
+              }
+
               if (hoursElapsed > 480) {
                 await supabase.from("trade_opportunities").update({ status: "EXPIRED", ai_risks: "Expired: 20-period daily swing anticipation horizon (20 days) reached without execution." }).eq("id", signal.id);
                 // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
@@ -830,6 +837,13 @@ serve(async (req) => {
               const catastrophicSlLong = stopLoss ? stopLoss - (atr * 2.0) : null;
               const catastrophicSlShort = stopLoss ? stopLoss + (atr * 2.0) : null;
               
+              const isLimit = (signal.entry_plan_json?.order_type || "").toUpperCase().includes("LIMIT");
+              const entryPrice = Number(signal.entry_plan_json?.price || signal.entry_plan_json?.suggested_entry_price || signal.entry_plan_json?.limit_price || 0);
+              const isUnfilledLimit = isLimit && entryPrice > 0 && (
+                (signal.side === 'LONG' && currentClose > entryPrice) ||
+                (signal.side === 'SHORT' && currentClose < entryPrice)
+              );
+
               if (stopLoss) {
                 // Trading Central Bar-Close Stop Loss Rule:
                 // Evaluated strictly on confirmed daily bar close, allowing intra-day wicks to breathe unless catastrophic emergency stop is breached
@@ -847,10 +861,9 @@ serve(async (req) => {
                 }
               }
 
-              if (takeProfit) {
+              if (takeProfit && !isUnfilledLimit) {
                 if ((signal.side === 'LONG' && currentHigh >= takeProfit) || 
                     (signal.side === 'SHORT' && currentLow <= takeProfit)) {
-                  const entryPrice = signal.entry_plan_json?.price || signal.entry_plan_json?.limit_price;
                   let rMult = 2.0; // fallback
                   if (entryPrice && stopLoss) {
                     const risk = Math.abs(entryPrice - stopLoss);
@@ -876,8 +889,21 @@ serve(async (req) => {
                 // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
                 console.log(`[Validation] REJECTED ${signal.symbol} by AI: ${evalResult.reason}`);
               } else if (evalResult.action === "TAKE_PROFIT") {
-                await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Profit Secured by agent-risk: ${evalResult.reason}` }).eq("id", signal.id);
-                console.log(`[Validation] TAKE_PROFIT ${signal.symbol} by AI: ${evalResult.reason}`);
+                if (isUnfilledLimit) {
+                  console.log(`[Validation] MAINTAIN ${signal.symbol}: Unfilled limit order cannot take profit; maintaining.`);
+                  return;
+                }
+                let rMult = 2.0;
+                if (entryPrice && stopLoss) {
+                  const risk = Math.abs(entryPrice - stopLoss);
+                  if (risk > 0) rMult = Math.abs(currentClose - entryPrice) / risk;
+                }
+                await supabase.from("trade_opportunities").update({
+                  status: "WON",
+                  r_multiple: Number(rMult.toFixed(2)),
+                  ai_risks: `Profit Secured by agent-risk: ${evalResult.reason}`
+                }).eq("id", signal.id);
+                console.log(`[Validation] TAKE_PROFIT (WON) ${signal.symbol} by AI: ${evalResult.reason}`);
                 if (!isManual) {
                   try {
                     const functionsUrl = (Deno.env.get("SUPABASE_URL") || "").replace(/\/$/, "") + "/functions/v1";
@@ -960,6 +986,29 @@ serve(async (req) => {
              const pending = pendingSentiment[0];
              pendingNewsSide = pending.macro_bias === "BULLISH" ? "LONG" : pending.macro_bias === "BEARISH" ? "SHORT" : null;
              pendingNewsNarrative = pending.narrative;
+          } else {
+             // Inter-Asset Macro Sentiment Fallback for Correlated Commodities & Metals
+             const correlatedPeer = (symbol === "UKOIL" || symbol === "BRENT") ? "USOIL"
+               : (symbol === "USOIL" || symbol === "WTI") ? "UKOIL"
+               : (symbol === "XAGUSD" || symbol === "SILVER") ? "XAUUSD"
+               : (symbol === "XAUUSD" || symbol === "GOLD") ? "XAGUSD"
+               : null;
+             if (correlatedPeer) {
+               const { data: peerSentiment } = await supabase
+                 .from("market_context")
+                 .select("id, macro_bias, narrative")
+                 .eq("symbol", correlatedPeer)
+                 .eq("agent_persona", "MACRO_SCOUT")
+                 .gt("expires_at", new Date().toISOString())
+                 .order("created_at", { ascending: false })
+                 .limit(1);
+               if (peerSentiment && peerSentiment.length > 0) {
+                 const peer = peerSentiment[0];
+                 pendingNewsSide = peer.macro_bias === "BULLISH" ? "LONG" : peer.macro_bias === "BEARISH" ? "SHORT" : null;
+                 pendingNewsNarrative = `[Inter-Asset Correlation via ${correlatedPeer}]: ${peer.narrative}`;
+                 console.log(`[${symbol}] Inherited pending news side (${pendingNewsSide}) from correlated peer ${correlatedPeer}`);
+               }
+             }
           }
         } catch (pendingErr: any) {
            console.warn(`[${symbol}] Error checking market_context: ${pendingErr.message}`);
@@ -2133,10 +2182,12 @@ serve(async (req) => {
 
           // Apply adaptive Trading Central levels (clamped entry + expanded TP2 to enforce institutional 1:1.75 R:R)
           entry = tcLevels.suggested_entry_price;
+          sl = tcLevels.pivot_point;
           order_type = tcLevels.order_type;
           tp1 = tcLevels.tp1;
           tp2 = tcLevels.tp2;
           evaluation.execution_parameters.suggested_entry_price = entry;
+          evaluation.execution_parameters.suggested_stop_loss = sl;
           evaluation.execution_parameters.take_profit_1 = tp1;
           evaluation.execution_parameters.take_profit_2 = tp2;
           safeRationale += ` [Trading Central Adaptive Levels: Entry @ $${entry} (${order_type}), TP1 @ $${tp1}, TP2 @ $${tp2} (R:R 1:${tcLevels.current_rr_tp2})]`;
