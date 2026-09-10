@@ -2026,8 +2026,8 @@ serve(async (req) => {
           const maxAllowableStopDistance = maxPermissibleCapitalRisk / (minLot * pointValueUsd);
           const isHighBeta = ["XAUUSD", "XAGUSD", "UKOIL", "USOIL", "BTCUSD", "ETHUSD", "US30", "NAS100", "GER30"].includes(symbol as string);
           const maxPermissibleEntryOffset = isHighBeta
-            ? Math.max((dailyAtr || 1) * 0.60, currentPrice * 0.008)
-            : Math.max((dailyAtr || 1) * 0.40, currentPrice * 0.004);
+            ? Math.max((dailyAtr || 1) * 1.50, currentPrice * 0.045)
+            : Math.max((dailyAtr || 1) * 0.75, currentPrice * 0.015);
 
           if (maxAllowableStopDistance > 0 && Math.abs(entry - sl) > maxAllowableStopDistance) {
             const rawRisk = Math.abs(entry - sl) * minLot * pointValueUsd;
