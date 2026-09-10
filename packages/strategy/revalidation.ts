@@ -19,15 +19,25 @@ export async function revalidateOpportunity(signal: any, snapshot: LogicContext,
     throw new Error("No OpenAI or Azure OpenAI keys found");
   }
 
+  const isLimit = (signal.entry_plan_json?.order_type || "").toUpperCase().includes("LIMIT");
+  const entryPrice = Number(signal.entry_plan_json?.price || signal.entry_plan_json?.suggested_entry_price || signal.entry_plan_json?.limit_price || 0);
+  const currentPrice = Number(snapshot.current_price || 0);
+  const isUnfilledLimit = isLimit && entryPrice > 0 && currentPrice > 0 && (
+    (signal.side === "LONG" && currentPrice > entryPrice) ||
+    (signal.side === "SHORT" && currentPrice < entryPrice)
+  );
+
   const systemPrompt = `You are agent-risk, re-evaluating a previously published trading signal.
 Your job is to determine if the original thesis is still valid given the NEW live market snapshot and NEW breaking news context.
 
 [ORIGINAL SIGNAL THESIS]
 Symbol: ${signal.symbol}
 Direction: ${signal.side}
+Order Type: ${signal.entry_plan_json?.order_type || "MARKET"}
 Entry Plan: ${JSON.stringify(signal.entry_plan_json)}
 Stop Loss Plan: ${JSON.stringify(signal.stop_plan_json)}
 Take Profit Plan: ${JSON.stringify(signal.take_profit_json)}
+Execution Status: ${isUnfilledLimit ? "PENDING LIMIT ORDER (Awaiting pullback fill. Trade is NOT filled yet!)" : "ACTIVE / FILLED POSITION"}
 Thesis: ${signal.ai_summary}
 
 [NEW LIVE CONTEXT]
@@ -40,8 +50,9 @@ Breaking News & Macro: ${newsContext || "No major macro events."}
 3. BUY THE RUMOR, SELL THE NEWS: Evaluate if the fundamental news has already been priced in. If the asset has already completed a massive directional move prior to the news breaking, assume 'buy the rumor, sell the news' and DO NOT reject opposing technical signals.
 4. STRUCTURAL DECAY: If the price action has significantly shifted and the original structural rationale no longer makes sense, reject it (or reduce risk).
 5. DO NOT HALLUCINATE MATH: The system has ALREADY mathematically verified that the current price has NOT hit the stop loss or take profit. Do NOT reject the setup claiming the stop loss was hit.
-6. PROFIT SECURING: If the trade is currently in profit, but momentum has slowed or we are approaching a strong structural barrier, issue a TAKE_PROFIT command to secure the bag early. 
-7. If the thesis remains strongly valid and supported by the new context, issue MAINTAIN.
+6. PROFIT SECURING (ACTIVE POSITIONS ONLY): If the trade is an ACTIVE FILLED POSITION currently in profit, but momentum has slowed or we are approaching a strong structural barrier, issue a TAKE_PROFIT command to secure the bag early. 
+7. CRITICAL UNFILLED PENDING LIMIT RULE: If the trade is a PENDING LIMIT ORDER (Execution Status: PENDING LIMIT ORDER), you MUST NEVER issue TAKE_PROFIT. The position has NOT been filled by the broker yet. Do not confuse current price approaching the take profit level with a trade being in profit. Issue MAINTAIN to allow the resting limit order to be filled on a pullback.
+8. If the thesis remains strongly valid and supported by the new context, issue MAINTAIN.
 
 You MUST respond strictly with a raw JSON object:
 {
@@ -78,5 +89,10 @@ You MUST respond strictly with a raw JSON object:
 
   const content = response.choices[0].message.content;
   if (!content) throw new Error("No content returned from AI");
-  return JSON.parse(content);
+  const parsed = JSON.parse(content);
+  if (isUnfilledLimit && (parsed.action === "TAKE_PROFIT" || parsed.action === "TIGHTEN_STOP")) {
+    parsed.action = "MAINTAIN";
+    parsed.reason = `Pending limit order resting for pullback fill @ ${entryPrice} (live price: ${currentPrice}). Position is unfilled; maintaining order.`;
+  }
+  return parsed;
 }
