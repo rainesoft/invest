@@ -1922,12 +1922,34 @@ serve(async (req) => {
             }
           }
 
+          // === DETERMINISTIC TREND & DIVERGENCE ALIGNMENT GATE (Elder/Minervini Protocol) ===
+          const isHtfBullish = snapshot.trend_alignment?.startsWith("BULLISH");
+          const isHtfBearish = snapshot.trend_alignment?.startsWith("BEARISH");
+          const hasBullishDivergence = snapshot.macd_divergence?.includes("BULLISH") || snapshot.rsi_divergence?.includes("BULLISH");
+          const hasBearishDivergence = snapshot.macd_divergence?.includes("BEARISH") || snapshot.rsi_divergence?.includes("BEARISH");
+
+          if (dbSide === "SHORT" && isHtfBullish && hasBullishDivergence) {
+            const rejectReason = `Deterministic Alignment Veto: Proposing SHORT directly opposes confirmed BULLISH Trend and BULLISH Momentum Divergence (${snapshot.macd_divergence || snapshot.rsi_divergence}). Counter-trend exhaustion trap vetoed.`;
+            console.log(`[${symbol as string}] [Alignment Veto] ${rejectReason}`);
+            rejections.push({ symbol: symbol as string, reason: rejectReason, layer: "Alignment Veto" });
+            return;
+          } else if (dbSide === "LONG" && isHtfBearish && hasBearishDivergence) {
+            const rejectReason = `Deterministic Alignment Veto: Proposing LONG directly opposes confirmed BEARISH Trend and BEARISH Momentum Divergence (${snapshot.macd_divergence || snapshot.rsi_divergence}). Counter-trend falling knife trap vetoed.`;
+            console.log(`[${symbol as string}] [Alignment Veto] ${rejectReason}`);
+            rejections.push({ symbol: symbol as string, reason: rejectReason, layer: "Alignment Veto" });
+            return;
+          }
+
           let order_type = isLong ? "BUY MARKET" : "SELL MARKET";
           const pendingOrderThreshold = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.15) : (currentPrice * 0.001);
 
+          // Calibrate limit distance to 0.15x ATR (and 0.08x ATR in strong momentum) to eliminate missed-fill expirations
+          const isStrongMomentum = Boolean(snapshot.adx_14 && snapshot.adx_14 >= 25);
+          const limitAtrMultiplier = isStrongMomentum ? 0.08 : 0.15;
+
           if (intradayHasOpposingRejection) {
             console.log(`[${symbol as string}] [Cross-Agent Confluence] Intraday agent rejected ${symbol as string} (${intradayRejectionDetail}). Converting to pullback LIMIT order entry.`);
-            const maxLimitOffset = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.30) : (currentPrice * 0.005);
+            const maxLimitOffset = (dailyAtr && dailyAtr > 0) ? (dailyAtr * limitAtrMultiplier) : (currentPrice * 0.002);
             const deepFib = nearestFibs.find(f => isLong ? f.price < currentPrice : f.price > currentPrice);
             let targetLimit = deepFib ? deepFib.price : (isLong ? currentPrice - maxLimitOffset : currentPrice + maxLimitOffset);
             
@@ -1943,7 +1965,7 @@ serve(async (req) => {
             evaluation.execution_parameters.suggested_stop_loss = sl;
             safeRationale += ` [Multi-Timeframe Protection: Intraday counter-momentum (${intradayRejectionDetail}) — Market entry converted to pullback Limit @ $${entry} with 1.35x ATR SL]`;
           } else if (Math.abs(entry - currentPrice) >= pendingOrderThreshold) {
-            const maxLimitDist = (dailyAtr && dailyAtr > 0) ? (dailyAtr * 0.30) : (currentPrice * 0.005);
+            const maxLimitDist = (dailyAtr && dailyAtr > 0) ? (dailyAtr * limitAtrMultiplier) : (currentPrice * 0.002);
             const rawLimitDist = Math.abs(entry - currentPrice);
             if (rawLimitDist > maxLimitDist) {
               const clampedEntry = isLong ? (currentPrice - maxLimitDist) : (currentPrice + maxLimitDist);
@@ -2131,6 +2153,19 @@ serve(async (req) => {
             evaluation.execution_parameters.suggested_stop_loss = sl;
           }
 
+          // Post-Stop Floor R:R Re-Expansion: Maintain >= 1.75 R:R on Target 2 after SL widening
+          const finalSwingRisk = Math.abs(entry - sl);
+          const minRequiredSwingReward = finalSwingRisk * 1.75;
+          if (isLong && (!tp2 || (tp2 - entry) < minRequiredSwingReward)) {
+            tp2 = Number((entry + minRequiredSwingReward).toFixed(5));
+            evaluation.execution_parameters.take_profit_2 = tp2;
+          } else if (!isLong && (!tp2 || (entry - tp2) < minRequiredSwingReward)) {
+            tp2 = Number((entry - minRequiredSwingReward).toFixed(5));
+            evaluation.execution_parameters.take_profit_2 = tp2;
+          }
+          const finalSwingReward = tp2 ? Math.abs(tp2 - entry) : 0;
+          const finalRrToTp2 = finalSwingRisk > 0 ? Number((finalSwingReward / finalSwingRisk).toFixed(2)) : rrToTp2;
+
           // === APPROVED — SAVE TO DB ===
           const r = evaluation.swing_rationale;
           const aiSummary = [
@@ -2142,7 +2177,7 @@ serve(async (req) => {
             tp1 ? `TP1 @ $${tp1.toLocaleString()}: ${r.tp1_rationale}` : null,
             tp2 ? `TP2 @ $${tp2.toLocaleString()}: ${r.tp2_rationale}` : null,
             tp3 ? `TP3 @ $${tp3.toLocaleString()}: ${r.tp3_rationale}` : null,
-            `R:R to TP2: 1:${rrToTp2.toFixed(1)} | Fib Swing: $${fib.swing_low.toLocaleString()} → $${fib.swing_high.toLocaleString()}`,
+            `R:R to TP2: 1:${finalRrToTp2.toFixed(1)} | Fib Swing: $${fib.swing_low.toLocaleString()} → $${fib.swing_high.toLocaleString()}`,
           ].filter(Boolean).join(" | ");
 
           const approvedObj = {

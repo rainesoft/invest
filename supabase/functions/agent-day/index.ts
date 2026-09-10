@@ -321,7 +321,7 @@ ${JSON.stringify(snapshot, null, 2)}`,
           entry_type: args.order_type,
           suggested_entry_price: args.entry_price || args.suggested_entry_price,
           suggested_stop_loss: args.stop_loss || args.suggested_stop_loss,
-          suggested_take_profit: args.take_profit || args.take_profit_1 || args.take_profit_2,
+          suggested_take_profit: args.take_profit_2 || args.take_profit || args.take_profit_1,
           take_profit_1: args.take_profit_1,
           take_profit_2: args.take_profit_2
         },
@@ -1149,6 +1149,77 @@ serve(async (req) => {
               return;
             }
 
+            // --- PRE-AI SPREAD-TO-ATR EXPECTANCY & LIVE BROKER SPREAD GUARD (TCA Engine) ---
+            if (!isManual) {
+              // 1. Check if broker recently failed execution on this symbol with SPREAD_TOO_WIDE within the last 60 minutes
+              const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+              const { data: recentSpreadRejection } = await supabase
+                .from("user_trades")
+                .select("error_message, created_at")
+                .eq("symbol", symbol)
+                .eq("status", "FAILED")
+                .like("error_message", "SPREAD_TOO_WIDE%")
+                .gte("created_at", oneHourAgo)
+                .order("created_at", { ascending: false })
+                .limit(1);
+
+              if (recentSpreadRejection && recentSpreadRejection.length > 0) {
+                const spreadErr = recentSpreadRejection[0].error_message;
+                const rejectReason = `Pre-AI TCA Guard: Broker recently rejected ${symbol} due to blown-out spread (${spreadErr}) within the last hour. Skipped LLM evaluation to protect transaction expectancy.`;
+                console.log(`[${symbol}] [Spread Guard] ${rejectReason}`);
+                sendEvent({ type: 'progress', message: `[Spread Guard] ${symbol}: Wide broker spread (${spreadErr}). LLM skipped.` });
+                await insertAuditLog(supabase, {
+                  actor_type: "SYSTEM",
+                  action: "REJECTED_BY_SPREAD_GUARD",
+                  entity_type: "research",
+                  payload_json: { symbol, reason: rejectReason },
+                });
+                rejections.push({ symbol, reason: rejectReason, layer: "Pre-AI Spread Guard" });
+                return;
+              }
+
+              // 2. Structural Spread-to-ATR Ratio check
+              // If typical broker spread exceeds 20% of 30m ATR, transaction friction destroys strategy expectancy.
+              const typicalBrokerSpreads: Record<string, number> = {
+                BTCUSD: 3.50,
+                ETHUSD: 0.50,
+                XAUUSD: 0.40,
+                XAGUSD: 0.03,
+                US30: 3.00,
+                NAS100: 2.00,
+                SPX500: 0.60,
+                GER30: 2.00,
+                JP225: 15.0,
+                EURUSD: 0.00018,
+                GBPUSD: 0.00025,
+                USDJPY: 0.025,
+                USDCAD: 0.00025,
+                USDCHF: 0.00025,
+                AUDUSD: 0.00022,
+                NZDUSD: 0.00025,
+                EURJPY: 0.025,
+                GBPJPY: 0.035,
+              };
+              const typicalSpread = typicalBrokerSpreads[symbol] || 0;
+              const currentAtr = snapshot.atr_14 || 0;
+              if (typicalSpread > 0 && currentAtr > 0) {
+                const spreadToAtrRatio = typicalSpread / currentAtr;
+                if (spreadToAtrRatio > 0.20) {
+                  const rejectReason = `Pre-AI TCA Guard: Structural spread-to-ATR ratio (${(spreadToAtrRatio * 100).toFixed(1)}%) exceeds institutional 20% ceiling (Typical Spread: ${typicalSpread}, 30m ATR: ${currentAtr.toFixed(4)}). Transaction costs exceed statistical expectancy. LLM skipped.`;
+                  console.log(`[${symbol}] [Spread-to-ATR Guard] ${rejectReason}`);
+                  sendEvent({ type: 'progress', message: `[Spread-to-ATR Guard] ${symbol}: High friction (${(spreadToAtrRatio * 100).toFixed(0)}% of ATR). LLM skipped.` });
+                  await insertAuditLog(supabase, {
+                    actor_type: "SYSTEM",
+                    action: "REJECTED_BY_SPREAD_GUARD",
+                    entity_type: "research",
+                    payload_json: { symbol, reason: rejectReason },
+                  });
+                  rejections.push({ symbol, reason: rejectReason, layer: "Pre-AI Spread Guard" });
+                  return;
+                }
+              }
+            }
+
             console.log(`[Strategy Eval] Market snapshot for ${symbol}: Trend=${snapshot.trend_alignment}, RSI=${snapshot.rsi_14?.toFixed(2) ?? 'N/A'}, CurrentPrice=${snapshot.current_price}`);
             
             // LAYER A: Deterministic Guard
@@ -1462,6 +1533,23 @@ serve(async (req) => {
               } else if (htfOpposing) {
                 is_valid = false;
                 institutional_rationale = `Execution Desk Rejected: Counter-trend mean reversion against confirmed Higher Timeframe trend (${snapshot.htf_trend}) is strictly forbidden.`;
+              } else {
+                // Microstructure shift confirmation: Must have S/R Flip, Reversal Candle, Liquidity Sweep, or confirmed CHoCH
+                const hasSRFlip = Boolean(snapshot.sr_flip && (snapshot.sr_flip as any).holding_confirmed);
+                const hasReversalCandle = Boolean(snapshot.candlestick_pattern && ["HAMMER", "BULLISH_ENGULFING", "SHOOTING_STAR", "BEARISH_ENGULFING", "PINBAR", "DOJI"].includes(snapshot.candlestick_pattern));
+                const hasSweep = Boolean(snapshot.asian_sweep && snapshot.asian_sweep !== "NONE");
+                const hasChoch = Boolean(
+                  snapshot.change_of_character && (
+                    (evaluation.recommended_direction === "LONG" && snapshot.change_of_character.type === "BULLISH_CHOCH") ||
+                    (evaluation.recommended_direction === "SHORT" && snapshot.change_of_character.type === "BEARISH_CHOCH")
+                  )
+                );
+
+                if (!hasSRFlip && !hasReversalCandle && !hasSweep && !hasChoch) {
+                  is_valid = false;
+                  institutional_rationale = `Execution Desk Rejected: Mean reversion / boundary fade on ${symbol} lacks micro-structure confirmation (No confirmed S/R Flip, Reversal Candle, Liquidity Sweep, or Change of Character CHoCH). Unconfirmed turn vetoed.`;
+                  console.log(`[Layer B] [CHoCH Gate] ${symbol}: Discarded unconfirmed mean reversion.`);
+                }
               }
             }
 
@@ -1560,6 +1648,24 @@ serve(async (req) => {
               }
             }
 
+            // --- DETERMINISTIC TREND & DIVERGENCE ALIGNMENT GATE (Elder/Minervini Protocol) ---
+            if (is_valid) {
+              const isHtfBullish = snapshot.htf_trend === "BULLISH" || snapshot.trend_alignment?.startsWith("BULLISH");
+              const isHtfBearish = snapshot.htf_trend === "BEARISH" || snapshot.trend_alignment?.startsWith("BEARISH");
+              const hasBullishDivergence = snapshot.macd_divergence?.includes("BULLISH") || snapshot.rsi_divergence?.includes("BULLISH");
+              const hasBearishDivergence = snapshot.macd_divergence?.includes("BEARISH") || snapshot.rsi_divergence?.includes("BEARISH");
+
+              if (evaluation.recommended_direction === "SHORT" && isHtfBullish && hasBullishDivergence) {
+                is_valid = false;
+                institutional_rationale = `Deterministic Alignment Veto: Proposing SHORT directly opposes confirmed BULLISH Higher Timeframe Trend and BULLISH Momentum Divergence (${snapshot.macd_divergence || snapshot.rsi_divergence}). Counter-trend exhaustion trap vetoed.`;
+                console.log(`[Layer B] [Alignment Veto] ${symbol}: Discarded counter-trend short.`);
+              } else if (evaluation.recommended_direction === "LONG" && isHtfBearish && hasBearishDivergence) {
+                is_valid = false;
+                institutional_rationale = `Deterministic Alignment Veto: Proposing LONG directly opposes confirmed BEARISH Higher Timeframe Trend and BEARISH Momentum Divergence (${snapshot.macd_divergence || snapshot.rsi_divergence}). Counter-trend falling knife trap vetoed.`;
+                console.log(`[Layer B] [Alignment Veto] ${symbol}: Discarded counter-trend long.`);
+              }
+            }
+
             if (!is_valid || confidence_score < 70) {
               let rejectReason = "";
               if (evaluation.recommended_direction === "REQUIRE_LTF_DRILLDOWN") {
@@ -1635,8 +1741,8 @@ serve(async (req) => {
                return;
             }
 
-            // Volatility-Normalized Minimum Take Profit Target
-            const minReward = Math.max(risk * 1.50, (snapshot.atr_14 || 0) * 1.0);
+            // Volatility-Normalized Minimum Take Profit Target (1.75x Risk Floor)
+            const minReward = Math.max(risk * 1.75, (snapshot.atr_14 || 0) * 1.0);
             if (dbSide === "LONG" && take_profit < entry_price + minReward) {
                take_profit = Number((entry_price + minReward).toFixed(3));
             } else if (dbSide === "SHORT" && take_profit > entry_price - minReward) {
@@ -1767,9 +1873,39 @@ serve(async (req) => {
               return;
             }
             
-            // --- Risk:Reward Check (Trading Central Minimum 1:1.70 on Target 2) ---
+            // --- LAYER C: INSTITUTIONAL TRADING CENTRAL ADAPTIVE LEVELS & R:R ENGINE ---
+            const isHighMomentum = Boolean(
+              (snapshot.adx_14 && snapshot.adx_14 >= 25) ||
+              (snapshot.volume_ratio && snapshot.volume_ratio >= 1.20) ||
+              (evaluation.strategy_applied && (evaluation.strategy_applied.includes("BREAKOUT") || evaluation.strategy_applied.includes("MOMENTUM")))
+            );
+
+            // Dynamic TP1 Momentum Scaling: Wilder's ADX >= 30 scales TP1 from 50% to 65% of target span (~1.35R-1.50R)
+            const tp1Ratio = (snapshot.adx_14 && snapshot.adx_14 >= 30) ? 0.65 : 0.50;
+            const initialTp1 = evaluation.execution_parameters?.take_profit_1 || Number((entry_price + (take_profit - entry_price) * tp1Ratio).toFixed(5));
+            const initialTp2 = take_profit;
+
+            // Apply institutional Trading Central levels: Solves entry pullback and adaptively expands TP2 to guarantee >= 1.75 R:R
+            const tcLevels = calculateInstitutionalTradingCentralLevels(
+              snapshot.current_price,
+              stop_loss,
+              initialTp1,
+              initialTp2,
+              dbSide as "LONG" | "SHORT",
+              1.70,
+              snapshot.atr_14 || undefined,
+              isHighMomentum,
+              symbol
+            );
+
+            entry_price = tcLevels.suggested_entry_price;
+            let order_type = tcLevels.order_type;
+            const finalTp1 = tcLevels.tp1;
+            const finalTp2 = tcLevels.tp2;
+            take_profit = finalTp2;
+
             const riskPoints = Math.abs(entry_price - stop_loss);
-            const rewardPoints = Math.abs(take_profit - entry_price);
+            const rewardPoints = Math.abs(finalTp2 - entry_price);
             const riskRewardRatio = riskPoints > 0 ? (rewardPoints / riskPoints) : 0;
             
             let deskRequiredRR = 1.70;
@@ -1811,60 +1947,30 @@ serve(async (req) => {
               if (deskRequiredRR > 1.50) deskRequiredRR = 1.50;
             }
 
-            let order_type = dbSide === 'LONG' ? 'BUY MARKET' : 'SELL MARKET';
-
             if (riskRewardRatio < deskRequiredRR - 0.05) {
-              // --- ADAPTIVE LIMIT SOLVER (Institutional Execution Desk) ---
-              // If the setup has high conviction and structural target & stop are sound,
-              // do NOT discard the trade. Instead, solve for the required pullback limit entry to achieve >= 1.75 R:R.
-              const targetRR = Math.max(deskRequiredRR, 1.75);
-              const currentPrice = snapshot.current_price;
+              console.log(`[Layer C: Execution Desk] REJECTED ${symbol}: Risk:Reward ratio (${riskRewardRatio.toFixed(2)}) is below the institutional minimum of ${deskRequiredRR} for Tier score ${confidence_score}.`);
+              sendEvent({ type: 'progress', message: `[Layer C: Execution Desk] REJECTED: Structural mismatch. R:R ratio (${riskRewardRatio.toFixed(2)}) is below minimum of ${deskRequiredRR}.` });
+              rejections.push({
+                symbol,
+                reason: `Structural R:R mismatch: Risk:Reward ratio is ${riskRewardRatio.toFixed(2)}, which is below the required 1:${deskRequiredRR} threshold for Target 2.`,
+                layer: "Execution Desk"
+              });
+              await supabase.from("trade_opportunities").insert({
+                symbol,
+                side: dbSide,
+                timeframe: timeframe.toLowerCase(),
+                status: "REJECTED",
+                source: "agent-day",
+                ai_summary: institutional_rationale,
+                ai_risks: `Rejected by Execution Desk: R:R ratio ${riskRewardRatio.toFixed(2)} < ${deskRequiredRR}`,
+                model_id: modelId,
+                model_version: modelVersion,
+                risk_summary: `RSI ${snapshot.rsi_14}`
+              });
               
-              // Formula: entry = (take_profit + targetRR * stop_loss) / (1 + targetRR)
-              const solvedEntry = (take_profit + (targetRR * stop_loss)) / (1 + targetRR);
-              const isIndexOrCrypto = ['US30', 'NAS100', 'GER30', 'SPX500', 'JP225', 'BTCUSD', 'ETHUSD'].includes(symbol);
-              const decimals = isIndexOrCrypto ? 2 : 5;
-              const formattedEntry = Number(solvedEntry.toFixed(decimals));
-              
-              const isLong = dbSide === 'LONG';
-              const isEntryValidLong = isLong && formattedEntry < currentPrice && formattedEntry > stop_loss;
-              const isEntryValidShort = !isLong && formattedEntry > currentPrice && formattedEntry < stop_loss;
-              
-              const atr = snapshot.atr_14 || Math.abs(currentPrice - stop_loss);
-              const isWithinReach = Math.abs(formattedEntry - currentPrice) <= (atr * 2.5);
-              
-              if (confidence_score >= 70 && (isEntryValidLong || isEntryValidShort) && isWithinReach) {
-                console.log(`[Layer C: Execution Desk] ADAPTIVE LIMIT: Converted ${symbol} ${dbSide} market entry from ${entry_price} (R:R ${riskRewardRatio.toFixed(2)}) to Pullback Limit @ ${formattedEntry} (R:R 1:${targetRR.toFixed(1)}).`);
-                sendEvent({ type: 'progress', message: `[Execution Desk] Adaptive Limit: Adjusted entry on ${symbol} to ${formattedEntry} for 1:${targetRR.toFixed(1)} R:R.` });
-                
-                entry_price = formattedEntry;
-                order_type = isLong ? 'BUY LIMIT' : 'SELL LIMIT';
-                institutional_rationale += ` [Adaptive Limit Solver: Converted overextended market entry into a pullback ${order_type} @ ${entry_price} to lock in institutional 1:${targetRR.toFixed(1)} R:R on Target 2].`;
-              } else {
-                console.log(`[Layer C: Execution Desk] REJECTED ${symbol}: Risk:Reward ratio (${riskRewardRatio.toFixed(2)}) is below the institutional minimum of ${deskRequiredRR} for Tier score ${confidence_score}.`);
-                sendEvent({ type: 'progress', message: `[Layer C: Execution Desk] REJECTED: Structural mismatch. R:R ratio (${riskRewardRatio.toFixed(2)}) is below minimum of ${deskRequiredRR}.` });
-                rejections.push({
-                  symbol,
-                  reason: `Structural R:R mismatch: Risk:Reward ratio is ${riskRewardRatio.toFixed(2)}, which is below the required 1:${deskRequiredRR} threshold for Target 2.`,
-                  layer: "Execution Desk"
-                });
-                await supabase.from("trade_opportunities").insert({
-                  symbol,
-                  side: dbSide,
-                  timeframe: timeframe.toLowerCase(),
-                  status: "REJECTED",
-                  source: "agent-day",
-                  ai_summary: institutional_rationale,
-                  ai_risks: `Rejected by Execution Desk: R:R ratio ${riskRewardRatio.toFixed(2)} < ${deskRequiredRR}`,
-                  model_id: modelId,
-                  model_version: modelVersion,
-                  risk_summary: `RSI ${snapshot.rsi_14}`
-                });
-                
-                // Hive Mind: Reset HFT bias on Execution Desk structural rejection
-                await pingHFTDirector(symbol, "NEUTRAL");
-                return;
-              }
+              // Hive Mind: Reset HFT bias on Execution Desk structural rejection
+              await pingHFTDirector(symbol, "NEUTRAL");
+              return;
             } else {
               if (Math.abs(entry_price - snapshot.current_price) / snapshot.current_price > 0.0005) {
                 if (dbSide === 'LONG') {
@@ -1874,34 +1980,6 @@ serve(async (req) => {
                 }
               }
             }
-
-            const isHighMomentum = Boolean(
-              (snapshot.adx_14 && snapshot.adx_14 >= 25) ||
-              (snapshot.volume_ratio && snapshot.volume_ratio >= 1.20) ||
-              (evaluation.strategy_applied && (evaluation.strategy_applied.includes("BREAKOUT") || evaluation.strategy_applied.includes("MOMENTUM")))
-            );
-
-            // Dynamic TP1 Momentum Scaling: Wilder's ADX >= 30 scales TP1 from 50% to 65% of target span (~1.35R-1.50R)
-            const tp1Ratio = (snapshot.adx_14 && snapshot.adx_14 >= 30) ? 0.65 : 0.50;
-            const tp1 = evaluation.execution_parameters?.take_profit_1 || Number((entry_price + (take_profit - entry_price) * tp1Ratio).toFixed(5));
-            const tp2 = take_profit;
-            const tcLevels = calculateInstitutionalTradingCentralLevels(
-              snapshot.current_price,
-              stop_loss,
-              tp1,
-              tp2,
-              dbSide as "LONG" | "SHORT",
-              1.70,
-              snapshot.atr_14 || undefined,
-              isHighMomentum,
-              symbol
-            );
-
-            // Apply adaptive Trading Central levels (clamped entry + expanded TP2 to guarantee institutional 1:1.75 R:R)
-            entry_price = tcLevels.suggested_entry_price;
-            order_type = tcLevels.order_type;
-            const finalTp1 = tcLevels.tp1;
-            const finalTp2 = tcLevels.tp2;
 
             // NY Open Opening Cross Protection: Force BUY LIMIT / SELL LIMIT during 13:30-14:45 UTC to prevent market-order slippage
             const nowTime = new Date();

@@ -90,6 +90,15 @@ export type LogicContext = {
   anticipation_horizon_hours?: number;
   fibonacci_projections?: FibonacciProjectionsResult | null;
   sr_flip?: SRFlipDetection | null;
+  change_of_character?: ChangeOfCharacterResult | null;
+};
+
+export type ChangeOfCharacterResult = {
+  type: 'BULLISH_CHOCH' | 'BEARISH_CHOCH' | 'NONE';
+  broken_level: number | null;
+  bars_ago: number | null;
+  prior_trend: 'DOWNTREND' | 'UPTREND' | 'NONE';
+  narrative?: string;
 };
 
 export type SRFlipDetection = {
@@ -128,6 +137,70 @@ export function detectBOS(close: number[], bullish_fractals: { index: number, pr
   if (last_bearish !== null && current_price > last_bearish) return 'BULLISH';
   if (last_bullish !== null && current_price < last_bullish) return 'BEARISH';
   return 'NONE';
+}
+
+export function detectChangeOfCharacter(
+  close: number[],
+  high: number[],
+  low: number[],
+  bullish_fractals: { index: number; price: number }[],
+  bearish_fractals: { index: number; price: number }[]
+): ChangeOfCharacterResult {
+  const defaultResult: ChangeOfCharacterResult = {
+    type: 'NONE',
+    broken_level: null,
+    bars_ago: null,
+    prior_trend: 'NONE'
+  };
+
+  const len = close.length;
+  if (len < 10) return defaultResult;
+  const currentPrice = close[len - 1];
+
+  const recentHighs = bearish_fractals.slice(-3);
+  const recentLows = bullish_fractals.slice(-3);
+
+  // 1. Check Bullish CHoCH (reversal from downtrend to bullish):
+  // Preceding swing highs or lows were descending (downtrend structure),
+  // and current price has broken and closed above the most recent lower high.
+  if (recentHighs.length >= 1) {
+    const lastSwingHigh = recentHighs[recentHighs.length - 1];
+    const priorDowntrend = (recentHighs.length >= 2 && recentHighs[recentHighs.length - 1].price <= recentHighs[recentHighs.length - 2].price) ||
+                           (recentLows.length >= 2 && recentLows[recentLows.length - 1].price <= recentLows[recentLows.length - 2].price);
+    
+    if (priorDowntrend && currentPrice > lastSwingHigh.price) {
+      const barsAgo = len - 1 - lastSwingHigh.index;
+      return {
+        type: 'BULLISH_CHOCH',
+        broken_level: Number(lastSwingHigh.price.toFixed(5)),
+        bars_ago: barsAgo,
+        prior_trend: 'DOWNTREND',
+        narrative: `Bullish Change of Character (CHoCH): Price ($${currentPrice.toFixed(2)}) broke above recent lower high ($${lastSwingHigh.price.toFixed(2)}, ${barsAgo} bars ago), signaling transition from downtrend to bullish order flow.`
+      };
+    }
+  }
+
+  // 2. Check Bearish CHoCH (reversal from uptrend to bearish):
+  // Preceding swing lows or highs were ascending (uptrend structure),
+  // and current price has broken and closed below the most recent higher low.
+  if (recentLows.length >= 1) {
+    const lastSwingLow = recentLows[recentLows.length - 1];
+    const priorUptrend = (recentLows.length >= 2 && recentLows[recentLows.length - 1].price >= recentLows[recentLows.length - 2].price) ||
+                         (recentHighs.length >= 2 && recentHighs[recentHighs.length - 1].price >= recentHighs[recentHighs.length - 2].price);
+    
+    if (priorUptrend && currentPrice < lastSwingLow.price) {
+      const barsAgo = len - 1 - lastSwingLow.index;
+      return {
+        type: 'BEARISH_CHOCH',
+        broken_level: Number(lastSwingLow.price.toFixed(5)),
+        bars_ago: barsAgo,
+        prior_trend: 'UPTREND',
+        narrative: `Bearish Change of Character (CHoCH): Price ($${currentPrice.toFixed(2)}) broke below recent higher low ($${lastSwingLow.price.toFixed(2)}, ${barsAgo} bars ago), signaling transition from uptrend to bearish order flow.`
+      };
+    }
+  }
+
+  return defaultResult;
 }
 
 export function calculatePivotPoints(high: number, low: number, close: number) {
@@ -728,6 +801,7 @@ export function getContextSnapshot(
       anticipation_horizon_bars: 20,
       anticipation_horizon_hours: 10,
       sr_flip: null,
+      change_of_character: null,
     };
   }
 
@@ -867,6 +941,7 @@ export function getContextSnapshot(
   const patternResult = detectGeometricPatterns(high, low, close);
   const fibProjResult = calculateFibonacciProjections(high, low, close);
   const srFlipResult = detectSRFlip(high, low, close, open, current_atr_14);
+  const chochResult = detectChangeOfCharacter(close, high, low, bullish_fractals, bearish_fractals);
 
   return {
     timestamp,
@@ -937,6 +1012,7 @@ export function getContextSnapshot(
     anticipation_horizon_hours: 10,
     fibonacci_projections: fibProjResult.has_valid_abc ? fibProjResult : null,
     sr_flip: srFlipResult.type !== 'NONE' ? srFlipResult : null,
+    change_of_character: chochResult.type !== 'NONE' ? chochResult : null,
   };
 }
 
