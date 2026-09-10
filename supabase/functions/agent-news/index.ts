@@ -640,14 +640,13 @@ Analyze this news headline and return ONLY a JSON object.
 Format: { 
   "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL", 
   "confidence": 0-100, 
-  "symbol": "EURJPY" | "EURUSD" | "GBPUSD" | "USDJPY" | "AUDUSD" | "NZDUSD" | "AUDJPY" | "CADJPY" | "EURGBP" | "BTCUSD" | "XAUUSD" | "XAGUSD" | "UKOIL" | "USOIL" | "US30" | "NAS100" | "NONE", 
+  "symbol": "BTCUSD" | "ETHUSD" | "XAUUSD" | "XAGUSD" | "UKOIL" | "USOIL" | "US30" | "NONE", 
   "requires_verification": boolean 
 }
 CRITICAL RULES:
-- If news indicates Hawkish Fed commentary, sticky inflation, higher Treasury yields, or USD strength: Map symbol to "XAUUSD" with BEARISH sentiment (Gold falls on high yields/strong dollar) or "USDJPY" with BULLISH sentiment (USD rises vs JPY) with Confidence >= 85.
-- If news indicates Dovish Fed commentary, cooling inflation, rate cut acceleration, or USD weakness: Map symbol to "XAUUSD" with BULLISH sentiment (Gold rises on rate cuts) or "USDJPY" with BEARISH sentiment (USD falls vs JPY) with Confidence >= 85.
-- If news indicates BOJ rate hike or JPY intervention/strength, map symbol to "EURJPY" or "USDJPY" with BEARISH sentiment.
-- If news indicates ECB rate cuts or Euro weakness, map symbol to "EURUSD" or "EURJPY" with BEARISH sentiment.
+- If news indicates Hawkish Fed commentary, sticky inflation, higher Treasury yields, or USD strength: Map symbol to "XAUUSD" with BEARISH sentiment (Gold falls on high yields/strong dollar) with Confidence >= 85.
+- If news indicates Dovish Fed commentary, cooling inflation, rate cut acceleration, or USD weakness: Map symbol to "XAUUSD" or "XAGUSD" with BULLISH sentiment (Precious metals rise on rate cuts) with Confidence >= 85.
+- If news indicates US economic growth, corporate earnings strength, or soft landing optimism: Map symbol to "US30" with BULLISH sentiment. If recession fears or tariff panic: Map to "US30" with BEARISH sentiment.
 - If news indicates Middle East / geopolitical escalation, Red Sea tanker disruption, or crude oil supply disruption / OPEC+ output cuts, map symbol to "UKOIL" or "USOIL" with BULLISH sentiment with Confidence >= 85.
 - If news indicates crude oil demand weakness, OPEC+ quota increases / supply glut, or Middle East peace / ceasefire deals reducing risk premiums, map symbol to "UKOIL" or "USOIL" with BEARISH sentiment with Confidence >= 85.
 - If news indicates surging crypto/Bitcoin ETF inflows, crypto regulatory approval, institutional Bitcoin treasury adoption, or halving supply dynamics: Map symbol to "BTCUSD" with BULLISH sentiment with Confidence >= 85.
@@ -783,7 +782,7 @@ CRITICAL RULES:
           }
 
           // Execute & Publish ONLY if threshold met across valid trading universe
-          const validSymbols = ["EURJPY", "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "AUDJPY", "CADJPY", "EURGBP", "BTCUSD", "XAUUSD", "XAGUSD", "UKOIL", "USOIL", "US30", "NAS100"];
+          const validSymbols = ["BTCUSD", "ETHUSD", "XAUUSD", "XAGUSD", "UKOIL", "USOIL", "US30"];
           if (finalParsed.confidence >= 85 && (finalParsed.sentiment === "BULLISH" || finalParsed.sentiment === "BEARISH") && validSymbols.includes(finalParsed.symbol)) {
             
             const side = finalParsed.sentiment === "BULLISH" ? "LONG" : "SHORT";

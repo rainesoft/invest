@@ -8,7 +8,7 @@ import { netEdge, transactionCost, slippage } from "../../../packages/strategy/i
 import { getContextSnapshot, LogicContext, calculatePivotPoints, computeLiquiditySweepScore, calculateInstitutionalTradingCentralLevels } from "../../../packages/strategy/indicators.ts";
 import { validateGlobalSignal, validateCentralBankIntervention } from "../../../packages/strategy/agent-risk.ts";
 import { fetchAllMacroEvents, generateMacroContext, fetchRealtimeNews, detectCentralBankEvent, detectUpcomingFedEvent, computeMacroConfidenceBoost, fetchETFFlowSentiment } from "../../../packages/core/news.ts";
-import { isAutoTradingEnabled } from "../../../packages/core/settings.ts";
+import { isAutoTradingEnabled, getTradingSymbols } from "../../../packages/core/settings.ts";
 
 import { revalidateOpportunity } from "../../../packages/strategy/revalidation.ts";
 
@@ -363,39 +363,6 @@ serve(async (req) => {
   const modelId = searchParams.get("model_id") ?? undefined;
   const modelVersion = searchParams.get("model_version") ?? undefined;
   const newsContext = searchParams.get("news") ?? undefined;
-  const symbolsParam =
-    (reqBody as any).symbols?.join(",") || searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || "XAUUSD,XAGUSD,BTCUSD,ETHUSD,UKOIL,USOIL,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF,NZDUSD,EURJPY,GBPJPY,US30,NAS100,SPX500,GER30,JP225,AAPL,MSFT,NVDA,TSLA";
-  const symbols = symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean);
-
-  // Institutional Opportunity-Ranked Asset Sorting (Session-Aware Killzone Scheduling):
-  // Dynamically prioritize assets with peak liquidity and volatility for the current market session
-  const utcHour = new Date().getUTCHours();
-  let sessionPriorityList: string[];
-  
-  if (utcHour >= 12 && utcHour <= 21) {
-    // New York Session (12:00 - 21:00 UTC) -> US Indices, US Equities, Metals, WTI Oil, Major USD pairs
-    sessionPriorityList = ['US30', 'NAS100', 'SPX500', 'XAUUSD', 'XAGUSD', 'USOIL', 'BTCUSD', 'ETHUSD', 'EURUSD', 'GBPUSD', 'USDCAD', 'USDJPY', 'NVDA', 'AAPL', 'TSLA', 'MSFT', 'GER30', 'UKOIL'];
-  } else if (utcHour >= 7 && utcHour < 12) {
-    // London Session (07:00 - 12:00 UTC) -> European pairs, DAX, Brent Oil, Metals, Gold
-    sessionPriorityList = ['EURUSD', 'GBPUSD', 'GER30', 'UKOIL', 'XAUUSD', 'XAGUSD', 'GBPJPY', 'EURJPY', 'USDJPY', 'USDCHF', 'BTCUSD', 'ETHUSD', 'AUDUSD', 'US30'];
-  } else {
-    // Asian / Tokyo Session (22:00 - 07:00 UTC) -> Nikkei, JPY crosses, Antipodeans, Crypto
-    sessionPriorityList = ['JP225', 'USDJPY', 'GBPJPY', 'EURJPY', 'AUDUSD', 'NZDUSD', 'BTCUSD', 'ETHUSD', 'XAUUSD', 'US30'];
-  }
-
-  symbols.sort((a: any, b: any) => {
-    const aOpen = isMarketOpen(a);
-    const bOpen = isMarketOpen(b);
-    if (aOpen && !bOpen) return -1;
-    if (!aOpen && bOpen) return 1;
-
-    const aIdx = sessionPriorityList.indexOf(a);
-    const bIdx = sessionPriorityList.indexOf(b);
-    const aRank = aIdx !== -1 ? aIdx : 999;
-    const bRank = bIdx !== -1 ? bIdx : 999;
-    return aRank - bRank;
-  });
-
   const url = Deno.env.get("SUPABASE_URL");
   const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
@@ -424,6 +391,44 @@ serve(async (req) => {
   const supabase = createClient(url, key, {
     auth: { persistSession: false },
     global: { headers: { Authorization: `Bearer ${key}` } },
+  });
+
+  const dbSymbols = await getTradingSymbols(supabase);
+  const isExplicitSymbolRequest = !!((reqBody as any).symbols || searchParams.get("symbols"));
+  const defaultParetoSymbols = "BTCUSD,ETHUSD,XAUUSD,XAGUSD,USOIL,UKOIL,US30";
+  const symbolsParam =
+    (reqBody as any).symbols?.join(",") || searchParams.get("symbols") || Deno.env.get("RESEARCH_SYMBOLS") || defaultParetoSymbols;
+  const symbols = isExplicitSymbolRequest
+    ? symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean)
+    : (dbSymbols && dbSymbols.length > 0 ? dbSymbols : symbolsParam.split(",").map((s: string) => s.trim()).filter(Boolean));
+
+  // Institutional Opportunity-Ranked Asset Sorting (Session-Aware Killzone Scheduling):
+  // Dynamically prioritize assets with peak liquidity and volatility for the current market session
+  const utcHour = new Date().getUTCHours();
+  let sessionPriorityList: string[];
+  
+  if (utcHour >= 12 && utcHour <= 21) {
+    // New York Session (12:00 - 21:00 UTC) -> US Indices, Metals, WTI Oil, Crypto
+    sessionPriorityList = ['US30', 'XAUUSD', 'XAGUSD', 'USOIL', 'BTCUSD', 'ETHUSD', 'UKOIL'];
+  } else if (utcHour >= 7 && utcHour < 12) {
+    // London Session (07:00 - 12:00 UTC) -> Metals, Brent Oil, WTI Oil, Crypto, US30
+    sessionPriorityList = ['XAUUSD', 'XAGUSD', 'UKOIL', 'USOIL', 'BTCUSD', 'ETHUSD', 'US30'];
+  } else {
+    // Asian / Tokyo Session (22:00 - 07:00 UTC) -> 24/7 Crypto, Metals, US30
+    sessionPriorityList = ['BTCUSD', 'ETHUSD', 'XAUUSD', 'XAGUSD', 'US30'];
+  }
+
+  symbols.sort((a: any, b: any) => {
+    const aOpen = isMarketOpen(a);
+    const bOpen = isMarketOpen(b);
+    if (aOpen && !bOpen) return -1;
+    if (!aOpen && bOpen) return 1;
+
+    const aIdx = sessionPriorityList.indexOf(a);
+    const bIdx = sessionPriorityList.indexOf(b);
+    const aRank = aIdx !== -1 ? aIdx : 999;
+    const bRank = bIdx !== -1 ? bIdx : 999;
+    return aRank - bRank;
   });
 
   async function runPipeline(sendEvent: (data: any) => void) {

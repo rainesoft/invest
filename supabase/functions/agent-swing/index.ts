@@ -636,11 +636,12 @@ serve(async (req) => {
   // Swing pipeline always runs on 1D bars for maximum context
   const timeframe = reqBody.timeframe ?? searchParams.get("timeframe") ?? "1D";
   const lookback = Number(reqBody.lookback ?? searchParams.get("lookback") ?? 300);
+  const defaultParetoSymbols = "BTCUSD,ETHUSD,XAUUSD,XAGUSD,USOIL,UKOIL,US30";
   const symbolsParam =
     reqBody.symbols?.join(",") ||
     searchParams.get("symbols") ||
     Deno.env.get("SWING_SYMBOLS") ||
-    "XAUUSD,XAGUSD,BTCUSD,ETHUSD,UKOIL,USOIL,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF,NZDUSD,EURJPY,GBPJPY,US30,NAS100,SPX500,GER30,JP225,AAPL,MSFT,NVDA,GOOGL,AMZN,TSLA,META";
+    defaultParetoSymbols;
   const newsContext = searchParams.get("news") ?? undefined;
 
   const url = Deno.env.get("SUPABASE_URL");
@@ -685,11 +686,11 @@ serve(async (req) => {
   const utcHour = new Date().getUTCHours();
   let sessionPriorityList: string[];
   if (utcHour >= 12 && utcHour <= 21) {
-    sessionPriorityList = ['BTCUSD', 'ETHUSD', 'US30', 'NAS100', 'SPX500', 'XAUUSD', 'XAGUSD', 'USOIL', 'EURUSD', 'GBPUSD', 'USDCAD', 'USDJPY', 'NVDA', 'AAPL', 'TSLA', 'MSFT', 'GER30', 'UKOIL'];
+    sessionPriorityList = ['BTCUSD', 'ETHUSD', 'US30', 'XAUUSD', 'XAGUSD', 'USOIL', 'UKOIL'];
   } else if (utcHour >= 7 && utcHour < 12) {
-    sessionPriorityList = ['BTCUSD', 'ETHUSD', 'EURUSD', 'GBPUSD', 'GER30', 'UKOIL', 'XAUUSD', 'XAGUSD', 'GBPJPY', 'EURJPY', 'USDJPY', 'USDCHF', 'AUDUSD', 'US30'];
+    sessionPriorityList = ['XAUUSD', 'XAGUSD', 'UKOIL', 'USOIL', 'BTCUSD', 'ETHUSD', 'US30'];
   } else {
-    sessionPriorityList = ['BTCUSD', 'ETHUSD', 'JP225', 'USDJPY', 'GBPJPY', 'EURJPY', 'AUDUSD', 'NZDUSD', 'XAUUSD', 'US30'];
+    sessionPriorityList = ['BTCUSD', 'ETHUSD', 'XAUUSD', 'XAGUSD', 'US30'];
   }
 
   symbols.sort((a: any, b: any) => {

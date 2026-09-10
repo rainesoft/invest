@@ -111,17 +111,11 @@ async function run() {
       timeframe: swingTf
     });
   } else {
-    // 2. Run Intraday M30 Scalper in chunks to avoid 150s Edge Function timeouts
-    await callAgent('agent-day', { symbols: ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "EURJPY", "GBPJPY"], is_manual: isManual });
-    await callAgent('agent-day', { symbols: ["BTCUSD", "ETHUSD"], is_manual: isManual });
-    await callAgent('agent-day', { symbols: ["US30", "NAS100", "SPX500", "GER30", "JP225", "XAUUSD", "XAGUSD", "UKOIL", "USOIL"], is_manual: isManual });
-    await callAgent('agent-day', { symbols: ["NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META"], is_manual: isManual });
+    // 2. Run Pareto 80/20 Basket for agent-day
+    await callAgent('agent-day', { symbols: ["BTCUSD", "ETHUSD", "XAUUSD", "XAGUSD", "USOIL", "UKOIL", "US30"], is_manual: isManual });
 
-    // 3. Run Swing Trader in chunks to avoid 150s Edge Function timeouts
-    await callAgent('agent-swing', { symbols: ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "EURJPY", "GBPJPY"], is_manual: isManual });
-    await callAgent('agent-swing', { symbols: ["BTCUSD", "ETHUSD"], is_manual: isManual });
-    await callAgent('agent-swing', { symbols: ["US30", "NAS100", "SPX500", "GER30", "JP225", "XAUUSD", "XAGUSD", "UKOIL", "USOIL"], is_manual: isManual });
-    await callAgent('agent-swing', { symbols: ["NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META"], is_manual: isManual });
+    // 3. Run Pareto 80/20 Basket for agent-swing
+    await callAgent('agent-swing', { symbols: ["BTCUSD", "ETHUSD", "XAUUSD", "XAGUSD", "USOIL", "UKOIL", "US30"], is_manual: isManual, timeframe: '1D' });
   }
 
   // 4. Summarize Opportunities generated in this run & recent window
