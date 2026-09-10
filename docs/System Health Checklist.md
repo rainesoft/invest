@@ -1484,6 +1484,57 @@ In `/functions/v1/vps-callback`:
 
 ---
 
+## ⚠️ 3W. Institutional Breakeven Engine & Risk-Free Trade Management
+
+> [!CAUTION]
+> **Incident (2026-09-09 & 2026-09-10):**
+> 1. **Premature Bot Market Dump (2026-09-09):** Two live `GBPUSD` Buy trades (Tickets `602051718` & `602051723`) were artificially closed at `20:00:35 UTC` (4:00 PM NY close) at a loss (-$9.00, -$2.96) by `agent-trade`'s scheduled EOD scalp liquidation rule. The market was at `1.35454`, which was **18.4 pips above the Stop Loss** (`1.35270`). The 24-hour forex trade was dumped at the bottom simply because it was 4 PM in New York.
+> 2. **Structural Stop Out vs Hope Trading (2026-09-10):** An intraday `EURUSD` Buy trade (Tickets `602539052` & `602539039`) reached a peak of only $+3.6$ pips ($+0.17\text{R}$, missing TP1 by 0.3 pips) before trending down 21 pips over 5.5 hours into its structural Stop Loss (`1.16170`). In quantitative trading, attempting to hold losing positions indefinitely until they "come back to break even" is known as the **Breakeven Fallacy** (or Martingale hope trading), which guarantees account liquidation during macro trends. Trades that fail must take the predetermined structural stop loss.
+
+### Standard Architecture Rules:
+1. **Dynamic Early Breakeven Trailing ($+0.35\text{R}$ or TP1):**
+   In `agent-trade/index.ts`, as soon as price achieves $+0.35\text{R}$ Maximum Favorable Excursion (MFE) or touches `tp1`, the Stop Loss is immediately moved to Breakeven + Friction Buffer:
+   $$\text{New SL} = \text{Entry Price} \pm \max(\text{Risk} \times 0.05, \text{Friction Buffer})$$
+2. **True Friction-Compensated Breakeven Buffer:**
+   Setting $SL = \text{Entry Price}$ yields a net negative PnL upon execution due to bid-ask spread and broker commissions (-$0.10 to -$0.50/lot). All Breakeven stops across `agent-trade`, `vps-poll`, `vps-history`, and `RaineInvestEA.mq5` must enforce a buffer covering 100% of spread plus commission points:
+   - 5-digit Forex: $\ge 1.2\text{ pips}$ (`0.00012`)
+   - JPY crosses: $\ge 1.5\text{ pips}$ (`0.015`)
+   - Global Indices (`US30`, `US500`, `USTEC`, `DE30`, `JP225`): $\ge 0.50\text{ pts}$
+   - Gold / Silver: $\ge \$0.25$
+   - Crypto (`BTCUSD`, `ETHUSD`): $\ge \$2.00$
+3. **Companion Scale-Out Quick Exit Lock:**
+   When Leg A (Quick Exit) closes with status `WON`:
+   - `RaineInvestEA.mq5` immediately shifts Leg B's (Runner) Stop Loss to `Entry + Buffer` locally within 0ms.
+   - `vps-history` Section 2b calculates the buffered breakeven price and persists it into `trade_opportunities.stop_plan_json.stop`.
+   - `vps-poll` ensures the active runner leg on the broker terminal reflects the updated stop.
+4. **Strict Prohibition of Premature Bot Dumps for 24-Hour Assets:**
+   `agent-trade`'s 4:00 PM NY EOD liquidation rule strictly applies ONLY to cash-settled equities and index futures whose underlying exchanges close. 24-hour assets (Forex/Crypto) are **never** dumped at a loss; if profitable at session close, their stop is moved to Breakeven, otherwise they are permitted to run to their structural targets or stop loss.
+
+---
+
+## ⚠️ 3X. Pareto 80/20 High-Conviction Universe Selection & Forex Drag Decommissioning
+
+> [!IMPORTANT]
+> **Quantitative Audit (2026-09-10):** A forensic analysis of all historical trades revealed that major and minor Forex pairs (`EURUSD`, `GBPUSD`, `NZDUSD`, `USDCAD`, `AUDUSD`, `GBPJPY`, `EURJPY`) generated **$>65\%$ of all signals and executions**, yet produced **net negative P/L (-$100+) and massive capital churn**. Currencies represent sovereign exchange rates stabilized by central banks that chop in 20–30 pip ranges over 75% of trading hours. Conversely, Crypto and Commodities (`BTCUSD`, `XAUUSD`, `XAGUSD`, `USOIL`, `US30`) generated **the vast majority of real, asymmetric account alpha** (led by `BTCUSD` at +$249.83 and `US30` at 60% win rate).
+
+### The Pareto 80/20 Basket:
+$$\mathcal{U}_{\text{Pareto}} = \{\mathbf{BTCUSD},\; \mathbf{ETHUSD},\; \mathbf{XAUUSD},\; \mathbf{XAGUSD},\; \mathbf{USOIL},\; \mathbf{UKOIL},\; \mathbf{US30}\}$$
+
+### Standard Architecture Rules:
+1. **Master System Settings Configuration:**
+   `system_settings.trading_symbols` stores the canonical Pareto 80/20 universe:
+   `["BTCUSD", "ETHUSD", "XAUUSD", "XAGUSD", "USOIL", "UKOIL", "US30"]`.
+2. **Deactivation of Forex Swing Scheduler:**
+   In `pg_cron`, `agent-swing-forex` (`jobid: 66`) is permanently deactivated (`active = false`). The system never executes automated 4-hour scans on dead currency pairs.
+3. **Dynamic Settings Integration in Signal Engines:**
+   - In `agent-day/index.ts`, the agent authenticates and queries `getTradingSymbols(supabase)` dynamically from `system_settings`, defaulting to the Pareto basket.
+   - In `agent-swing/index.ts`, fallback `SWING_SYMBOLS` defaults to the Pareto basket.
+   - Session priority rankings prioritize Metals, Oil, Crypto, and Dow Jones across London, NY, and Asian killzones.
+4. **Focused News Sentiment Scanning:**
+   In `agent-news/index.ts`, `validSymbols` and the LLM macro prompt are restricted exclusively to the 7 Pareto assets, dedicating 100% of external search and news monitoring credits to high-alpha catalysts.
+
+---
+
 ## 4. External Integrations
 Verify that external data pipelines and notification systems are alive.
 

@@ -84,7 +84,7 @@ Every analysis populates `market_context` with both the **Preferred Scenario** a
 *The Day Trader.*
 - **Timeframe:** 30m / 5m (Intraday pivot setups, VWAP Value Areas, and 20-bar 10h horizons)
 - **Schedule (Cron):** Every 30 Minutes (`*/30 * * * *`)
-- **Coverage Universe:** 24 Active Assets across Forex Majors/Minors, Indices (`US30`, `NAS100`, `SPX500`, `GER30`, `JP225`), Commodities (`XAUUSD`, `XAGUSD`, `UKOIL`, `USOIL`), Crypto (`BTCUSD`, `ETHUSD`), and Big Tech Equities (`AAPL`, `MSFT`, `NVDA`, `TSLA`).
+- **Coverage Universe:** Focused exclusively on the **Pareto 80/20 High-Conviction Universe**: Crypto (`BTCUSD`, `ETHUSD`), Precious Metals (`XAUUSD`, `XAGUSD`), Energy Commodities (`USOIL`, `UKOIL`), and Prime Equity Index (`US30`). Low-alpha, high-spread-friction Forex pairs (`EURUSD`, `GBPUSD`, `AUDUSD`, etc.) are permanently bypassed to eliminate churn and negative carry.
 - **Role:** Evaluates fast intraday opportunities based on Session VWAP bands, POC/VAH/VAL, RSI/MACD divergences, chart patterns, and HTF Pivot Regimes.
 - **Actions:** 
   - Enforces minimum 1:1.70 R:R on Target 2 via the Adaptive Limit Solver.
@@ -95,8 +95,8 @@ Every analysis populates `market_context` with both the **Preferred Scenario** a
 ### 3. `agent-swing` (Technical Confluence & Macro Fibonacci Desk)
 *The Swing Trader.*
 - **Timeframe:** 4H / 1D (Fibonacci structures, Liquidity Sweeps, 20-day 480h horizons)
-- **Schedule (Cron):** Every 4 Hours (`0 */4 * * *`) — Aligned with H4 candle closes
-- **Coverage Universe:** 27 Global Assets across Multi-Asset Classes (Forex, Commodities, Crypto, Global Indices, and Mega-Cap Equities: `AAPL`, `MSFT`, `NVDA`, `GOOGL`, `AMZN`, `TSLA`, `META`).
+- **Schedule (Cron):** Every 4 Hours (`0 */4 * * *`) — Aligned with H4 candle closes for `agent-swing-crypto`, `agent-swing-commodities`, and `agent-swing-indices`. Note: `agent-swing-forex` is permanently deactivated.
+- **Coverage Universe:** Focused strictly on the **Pareto 80/20 Basket**: `BTCUSD`, `ETHUSD`, `XAUUSD`, `XAGUSD`, `USOIL`, `UKOIL`, and `US30`.
 - **Role:** Maps dominant swing ranges, Fibonacci retracements (23.6% to 78.6%) and extensions (127.2% to 200%), trend channels, geometric reversal patterns, and multi-timeframe Fib alignment.
 - **Actions:** 
   - Consumes pending news from `agent-news` (+20 confluence boost on alignment; -30 penalty on conflict).
@@ -111,10 +111,10 @@ Every analysis populates `market_context` with both the **Preferred Scenario** a
   - **Multi-Agent Confluence:** Applies a 3.0x conviction multiplier when multiple agents agree, or a 0.5x penalty when contradicting.
   - **Correlation & Solvency Gates:** Blocks conflicting positions and validates Treasury Solvency $\ge 1.0$.
   - **PAMM Lot Allocation:** Dynamically calculates per-user lot sizes based on `user_risk_settings` and aggregates them into a consolidated master order.
-  - **Trailing Stop Ladder:** Multi-stage profit protection: 0.5R $\rightarrow$ Breakeven, 1.0R $\rightarrow$ Lock $+0.5\text{R}$, 2.0R $\rightarrow$ Lock $+1.0\text{R}$, 3.0R $\rightarrow$ Lock $+2.0\text{R}$, Runners $\rightarrow 1.5\times$ ATR trail.
+  - **Institutional Breakeven Engine & Trailing Stop Ladder:** Multi-stage profit protection: Early Breakeven at $\ge +0.35\text{R}$ or Target 1 touch (with dynamic friction buffer $\ge 100\%$ spread + commissions), 1.0R $\rightarrow$ Lock $+0.5\text{R}$, 2.0R $\rightarrow$ Lock $+1.0\text{R}$, 3.0R $\rightarrow$ Lock $+2.0\text{R}$, Runners $\rightarrow 1.5\times$ ATR trail. Companion Scale-Out: when the `QUICK_EXIT` leg cashes out at Target 1, MT5 EA (`RaineInvestEA.mq5`) locks the companion `RUNNER` at Breakeven in 0ms locally, synchronizing `trade_opportunities.stop_plan_json`.
   - **Bar-Close Pivot Invalidation:** Closes positions when confirmed bar closes beyond the structural pivot.
   - **20-Bar Horizon TTL Invalidation:** Automatically cancels unfilled limit orders and tightens stagnant positions to Breakeven after 20 bars.
-  - **Broker Retry Worker & Weekend Defense:** Manages exponential backoff retries and liquidates high-risk intraday exposure before Friday close.
+  - **Broker Retry Worker, 24h Asset EOD Protection & Weekend Defense:** Manages exponential backoff retries. 4:00 PM NY EOD liquidation strictly applies to cash-settled equities/index futures; 24-hour assets (Forex/Crypto) are protected from premature dumps (stop moved to Breakeven if profitable, otherwise allowed to run to target/stop). Sweeps losing exposure before Friday market close.
   - **Simultaneous Execution & Flash-Fill Defense:** Enforces max 3 concurrent resting pending setups, 8% aggregate committed heat budget, sliding 60s fill velocity circuit breaker (`VELOCITY_LOCKOUT`), MT5 dynamic spread filtering, pre-flight margin level gates ($\ge 300\%$), and 250ms staggered queue execution.
 
 ### 5. `agent-treasury` (Treasury Desk & Solvency Engine)
