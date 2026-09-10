@@ -72,7 +72,7 @@ node scripts/call_agents.mjs --symbol XAUUSD,XAGUSD,BTCUSD,UKOIL --timeframe 1D 
 ### 3.3 Deep Diagnostic Audit
 Performs a deep diagnostic scan across database health, MT5 connections, and recent trade logs:
 ```bash
-node scripts/deep_agent_audit.mjs
+node temp/deep_agent_audit.mjs
 ```
 
 ---
@@ -236,4 +236,13 @@ When an asset fails to achieve S-Tier confidence (e.g. confidence < 75 due to mi
    - Chasing market orders into dual bearish divergence has a low expected value. Instead of rejecting the trade entirely, the pipeline should originate an **Adaptive Pullback Limit Order** anchored at the confirmed S/R flip level ($95.62 – $96.15) or FVG discount zone, capturing the secondary expansion wave with $\ge 1:2.0$ R:R.
 8. **Intraday vs. Swing Timeframe Decoupling**:
    - In `scripts/call_agents.mjs`, timeframe flags are now decoupled: `agent-day` is locked to intraday M30 resolution (`30m`), while `agent-swing` processes macro swing charts (`1D`). Passing `--timeframe 1D` will correctly evaluate swing setups on daily bars while allowing `agent-day` to scan intraday liquidity without resolution corruption.
+9. **Strict Local Telegram API Safety**:
+   - Automated signal broadcasts to Telegram channels are executed strictly via server-side database triggers (`on_signal_generated`) invoking the deployed `telegram-broadcast` Edge Function in Supabase cloud.
+   - Diagnostic scripts, backtests, and manual agent runs executed locally on developer workstations must **NEVER** call `https://api.telegram.org` directly to prevent duplicate or corrupted alerts.
+10. **Scenario Tree Variable Scoping in `agent-day` (`finalTp1` / `finalTp2`)**:
+    - When `agent-day` constructs its Trading Central bifurcated scenario tree for `market_context`, targets must be mapped to `[finalTp1, finalTp2]`. Referencing un-aliased `[tp1, tp2]` throws a runtime `ReferenceError` during the `market_context` upsert, aborting the pipeline after trade insertion.
+11. **PAMM Portfolio Drawdown Circuit Breakers (`No volume allocated`)**:
+    - When an S-Tier signal generates `Execution Skipped: No volume allocated (Circuit Breaker / Max Drawdown reached for all users)`, the opportunity was successfully approved and scored by AI agents (e.g. `UKOIL` S-Tier 95%), but the PAMM risk desk halts trade execution because account equity drawdown limits were reached. Check account balances, open drawdown, and reset watermarks in `user_accounts` and `system_settings`.
+12. **Counter-Trend Falling Knife Protection (Deterministic Alignment Veto)**:
+    - For assets trading at macro extremes (e.g. Gold `XAUUSD` above $4,400 with Daily Hidden Bearish Divergence), agents enforce a Deterministic Alignment Veto to reject counter-trend longs. To originate S-Tier setups, agents should pivot to pullback short limit orders at key resistance or wait for confirmed structural break of swing support.
 
