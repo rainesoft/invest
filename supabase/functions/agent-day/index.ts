@@ -2052,7 +2052,7 @@ serve(async (req) => {
                     preferred_scenario: {
                       direction: dbSide,
                       entry: entry_price,
-                      targets: [tp1, tp2],
+                      targets: [finalTp1, finalTp2],
                       invalidation: stop_loss,
                     },
                     alternative_scenario: tcLevels.alternative_scenario,
