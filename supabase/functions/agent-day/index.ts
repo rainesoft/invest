@@ -564,13 +564,20 @@ serve(async (req) => {
         const { data: activeSignals } = await supabase
           .from("trade_opportunities")
           .select("*")
-          .eq("status", "APPROVED");
+          .eq("status", "APPROVED")
+          .neq("timeframe", "1d");
 
         if (activeSignals && activeSignals.length > 0) {
           for (const signal of activeSignals) {
             try {
               // 1. Math Validation (20-Period Anticipation Horizon TTL: 10 Hours for 30m)
               const hoursElapsed = (Date.now() - new Date(signal.created_at).getTime()) / (1000 * 60 * 60);
+              // Minimum 15-minute seasoning guard: Never revalidate signals created < 15 mins ago
+              if (hoursElapsed < 0.25) {
+                console.log(`[Validation] SKIPPED ${signal.symbol}: Signal created recently (${(hoursElapsed * 60).toFixed(1)}m ago). Allowing minimum 15m seasoning.`);
+                continue;
+              }
+
               if (hoursElapsed > 10) {
                 await supabase.from("trade_opportunities").update({ status: "EXPIRED", ai_risks: "Expired: 20-period anticipation horizon (10h) reached without fill/continuation." }).eq("id", signal.id);
                 // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
@@ -600,6 +607,13 @@ serve(async (req) => {
               const catastrophicSlLong = stopLoss ? stopLoss - (atr * 2.0) : null;
               const catastrophicSlShort = stopLoss ? stopLoss + (atr * 2.0) : null;
 
+              const isLimit = (signal.entry_plan_json?.order_type || "").toUpperCase().includes("LIMIT");
+              const entryPrice = Number(signal.entry_plan_json?.price || signal.entry_plan_json?.suggested_entry_price || signal.entry_plan_json?.limit_price || 0);
+              const isUnfilledLimit = isLimit && entryPrice > 0 && (
+                (signal.side === 'LONG' && currentClose > entryPrice) ||
+                (signal.side === 'SHORT' && currentClose < entryPrice)
+              );
+
               if (stopLoss) {
                 // Trading Central Bar-Close Stop Loss Rule:
                 // Evaluated strictly on confirmed bar close, allowing intra-bar wicks to breathe unless catastrophic emergency stop is reached
@@ -617,10 +631,9 @@ serve(async (req) => {
                 }
               }
 
-              if (takeProfit) {
+              if (takeProfit && !isUnfilledLimit) {
                 if ((signal.side === 'LONG' && currentHigh >= takeProfit) || 
                     (signal.side === 'SHORT' && currentLow <= takeProfit)) {
-                  const entryPrice = signal.entry_plan_json?.price || signal.entry_plan_json?.limit_price;
                   let rMult = 2.0; // fallback
                   if (entryPrice && stopLoss) {
                     const risk = Math.abs(entryPrice - stopLoss);
@@ -646,12 +659,34 @@ serve(async (req) => {
                 // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
                 console.log(`[Validation] REJECTED ${signal.symbol} by AI: ${evalResult.reason}`);
               } else if (evalResult.action === "TAKE_PROFIT") {
-                // For scalping, if AI decides to secure profits early, we mark it as WON (or REJECTED with profit info) 
-                // Since 'REJECTED' triggers auto-eject, we can update it to REJECTED but state it's a profit take.
-                // Wait, if we mark it as REJECTED, it triggers auto-eject to close the live positions.
-                await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_risks: `Profit Secured by AI Risk Officer: ${evalResult.reason}` }).eq("id", signal.id);
-                // await cancelBrokerOrdersForOpportunity(supabase, signal.id);
-                console.log(`[Validation] TAKE_PROFIT ${signal.symbol} by AI: ${evalResult.reason}`);
+                if (isUnfilledLimit) {
+                  console.log(`[Validation] MAINTAIN ${signal.symbol}: Unfilled limit order cannot take profit; maintaining.`);
+                  continue;
+                }
+                let rMult = 1.5;
+                if (entryPrice && stopLoss) {
+                  const risk = Math.abs(entryPrice - stopLoss);
+                  if (risk > 0) rMult = Math.abs(currentClose - entryPrice) / risk;
+                }
+                await supabase.from("trade_opportunities").update({
+                  status: "WON",
+                  r_multiple: Number(rMult.toFixed(2)),
+                  ai_risks: `Profit Secured by AI Risk Officer: ${evalResult.reason}`
+                }).eq("id", signal.id);
+                console.log(`[Validation] TAKE_PROFIT (WON) ${signal.symbol} by AI: ${evalResult.reason}`);
+                try {
+                  const functionsUrl = (Deno.env.get("SUPABASE_URL") || "").replace(/\/$/, "") + "/functions/v1";
+                  await fetch(`${functionsUrl}/agent-trade`, {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      "x-webhook-secret": Deno.env.get("WEBHOOK_SECRET") || Deno.env.get("CRON_SECRET") || ""
+                    },
+                    body: JSON.stringify({ action: "AUTO_EJECT", opportunity_id: signal.id })
+                  });
+                } catch (e: any) {
+                  console.error(`[Validation] Failed to trigger AUTO_EJECT for ${signal.symbol}:`, e.message);
+                }
               } else {
                 console.log(`[Validation] MAINTAIN ${signal.symbol}: Thesis remains intact.`);
               }
@@ -1507,6 +1542,63 @@ serve(async (req) => {
               }
             }
 
+            // === MACRO SCOUT ALIGNMENT BONUS (+20) / PENALTY (-30) ===
+            // Multi-Agent Fundamental Confluence: Intraday setups aligning with Macro Scout receive +20 confidence boost
+            let pendingDayNewsSide: string | null = null;
+            let pendingDayNewsNarrative: string | null = null;
+            if (is_valid) {
+              try {
+                const { data: newsRows } = await supabase
+                  .from("market_context")
+                  .select("macro_bias, narrative")
+                  .eq("symbol", symbol)
+                  .eq("agent_persona", "MACRO_SCOUT")
+                  .gt("expires_at", new Date().toISOString())
+                  .order("created_at", { ascending: false })
+                  .limit(1);
+
+                let effectiveNews = newsRows?.[0];
+                if (!effectiveNews) {
+                  // Inter-Asset Macro Correlation Fallback (UKOIL <-> USOIL, XAGUSD <-> XAUUSD)
+                  const correlatedPeer = (symbol === "UKOIL" || symbol === "BRENT") ? "USOIL"
+                    : (symbol === "USOIL" || symbol === "WTI") ? "UKOIL"
+                    : (symbol === "XAGUSD" || symbol === "SILVER") ? "XAUUSD"
+                    : (symbol === "XAUUSD" || symbol === "GOLD") ? "XAGUSD"
+                    : null;
+                  if (correlatedPeer) {
+                    const { data: peerRows } = await supabase
+                      .from("market_context")
+                      .select("macro_bias, narrative")
+                      .eq("symbol", correlatedPeer)
+                      .eq("agent_persona", "MACRO_SCOUT")
+                      .gt("expires_at", new Date().toISOString())
+                      .order("created_at", { ascending: false })
+                      .limit(1);
+                    effectiveNews = peerRows?.[0];
+                  }
+                }
+
+                if (effectiveNews?.macro_bias) {
+                  pendingDayNewsSide = effectiveNews.macro_bias === "BULLISH" ? "LONG" : (effectiveNews.macro_bias === "BEARISH" ? "SHORT" : null);
+                  pendingDayNewsNarrative = effectiveNews.narrative;
+                }
+              } catch (err: any) {
+                console.warn(`[Macro Scout Check] ${symbol}: ${err.message}`);
+              }
+
+              if (pendingDayNewsSide) {
+                if (evaluation.recommended_direction === pendingDayNewsSide) {
+                  confidence_score = Math.min(MAX_CONFIDENCE_CEILING, confidence_score + 20);
+                  console.log(`[Layer B] [${symbol}] Macro Scout Alignment Bonus: +20 (${pendingDayNewsSide})`);
+                  sendEvent({ type: 'progress', message: `[${symbol}] Macro Scout Alignment Bonus: +20 (${pendingDayNewsSide})` });
+                } else if (evaluation.recommended_direction !== "NONE") {
+                  confidence_score = Math.max(0, confidence_score - 30);
+                  console.log(`[Layer B] [${symbol}] Macro Scout Conflict Penalty: -30 (Technicals contradict macro ${pendingDayNewsSide})`);
+                  sendEvent({ type: 'progress', message: `[${symbol}] Macro Scout Conflict Penalty: -30 (${pendingDayNewsSide})` });
+                }
+              }
+            }
+
             let tier = "C-Tier";
             if (confidence_score >= 90) tier = "S-Tier";
             else if (confidence_score >= 80) tier = "A-Tier";
@@ -1904,7 +1996,8 @@ serve(async (req) => {
             );
 
             entry_price = tcLevels.suggested_entry_price;
-            let order_type = tcLevels.order_type;
+            stop_loss = tcLevels.pivot_point;
+            let order_type: string = tcLevels.order_type;
             const finalTp1 = tcLevels.tp1;
             const finalTp2 = tcLevels.tp2;
             take_profit = finalTp2;

@@ -2001,13 +2001,14 @@ export function calculateInstitutionalTradingCentralLevels(
     const maxSilverStopDist = 0.66;
     const currentDist = Math.abs(suggestedEntry - pivotSl);
     if (currentDist > maxSilverStopDist) {
-      suggestedEntry = isLong
-        ? Number((pivotSl + maxSilverStopDist).toFixed(5))
-        : Number((pivotSl - maxSilverStopDist).toFixed(5));
-      orderType = isLong ? "BUY LIMIT" : "SELL LIMIT";
+      // Clamp the stop loss (pivotSl) to suggestedEntry so dollar risk stays strictly under capital risk cap ($33.00 on 0.01 lot),
+      // while keeping entry anchored near current market price action!
+      pivotSl = isLong
+        ? Number((suggestedEntry - maxSilverStopDist).toFixed(5))
+        : Number((suggestedEntry + maxSilverStopDist).toFixed(5));
 
-      // Re-expand TP2 and TP1 to guarantee minimum R:R
-      const effectiveRisk = Math.abs(suggestedEntry - pivotSl);
+      // Re-expand TP2 and TP1 from the actual entry to guarantee institutional minimum R:R
+      const effectiveRisk = maxSilverStopDist;
       const targetReward = effectiveRisk * (minRr + 0.05);
       finalTp2 = isLong
         ? Number((suggestedEntry + targetReward).toFixed(5))
