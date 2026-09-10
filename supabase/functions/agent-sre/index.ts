@@ -221,6 +221,26 @@ serve(async (req) => {
       }
     }
 
+    // 4B-2. Auto-Healing: Stale PENDING_APPROVAL Signals (> 24 hours without manual review)
+    const twentyFourHoursAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: stalePendingApproval } = await supabase
+      .from("trade_opportunities")
+      .select("id, symbol, side, created_at")
+      .eq("status", "PENDING_APPROVAL")
+      .lte("created_at", twentyFourHoursAgoIso);
+
+    if (stalePendingApproval && stalePendingApproval.length > 0) {
+      for (const po of stalePendingApproval) {
+        await supabase.from("trade_opportunities").update({
+          status: "EXPIRED",
+          r_multiple: 0,
+          ai_risks: "Aged PENDING_APPROVAL signal expired after 24h without manual review (agent-sre)",
+          closed_at: now.toISOString(),
+        }).eq("id", po.id);
+        autoRemediations.push(`Expired stale PENDING_APPROVAL signal ${po.symbol} (${po.id}) older than 24h`);
+      }
+    }
+
     // 4C. Auto-Healing: Desynced Closed Trades (status = 'OPEN' with profit_usd IS NOT NULL)
     const { data: desyncedTrades } = await supabase
       .from("user_trades")
@@ -265,7 +285,6 @@ serve(async (req) => {
     }
 
     // 4E. Auto-Healing: Unreconciled Completed Opportunities (ACTIVE with 0 remaining open trades)
-    const twentyFourHoursAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const { data: activeOpps } = await supabase
       .from("trade_opportunities")
       .select("id, symbol, created_at")
@@ -448,6 +467,20 @@ serve(async (req) => {
           issues.push(`⚠️ <b>High Symbol Exposure Stacking:</b> ${sym} has ${data.opps.size} distinct active opportunities (${data.count} legs, total ${data.totalVol.toFixed(2)} lots).`);
         }
       }
+
+      // Correlated US Equity Basket Exposure Guard (Section 2P & 2N)
+      const equityBasket = new Set(["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "META", "GOOGL"]);
+      let equityBasketOpps = 0;
+      let equityBasketLots = 0;
+      for (const [sym, data] of Object.entries(symCounts)) {
+        if (equityBasket.has(sym)) {
+          equityBasketOpps += data.opps.size;
+          equityBasketLots += data.totalVol;
+        }
+      }
+      if (equityBasketOpps > 3) {
+        issues.push(`⚠️ <b>High Correlated Equity Basket Exposure:</b> ${equityBasketOpps} active opportunities across US Tech Equities (${equityBasketLots.toFixed(2)} lots).`);
+      }
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -600,6 +633,18 @@ serve(async (req) => {
         const sampleReason = apiTimeouts[0]?.payload_json?.error || apiTimeouts[0]?.payload_json?.reason || "API Outage";
         issues.push(`⚠️ <b>AI Model Outage (${apiTimeoutCount} timeouts in last hour):</b> <code>${String(sampleReason).slice(0, 150)}</code>`);
       }
+    }
+
+    // 8D. Third-Party MetaAPI Rate Limit & Quota Degradation Sweep
+    const { data: metaApiLogs } = await supabase
+      .from("audit_log")
+      .select("id, payload_json, created_at")
+      .or("action.eq.METAAPI_RATE_LIMITED,action.ilike.%METAAPI_ERROR%,action.ilike.%TOO_MANY_REQUESTS%")
+      .gte("created_at", oneHourAgoIso)
+      .limit(5);
+
+    if (metaApiLogs && metaApiLogs.length > 0) {
+      issues.push(`⚠️ <b>MetaAPI Service Degraded (HTTP 429 / Rate Limited):</b> Fallback broker polling is experiencing rate limits.`);
     }
 
     // ─────────────────────────────────────────────────────────────

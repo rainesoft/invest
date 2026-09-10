@@ -128,6 +128,10 @@ SELECT jsonb_pretty(jsonb_build_object(
       FROM trade_opportunities
       WHERE status = 'APPROVED' AND created_at < NOW() - INTERVAL '1 hour'
       UNION ALL
+      SELECT 'Aged PENDING_APPROVAL (>24h)' as issue_type, id, symbol, side, status, created_at
+      FROM trade_opportunities
+      WHERE status = 'PENDING_APPROVAL' AND created_at < NOW() - INTERVAL '24 hours'
+      UNION ALL
       SELECT 'Stale ACTIVE (>24h, no open trades)' as issue_type, t.id, t.symbol, t.side, t.status, t.created_at
       FROM trade_opportunities t
       WHERE t.status = 'ACTIVE' AND t.created_at < NOW() - INTERVAL '24 hours'

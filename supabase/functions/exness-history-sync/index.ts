@@ -176,22 +176,44 @@ serve(async (req) => {
     const startTime = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
     const endTime = new Date().toISOString();
 
-    // Fetch all open trades across the entire PAMM, plus any that were marked CLOSED by Position Manager but haven't had profit calculated yet
+    // Check MT5 VPS primary status (Section 1 of System Health Checklist)
+    const { data: vpsRisk } = await supabase
+      .from("user_risk_settings")
+      .select("vps_last_heartbeat")
+      .eq("is_master_account", true)
+      .maybeSingle();
+
+    const vpsMinsAgo = vpsRisk?.vps_last_heartbeat
+      ? (Date.now() - new Date(vpsRisk.vps_last_heartbeat).getTime()) / 60000
+      : 999;
+    const isVpsPrimaryActive = vpsMinsAgo <= 5.0;
+
+    // Filter trades that genuinely need historical deal reconciliation:
+    // 1. Trades marked CLOSED / VPS_CLOSE with profit_usd IS NULL (awaiting final PnL)
+    // 2. OR if VPS bridge is degraded/offline (>5m), all active open trades for emergency failover sync
+    let targetStatuses = ["CLOSED", "VPS_CLOSE"];
+    if (!isVpsPrimaryActive) {
+      targetStatuses = ["OPEN", "PENDING", "VPS_CLOSE", "CLOSED"];
+    }
+
     const { data: openTrades, error: openTradesError } = await supabase
       .from("user_trades")
       .select("id, user_id, volume, symbol, meta_api_order_id, status, trade_type, opportunity_id, risk_amount")
-      .in("status", ["OPEN", "PENDING", "VPS_CLOSE", "CLOSED"])
+      .in("status", targetStatuses)
       .is("profit_usd", null)
       .not("meta_api_order_id", "is", null);
 
     if (openTradesError || !openTrades || openTrades.length === 0) {
-      return new Response(JSON.stringify({ status: "success", message: "No open trades to sync. Account balance reconciled." }), {
+      const msg = isVpsPrimaryActive
+        ? "No closed trades awaiting reconciliation. Zero-latency MT5 VPS EA is active and handling live deal callbacks."
+        : "No open trades to sync. Account balance reconciled.";
+      return new Response(JSON.stringify({ status: "success", message: msg }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
       });
     }
 
-    console.log(`[History Sync] Found ${openTrades.length} open trades across PAMM vaults. Fetching Master history...`);
+    console.log(`[History Sync] Found ${openTrades.length} trades requiring deal reconciliation. Fetching Master history...`);
     
     const historyUrl = `${baseUrl}/users/current/accounts/${masterAccountId}/history-deals/time/${startTime}/${endTime}`;
     
@@ -213,6 +235,12 @@ serve(async (req) => {
       if (!historyResponse.ok) {
         const err = await historyResponse.text();
         console.warn(`[History Sync] Master failed to fetch history (${historyResponse.status}): ${err}`);
+        if (historyResponse.status === 429) {
+          await insertAudit(supabase, {
+            action: "METAAPI_RATE_LIMITED",
+            payload_json: { status: 429, error: err.slice(0, 200) }
+          });
+        }
         return new Response(JSON.stringify({ success: false, reason: "MetaAPI temporary unavailable", error: err }), {
           status: 200,
           headers: { "Content-Type": "application/json" }

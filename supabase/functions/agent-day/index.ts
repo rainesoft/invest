@@ -1614,16 +1614,16 @@ serve(async (req) => {
             sendEvent({ type: 'progress', message: `[Layer B: Cognitive Guard] APPROVED by AI Risk Officer.` });
 
             // LAYER C: Structural Risk/Reward Validation
-            // --- MANDATORY DYNAMIC ATR STOP FLOOR (1.10x ATR on 30m) ---
-            const minSlDist = Math.max((snapshot.atr_14 || Math.abs(entry_price * 0.005)) * 1.10, snapshot.current_price * 0.0008);
+            // --- MANDATORY DYNAMIC ATR STOP FLOOR (1.25x ATR on 30m) ---
+            const minSlDist = Math.max((snapshot.atr_14 || Math.abs(entry_price * 0.005)) * 1.25, snapshot.current_price * 0.0010);
             const currentSlDist = Math.abs(entry_price - stop_loss);
             if (currentSlDist < minSlDist) {
               const widenedSl = dbSide === "LONG"
                 ? Number((entry_price - minSlDist).toFixed(5))
                 : Number((entry_price + minSlDist).toFixed(5));
-              console.log(`[${symbol}] [Volatility Guard] SL distance (${currentSlDist.toFixed(5)}) was tighter than 1.10x ATR (${minSlDist.toFixed(5)}). Widening SL: ${stop_loss} → ${widenedSl}`);
+              console.log(`[${symbol}] [Volatility Guard] SL distance (${currentSlDist.toFixed(5)}) was tighter than 1.25x ATR (${minSlDist.toFixed(5)}). Widening SL: ${stop_loss} → ${widenedSl}`);
               stop_loss = widenedSl;
-              institutional_rationale += ` [Volatility Guard: Stop widened to 1.10x ATR ($${stop_loss}) to prevent wick stop-out]`;
+              institutional_rationale += ` [Volatility Guard: Stop widened to 1.25x ATR ($${stop_loss}) to prevent wick stop-out]`;
             }
             let risk = Math.abs(entry_price - stop_loss);
             let take_profit = evaluation.execution_parameters?.suggested_take_profit;

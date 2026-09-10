@@ -2118,15 +2118,15 @@ serve(async (req) => {
           evaluation.execution_parameters.take_profit_2 = tp2;
           safeRationale += ` [Trading Central Adaptive Levels: Entry @ $${entry} (${order_type}), TP1 @ $${tp1}, TP2 @ $${tp2} (R:R 1:${tcLevels.current_rr_tp2})]`;
 
-          // === MANDATORY DYNAMIC ATR STOP FLOOR ===
-          // On Daily Swing trades, guarantee that |entry - sl| >= 1.0x Daily ATR (or min 25 pips on Forex)
-          // to prevent premature liquidations from minor intra-minute noise.
-          const mandatoryMinSlDistance = Math.max((dailyAtr || 0) * 1.0, currentPrice * 0.0025);
+          // === MANDATORY DYNAMIC ATR STOP FLOOR (1.25x Daily ATR) ===
+          // On Daily Swing trades, guarantee that |entry - sl| >= 1.25x Daily ATR (or min 30 pips on Forex)
+          // to prevent premature liquidations from minor intra-minute noise and liquidity sweeps.
+          const mandatoryMinSlDistance = Math.max((dailyAtr || 0) * 1.25, currentPrice * 0.0030);
           if (Math.abs(entry - sl) < mandatoryMinSlDistance) {
             const adjustedSl = isLong
               ? Number((entry - mandatoryMinSlDistance).toFixed(5))
               : Number((entry + mandatoryMinSlDistance).toFixed(5));
-            console.log(`[${symbol as string}] [Dynamic ATR Floor] SL distance (${Math.abs(entry - sl).toFixed(5)}) was below minimum ${mandatoryMinSlDistance.toFixed(5)} (1.0x Daily ATR). Adjusted SL: ${sl} → ${adjustedSl}`);
+            console.log(`[${symbol as string}] [Dynamic ATR Floor] SL distance (${Math.abs(entry - sl).toFixed(5)}) was below minimum ${mandatoryMinSlDistance.toFixed(5)} (1.25x Daily ATR). Adjusted SL: ${sl} → ${adjustedSl}`);
             sl = adjustedSl;
             evaluation.execution_parameters.suggested_stop_loss = sl;
           }

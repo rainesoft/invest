@@ -1613,37 +1613,48 @@ for (const [orderId, trade] of orderMap) {
           }
 
           // --- 3. END OF DAY (EOD) SCALP LIQUIDATION ---
-          // If it is 4 PM NY time or later, and the trade is a Scalp ('30m' timeframe), liquidate it immediately.
+          // Cash Equity & Index Day Scalps: 4 PM NY cash close terminates intraday equity cash liquidity.
+          // 24/7 Forex and Crypto do not close at 4 PM NY; force-liquidating them at 20:00 UTC prematurely kills trades at the day's low.
+          // For Forex/Crypto: If profitable, move to Breakeven; if negative, let the position run its structural stop/horizon.
           if (isEodScalp && opp.timeframe === "30m") {
-              console.log(`[Position Manager] EOD LIQUIDATION: Closing Scalp ${orderId} for ${trade.symbol} at ${nyHour}:00 NY Time.`);
-             try {
-                const profit = Number(position.profit) || 0;
-                const currentVol = Number(position.volume) || 0.01;
-                const entryPrice = opp.entry_plan_json?.price || opp.entry_plan_json?.entry_price;
-                if (profit > 0 && entryPrice) {
-                    console.log(`[Position Manager] DE-LEVERAGING: Moving SL to Breakeven for ${orderId}`);
-                    const currentTp = position.takeProfit || opp.take_profit_json?.tp;
-                    const modifyPayload: any = { actionType: "POSITION_MODIFY", positionId: orderId, stopLoss: entryPrice };
-                    if (currentTp) modifyPayload.takeProfit = currentTp;
-                    await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
-                        method: "POST",
-                        headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
-                        body: JSON.stringify(modifyPayload)
-                    });
-                } else if (isVpsAlive) {
-                   await supabase.from("user_trades").update({ status: "VPS_CLOSE", error_message: "EOD Liquidation (4 PM NY Time)" }).eq("meta_api_order_id", orderId);
+            const isCashSessionAsset = isUsEquity(trade.symbol) || isIndex(trade.symbol);
+            const profit = Number(position.profit) || 0;
+            const entryPrice = opp.entry_plan_json?.price || opp.entry_plan_json?.entry_price;
+
+            if (profit > 0 && entryPrice) {
+              console.log(`[Position Manager] EOD PROFIT LOCK: Moving SL to Breakeven for ${orderId} (${trade.symbol})`);
+              const currentTp = position.takeProfit || opp.take_profit_json?.tp;
+              const modifyPayload: any = { actionType: "POSITION_MODIFY", positionId: orderId, stopLoss: entryPrice };
+              if (currentTp) modifyPayload.takeProfit = currentTp;
+              await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                method: "POST",
+                headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                body: JSON.stringify(modifyPayload)
+              });
+              continue;
+            }
+
+            if (isCashSessionAsset) {
+              console.log(`[Position Manager] EOD CASH SESSION LIQUIDATION: Closing Scalp ${orderId} for ${trade.symbol} at ${nyHour}:00 NY Time.`);
+              try {
+                if (isVpsAlive) {
+                  await supabase.from("user_trades").update({ status: "VPS_CLOSE", error_message: "EOD Liquidation (4 PM NY Cash Close)" }).eq("meta_api_order_id", orderId);
                 } else {
-                   await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
-                      method: "POST",
-                      headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
-                      body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: orderId })
-                   });
-                   await supabase.from("user_trades").update({ status: "CLOSED", error_message: "EOD Liquidation (4 PM NY Time)", close_price: position.currentPrice, profit_usd: position.profit }).eq("meta_api_order_id", orderId);
+                  await fetch(`${META_API_BASE_URL}/users/current/accounts/${META_API_ACCOUNT_ID}/trade`, {
+                    method: "POST",
+                    headers: { "auth-token": META_API_TOKEN, "Content-Type": "application/json" },
+                    body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: orderId })
+                  });
+                  await supabase.from("user_trades").update({ status: "CLOSED", error_message: "EOD Liquidation (4 PM NY Cash Close)", close_price: position.currentPrice, profit_usd: position.profit }).eq("meta_api_order_id", orderId);
                 }
-             } catch (e) {
+              } catch (e) {
                 console.error(`[Position Manager] Failed EOD liquidation for ${orderId}:`, e);
-             }
-             continue; // Skip trailing stop logic
+              }
+              continue; // Skip trailing stop logic
+            } else {
+              // 24-hour FX / Crypto: Do not market dump at 4 PM NY close; allow trade to honor structural stop and 20-bar horizon
+              console.log(`[Position Manager] EOD Session Bypass: ${trade.symbol} is a 24-hour liquid instrument. Retaining position with structural stop intact.`);
+            }
           }
 
           // --- 3. TRAILING STOP LOGIC ---
@@ -2286,6 +2297,7 @@ for (const [orderId, trade] of orderMap) {
         ["XAUUSD", "XAGUSD"],
         ["US30", "NAS100", "SPX500", "GER30", "JP225"],
         ["EURUSD", "GBPUSD"],
+        ["AUDUSD", "NZDUSD"],
         ["UKOIL", "USOIL"],
         ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "META", "GOOGL"]
       ];
@@ -2310,13 +2322,22 @@ for (const [orderId, trade] of orderMap) {
            }
            
            if (oppositeDirectionCount > 0) {
-              const rejectReason = `Rejected by Execution Desk: Contradictory signal against open highly correlated asset.`;
+              const rejectReason = `Rejected by Execution Desk: Contradictory signal against open highly correlated asset (${openCorrelatedTrades.map(t => t.symbol).join(', ')}).`;
               await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + rejectReason, ai_risks: rejectReason }).eq("id", signal.id);
               console.log(`[Execution Desk] Rejected ${signal.symbol} due to contradictory open correlated position.`);
               return new Response(JSON.stringify({ success: true, message: "Rejected due to correlation contradiction" }), { status: 200 });
            }
            
            if (sameDirectionCount > 0) {
+              // Index Stacking Shield: Do not stack duplicate unhedged index positions (e.g. NAS100 + SPX500)
+              const isIndexGroup = group.includes("US30") && group.includes("NAS100");
+              if (isIndexGroup) {
+                 const rejectReason = `Rejected by Execution Desk: Index Stacking Shield Active. Open position in correlated index (${openCorrelatedTrades[0].symbol}) is active. Concurrent unhedged index stacking is blocked.`;
+                 await supabase.from("trade_opportunities").update({ status: "REJECTED", ai_summary: signal.ai_summary + "\n\n[Execution Desk] " + rejectReason, ai_risks: rejectReason }).eq("id", signal.id);
+                 console.log(`[Execution Desk] Rejected ${signal.symbol} due to Index Stacking Shield.`);
+                 return new Response(JSON.stringify({ success: true, message: "Rejected due to index stacking" }), { status: 200 });
+              }
+
               confluenceMultiplier *= 0.5;
               pmReason += `\n[Execution Desk] 0.5x Risk Modifier Applied: Heavy Correlation Detected with OPEN position.`;
            }
@@ -2403,6 +2424,21 @@ for (const [orderId, trade] of orderMap) {
       console.warn(`[PAMM Router] Failed to check calibrated probability:`, probErr.message);
     }
 
+    // Pre-fetch live USDJPY rate for non-USD index/forex point-value conversion (e.g. JP225)
+    let usdjpyLiveRate = 154.0;
+    try {
+      const { data: ujSnap } = await supabase
+        .from("market_data_pti")
+        .select("c")
+        .eq("symbol", "USDJPY")
+        .order("ts", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (ujSnap && Number(ujSnap.c) > 0) {
+        usdjpyLiveRate = Number(ujSnap.c);
+      }
+    } catch (_) {}
+
     for (const scaledEntry of scaledEntries) {
       const entryPrice = scaledEntry.price;
       const entryWeight = scaledEntry.weight || 1.0;
@@ -2410,7 +2446,7 @@ for (const [orderId, trade] of orderMap) {
       
       const contractSizes: Record<string, number> = {
         UKOIL: 1000, USOIL: 1000, XAUUSD: 100, XAGUSD: 5000,
-        US30: 1, NAS100: 1, SPX500: 1, GER30: 1, JP225: 1,
+        US30: 1, NAS100: 1, SPX500: 1, GER30: 1, JP225: 100,
         BTCUSD: 1, ETHUSD: 1,
         EURUSD: 100000, GBPUSD: 100000, USDJPY: 100000,
         AUDUSD: 100000, NZDUSD: 100000, USDCAD: 100000, USDCHF: 100000,
@@ -2419,7 +2455,11 @@ for (const [orderId, trade] of orderMap) {
       };
       const contractSize = contractSizes[signal.symbol] || 100000;
       let pointValueUsd = contractSize;
-      if ((signal.symbol.endsWith("JPY") || signal.symbol === "JP225") && entryPrice > 0) {
+      if (signal.symbol === "JP225") {
+        // Nikkei 225: 1 lot = 100 contracts (100 JPY per index point).
+        // Standard CME/Exness conversion: JPY point value divided by live USDJPY rate (~154.0).
+        pointValueUsd = contractSize / usdjpyLiveRate;
+      } else if (signal.symbol.endsWith("JPY") && entryPrice > 0) {
         pointValueUsd = contractSize / entryPrice;
       } else if (signal.symbol === "GER30" || signal.symbol === "EURGBP") {
         pointValueUsd = contractSize * 1.1;
@@ -2494,6 +2534,7 @@ for (const [orderId, trade] of orderMap) {
           NAS100: 0.05,
           SPX500: 0.05,
           GER30: 0.05,
+          JP225: 0.02,
           BTCUSD: 0.02,
           ETHUSD: 0.04,
           EURUSD: 0.20,
@@ -2513,7 +2554,12 @@ for (const [orderId, trade] of orderMap) {
         };
         const maxAssetCap = assetLotCaps[signal.symbol] || 0.20;
         const userMaxCap = Number(user.max_volume_per_trade) || maxAssetCap;
-        const hardLotCeiling = Math.min(maxAssetCap, userMaxCap);
+        let hardLotCeiling = Math.min(maxAssetCap, userMaxCap);
+
+        // Knight Capital Risk Governor: On balances < $2,500, hard clamp all equity indices to 0.02 lots max
+        if (["US30", "NAS100", "SPX500", "GER30", "JP225"].includes(signal.symbol) && userCapital < 2500) {
+          hardLotCeiling = Math.min(hardLotCeiling, 0.02);
+        }
 
         volume = Math.min(hardLotCeiling, volume);
         volume = Math.max(volumeStep, Math.floor(volume / volumeStep) * volumeStep);
